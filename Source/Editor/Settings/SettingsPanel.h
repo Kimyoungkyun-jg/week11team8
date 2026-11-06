@@ -19,7 +19,7 @@ struct FEditorSettings
 	// Toggles
 	bool bWireframe = false;
 	bool bCacheShadows = true; // r.Shadow.CacheWholeSceneShadows
-	EPcfMode PcfMode = EPcfMode::Sample8;
+	EPcfMode PcfMode = EPcfMode::Sample32;   // PCF 7x7
 	ELightCullingMode LightCullingMode = ELightCullingMode::Tiled;
 	ERenderingPath RenderingPath = ERenderingPath::Deferred;
 	ESkinningMode SkinningMode = ESkinningMode::CPU;
@@ -60,9 +60,10 @@ struct FEditorSettings
     bool bViewLocationSaved[4]{};
     bool bViewRotationSaved[4]{};
 
-	int32 DirectionalShadowMapSizeLevel = 2;
-	int32 PointShadowMapSizeLevel = 2;
-	int32 SpotShadowMapSizeLevel = 2;
+	// 캐스케이드 한 장 / Spot·Point 한 장의 최대 크기. 기본값은 r.Shadow 기본값(2048)과 같다.
+	int32 DirectionalShadowMapSizeLevel = 3;
+	int32 PointShadowMapSizeLevel = 4;
+	int32 SpotShadowMapSizeLevel = 4;
 
 	bool bGammaCorrection = true;
 	float DisplayGamma = 2.2f;

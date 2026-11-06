@@ -43,7 +43,8 @@ struct FShadowConsoleVariables
 
 	float ShadowMaxSlopeScaleDepthBias = 1.0f;
 
-	// r.ShadowQuality: 0이면 그림자를 끈다. 1~5는 Projection PCF 단계 (1 하드웨어 1회, 2 3x3, 3 Poisson 16, 4~5 Poisson 32)
+	// r.ShadowQuality: 0이면 그림자를 끈다. 1~5는 Projection PCF 단계의 상한 (1 하드웨어 1회, 2 3x3, 3 5x5, 4~5 7x7 tent).
+	// 실제 단계는 FSceneRenderOptions::PcfMode(설정 패널 Shadow Filter)로 정하고 이 값을 넘지 않는다.
 	uint32 ShadowQuality = 5;
 	// r.Shadow.FilterMethod: 0 PCF, 1 PCSS (Directional·Spot만, Point는 PCF)
 	uint32 FilterMethod = 0;
@@ -52,6 +53,16 @@ struct FShadowConsoleVariables
 };
 
 extern FShadowConsoleVariables GShadowCVars;
+
+// 이번 뷰에서 쓰는 그림자 설정. InitDynamicShadows가 FSceneRenderOptions(설정 패널, DefaultGame.ini)와 GShadowCVars로 채운다.
+struct FShadowViewSettings
+{
+	uint32 MaxCSMResolution = 2048;     // 캐스케이드 타일 크기 (DirectionalShadowMapSize)
+	uint32 MaxSpotResolution = 2048;    // Spot 타일 크기 상한 (SpotShadowMapSize)
+	uint32 MaxPointResolution = 2048;   // Point 면 타일 크기 상한 (PointShadowMapSize)
+	uint32 PcfQuality = 5;              // ShadowProjection.hlsl PcfQuality (1~5)
+	uint32 FilterMethod = 0;            // 0 PCF, 1 PCSS
+};
 
 // 그림자 맵 한 장. 프레임마다 FSceneRenderData가 만들고 비운다.
 class FProjectedShadowInfo

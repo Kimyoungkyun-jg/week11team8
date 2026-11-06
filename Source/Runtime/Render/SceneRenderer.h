@@ -6,6 +6,7 @@
 #include "Render/MeshPassProcessor.h"
 #include "Render/SceneRenderData.h"
 #include "Render/SceneRenderOptions.h"
+#include "Render/ShadowRendering.h"
 #include "Render/RenderGraph/RenderGraph.h"
 #include "Render/Decal/ProjectedDecal.h"
 #include "Render/Decal/DecalMeshDrawList.h"
@@ -137,6 +138,8 @@ private:
 		uint32 Channel = 0;                     // ScreenShadowMask 채널
 	};
 	TArray<FShadowedLight> ShadowedLights;
+	// InitDynamicShadows가 Options에서 채우는 그림자 해상도·필터 설정
+	FShadowViewSettings ShadowSettings;
 	TArray<FProjectedDecalRenderData> VisibleDecals;
 	TArray<FProjectedDecalMeshDrawList> MeshDecalDrawLists;
 

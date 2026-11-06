@@ -67,15 +67,22 @@ bool FEditorControlsPanel::Init()
 }
 
 // Space 입력으로 기즈모 편집 모드를 순환한다.
+// 언리얼처럼 레벨 에디터 전체 단축키로 다룬다. 뷰포트 포커스만 보면 Add Actor 메뉴나 아웃라이너를 누른 직후
+// 포커스가 그 창에 남아 뷰포트를 다시 클릭할 때까지 Space가 먹지 않는다.
 void FEditorControlsPanel::Tick(float DeltaTime)
 {
-	if (ImGui::GetIO().WantTextInput)
+	const ImGuiIO& IO = ImGui::GetIO();
+	// 이름·값 입력 중이거나, ImGui 키보드 내비게이션 커서가 보일 때(Space = 항목 활성화)는 양보한다.
+	if (IO.WantTextInput || IO.NavVisible)
+		return;
+	// Add 메뉴·우클릭 메뉴 같은 팝업이 열려 있으면 그 메뉴의 입력이다.
+	if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup))
 		return;
 
 	// 다른 창 (fbx 뷰어)이 Spacebar를 쓰는 중이면 Level Gizmo는 건드리지 않음
 	if (SkipGizmoHotkeyQuery && SkipGizmoHotkeyQuery())
 		return;
-	if (!ViewportsPanel || !ViewportsPanel->IsFocused() || (IsPlayingQuery && IsPlayingQuery()))
+	if (IsPlayingQuery && IsPlayingQuery())
 		return;
 
 	if (Gizmo && FInputSystem::IsKeyPressed(EKeyCode::Space))

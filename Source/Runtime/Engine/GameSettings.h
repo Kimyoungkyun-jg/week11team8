@@ -22,9 +22,10 @@ struct FGameSettings
 
 	FGameSettings()
 	{
-		RenderOptions.DirectionalShadowMapSize = 1024;
-		RenderOptions.PointShadowMapSize = 512;
-		RenderOptions.SpotShadowMapSize = 512;
+		// 캐스케이드 한 장 / Spot·Point 한 장의 최대 크기 (테두리 포함)
+		RenderOptions.DirectionalShadowMapSize = 2048;
+		RenderOptions.PointShadowMapSize = 2048;
+		RenderOptions.SpotShadowMapSize = 2048;
 	}
 
 	static FGameSettings Load(const FString& Path);

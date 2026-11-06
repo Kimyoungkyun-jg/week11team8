@@ -687,7 +687,8 @@ void FSettingsPanel::DrawShadowMapSettings()
 		Settings.SpotShadowMapSizeLevel = FMath::Clamp(Settings.SpotShadowMapSizeLevel, 0, IM_ARRAYSIZE(QualityLevelStr) - 1);
 	}
 
-	const char* PcfModes[] = { "Off", "8 (Samples)", "16 (Samples)", "32 (Samples)", "PCSS" };
+	// EPcfMode 순서. ShadowSetup.cpp PcfModeToQuality가 ShadowProjection.hlsl 필터 크기로 바꾼다.
+	const char* PcfModes[] = { "Off", "PCF 3x3", "PCF 5x5", "PCF 7x7", "PCSS" };
 	int PcfModeIndex = static_cast<int>(Settings.PcfMode);
 	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
 	if (ImGui::Combo("Shadow Filter", &PcfModeIndex, PcfModes, IM_ARRAYSIZE(PcfModes)))
