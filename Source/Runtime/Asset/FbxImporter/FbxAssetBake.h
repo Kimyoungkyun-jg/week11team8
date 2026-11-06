@@ -8,4 +8,6 @@ public:
 	static bool WriteBaked(const FString& Path, const FFbxAssetData& Data, FString& Error);
 	// 재임포트 이름 판정은 페이로드 버전과 독립적인 공통 출처 필드만 읽는다.
 	static bool ReadSourceIdentity(const FString& Path, FString& Source, FString& Object);
+	// 페이로드를 읽지 않고 Type, 출처, 해시, 옵션만 채운다. 현재 버전 파일만 성공한다.
+	static bool ReadHeader(const FString& Path, FFbxAssetData& Out, FString& Error);
 };

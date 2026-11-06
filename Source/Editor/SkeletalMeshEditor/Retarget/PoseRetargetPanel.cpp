@@ -33,13 +33,13 @@ namespace
 		FString Extension = Path.extension().string();
 		std::transform(Extension.begin(), Extension.end(), Extension.begin(),
 			[](unsigned char Character) { return static_cast<char>(std::tolower(Character)); });
-		if (Extension == ".fbx") return true;
+		// 스켈레탈 메시는 바이너리로만 고른다. .fbx는 먼저 임포트해야 한다.
 		if (Extension == ".fbxbin")
 		{
 			FFbxAssetData Data; FString Error;
 			fs::path File = Path;
 			if (!fs::is_regular_file(File)) File = fs::path("Assets") / File;
-			return FFbxAssetBake::ReadBaked(FbxPath::ToString(File), Data, Error) && Data.Type == EFbxAssetType::SkeletalMesh;
+			return FFbxAssetBake::ReadHeader(FbxPath::ToString(File), Data, Error) && Data.Type == EFbxAssetType::SkeletalMesh;
 		}
 		return false;
 	}
@@ -569,7 +569,7 @@ void FPoseRetargetPanel::OnRender()
 			const FString Path = (std::filesystem::path("Assets") / SourceRig->GetPath()).generic_string();
 			const TArray<FAnimationClip>* Clips = UAssetManager::LoadFbxAnimations(Path);
 			AnimationMessage = !Clips ? "Animation extraction failed." :
-				Clips->IsEmpty() ? "No animation clips found in Source FBX." : "Animations extracted and saved.";
+				Clips->IsEmpty() ? "No animation clips found in Source FBX." : "Animations extracted.";
 		}
 		if (const TArray<FAnimationClip>* Clips = UAssetManager::GetFbxAnimations(SourceRig->GetPath()))
 		{

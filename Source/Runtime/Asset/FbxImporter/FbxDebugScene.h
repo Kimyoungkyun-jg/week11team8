@@ -23,7 +23,7 @@ namespace fbxsdk
 }
 
 // Import가 끝난 FbxScene의 내용을 HTR_LOG로 찍는 디버그용 함수 모음.
-// samples/ImportScene의 Display* 함수들을 엔진 로그에 맞게 옮긴 것이다. 렌더링 데이터 변환은 FFbxImporter가 맡는다.
+// samples/ImportScene의 Display* 함수들을 엔진 로그에 맞게 옮긴 것이다. 렌더링 데이터 변환은 FFbxAssetImporter가 맡는다.
 class FFbxDebugScene
 {
 public:

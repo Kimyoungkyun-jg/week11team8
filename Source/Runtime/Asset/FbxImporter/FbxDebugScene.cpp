@@ -18,10 +18,8 @@ bool FFbxDebugScene::DumpFile(const FString& Path, FString& Error)
 	if (std::filesystem::path(Path).extension() == ".fbxbin")
 	{
 		FFbxAssetData Data;
-		if (!FFbxAssetBake::ReadBaked(Path, Data, Error)) return false;
-		auto Source = FbxPath::FromString(Data.SourcePath);
-		if (!Source.is_absolute()) Source = std::filesystem::path("Assets") / Source;
-		SourcePath = FbxPath::ToString(Source);
+		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) return false;
+		SourcePath = FbxPath::ToString(FbxPath::SourceFile(Data.ActualSourcePath));
 	}
 	auto* Manager = FbxManager::Create();
 	if (!Manager) { Error = "Cannot create FBX manager"; return false; }

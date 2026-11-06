@@ -2,6 +2,7 @@
 #include "FbxAssetImporter.h"
 #include "FbxAssetBake.h"
 #include "FbxPath.h"
+#include "AnimationData.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -122,10 +123,35 @@ bool Near(const FbxAMatrix& A, const FbxAMatrix& B)
 	return true;
 }
 
+// 소켓에 바로 꽂힌 파일이 없으면 LayeredTexture의 첫 레이어를 쓴다. 엔진은 슬롯당 한 장만 받는다.
+FbxFileTexture* PropertyTexture(const FbxProperty& Property)
+{
+	if (!Property.IsValid()) return nullptr;
+	if (auto* File = Property.GetSrcObject<FbxFileTexture>(0)) return File;
+	for (int I = 0; I < Property.GetSrcObjectCount<FbxLayeredTexture>(); ++I)
+		if (auto* File = Property.GetSrcObject<FbxLayeredTexture>(I)->GetSrcObject<FbxFileTexture>(0)) return File;
+	return nullptr;
+}
+
+// PBR 머티리얼의 BaseColor와 Bump에 꽂힌 노멀맵은 표준 소켓이 비었을 때 대신 읽는다.
+FbxProperty MaterialInput(FbxSurfaceMaterial* Material, const char* PropertyName)
+{
+	if (!Material) return {};
+	const FbxProperty Property = Material->FindProperty(PropertyName);
+	if (PropertyTexture(Property)) return Property;
+	const char* Fallback = !std::strcmp(PropertyName, FbxSurfaceMaterial::sDiffuse) ? "BaseColor" :
+		!std::strcmp(PropertyName, FbxSurfaceMaterial::sNormalMap) ? FbxSurfaceMaterial::sBump : nullptr;
+	if (Fallback)
+	{
+		const FbxProperty Alternative = Material->FindProperty(Fallback);
+		if (PropertyTexture(Alternative)) return Alternative;
+	}
+	return Property;
+}
+
 FbxFileTexture* FileTexture(FbxSurfaceMaterial* Material, const char* PropertyName)
 {
-	const FbxProperty Property = Material ? Material->FindProperty(PropertyName) : FbxProperty();
-	return Property.IsValid() ? Property.GetSrcObject<FbxFileTexture>(0) : nullptr;
+	return PropertyTexture(MaterialInput(Material, PropertyName));
 }
 
 // FBX UV에 적용하는 2D affine 변환. 엔진의 V 반전은 이 변환 이후에 수행한다.
@@ -280,6 +306,8 @@ public:
 	FString SourceKey;
 	fs::path Source;
 	fs::path Destination;
+	FString ActualSourceKey;
+	uint64 SourceHash = 0;
 	double UnitScale = 1;
 	bool bBlender = false;
 	TArray<FFbxAssetData>& Output;
@@ -305,7 +333,8 @@ public:
 	FString MakeKey(const char* Prefix, const FString& Label, const FString& Identity);
 	FFbxAssetData Data(EFbxAssetType Type, const FString& Key, const FString& Identity)
 	{
-		FFbxAssetData Out; Out.Type = Type; Out.Key = Key; Out.SourcePath = SourceKey; Out.SourceObject = Identity; Out.Options = Options; return Out;
+		FFbxAssetData Out; Out.Type = Type; Out.Key = Key; Out.SourcePath = SourceKey; Out.SourceObject = Identity; Out.Options = Options;
+		Out.ActualSourcePath = ActualSourceKey; Out.SourceHash = SourceHash; return Out;
 	}
 	void Gather(FbxNode* Node, bool bParentVisible, FbxNode* LODGroup = nullptr, int LOD = -1);
 	void FindRigs();
@@ -326,7 +355,8 @@ public:
 
 FString FImport::MakeKey(const char* Prefix, const FString& Label, const FString& Identity)
 {
-	const FString Base = FString(Prefix) + "_" + FbxPath::FileName(FbxPath::ToString(Source.stem())) + "_" + FbxPath::FileName(Label);
+	// 이름은 소유 FBX 기준이다. Reimport From File도 기존 파일을 덮어쓴다.
+	const FString Base = FString(Prefix) + "_" + FbxPath::FileName(FbxPath::ToString(FbxPath::FromString(SourceKey).stem())) + "_" + FbxPath::FileName(Label);
 	FString Candidate = FbxPath::ToString(Destination / FbxPath::FromString(Base + ".fbxbin"));
 	FString Key;
 	if (!FbxPath::GetAssetKey(Candidate, Key, Error, false)) return {};
@@ -335,9 +365,9 @@ FString FImport::MakeKey(const char* Prefix, const FString& Label, const FString
 	if (fs::exists(FbxPath::FromString(Candidate)))
 	{
 		FString PreviousSource, PreviousObject;
-		// 읽을 수 없는 파일은 덮어쓰지 않고 별도 안정 이름을 선택한다.
+		// 같은 FBX의 파일은 덮어쓴다. 읽을 수 없거나 다른 FBX의 파일만 별도 안정 이름을 선택한다.
 		if (!FFbxAssetBake::ReadSourceIdentity(Candidate, PreviousSource, PreviousObject)) Conflict = true;
-		else Conflict |= Lower(PreviousSource) != Lower(SourceKey) || PreviousObject != Identity;
+		else Conflict |= Lower(PreviousSource) != Lower(SourceKey);
 	}
 	if (Conflict)
 	{
@@ -348,7 +378,7 @@ FString FImport::MakeKey(const char* Prefix, const FString& Label, const FString
 		{
 			FString PreviousSource, PreviousObject;
 			if (!FFbxAssetBake::ReadSourceIdentity(Candidate, PreviousSource, PreviousObject) ||
-				Lower(PreviousSource) != Lower(SourceKey) || PreviousObject != Identity) { Error = "Output identity collision: " + Key; return {}; }
+				Lower(PreviousSource) != Lower(SourceKey)) { Error = "Output identity collision: " + Key; return {}; }
 		}
 	}
 	FileOwners[Lower(Key)] = Identity;
@@ -616,28 +646,37 @@ FSurfaceUV FImport::SurfaceUV(FbxSurfaceMaterial* Material, FbxMesh* Mesh, const
 
 FString FImport::Texture(FbxProperty Property)
 {
-	if (!Property.IsValid()) return {};
-	if (Property.GetSrcObjectCount<FbxLayeredTexture>()) Warn("Layered textures are not converted: " + FString(Property.GetNameAsCStr()));
-	if (!Property.GetSrcObjectCount<FbxFileTexture>()) return {};
+	auto* T = PropertyTexture(Property);
+	if (!T) return {};
+	if (Property.GetSrcObjectCount<FbxLayeredTexture>() && !Property.GetSrcObjectCount<FbxFileTexture>())
+		Warn("Layered texture uses its first layer only: " + FString(Property.GetNameAsCStr()));
 	if (Property.GetSrcObjectCount<FbxFileTexture>() > 1) Warn("Only the first texture connection is used: " + FString(Property.GetNameAsCStr()));
-	auto* T = Property.GetSrcObject<FbxFileTexture>(0);
 	std::vector<fs::path> Candidates;
 	if (T->GetFileName()[0]) Candidates.push_back(FbxPath::FromString(T->GetFileName()));
 	if (T->GetRelativeFileName()[0]) Candidates.push_back(Source.parent_path() / FbxPath::FromString(T->GetRelativeFileName()));
-	if (T->GetFileName()[0]) Candidates.push_back(Source.parent_path() / FbxPath::FromString(T->GetFileName()).filename());
+	if (T->GetFileName()[0])
+	{
+		// 절대 경로는 만든 사람의 PC 기준이라 파일 이름으로 FBX 옆, 자동 언팩 폴더, Textures를 찾는다.
+		const fs::path Name = FbxPath::FromString(T->GetFileName()).filename();
+		Candidates.push_back(Source.parent_path() / Name);
+		Candidates.push_back(Source.parent_path() / (Source.stem().wstring() + L".fbm") / Name);
+		Candidates.push_back(Source.parent_path() / "Textures" / Name);
+	}
 	FString SourceTexture;
+	std::error_code FileError;
 	for (auto Candidate : Candidates)
 	{
 		if (!Candidate.is_absolute()) Candidate = Source.parent_path() / Candidate;
-		if (fs::is_regular_file(Candidate)) { SourceTexture = FbxPath::ToString(Candidate); break; }
+		if (fs::is_regular_file(Candidate, FileError)) { SourceTexture = FbxPath::ToString(Candidate); break; }
 	}
-	if (SourceTexture.empty()) { Error = "Texture file not found: " + FString(T->GetFileName()); return {}; }
+	// 텍스처 하나가 없다고 메시까지 잃지 않는다. 머티리얼은 FBX의 상수 색으로 남는다.
+	if (SourceTexture.empty()) { Warn("Texture file not found: " + FString(T->GetFileName())); return {}; }
 	// 입력 텍스처도 원본과 같이 외부에서 읽을 수 있다. 결과에는 픽셀/압축 블록만 남긴다.
 	SourceTexture = FbxPath::ToString(fs::canonical(FbxPath::FromString(SourceTexture)));
 	const FString TextureKey = SourceTexture;
 	if (auto It = Textures.find(Lower(TextureKey)); It != Textures.end()) return It->second;
 	FImageData Image = ImageLoader::LoadAuto(SourceTexture);
-	if (!Image.IsValid()) { Error = "Texture format is not supported by the existing image loader: " + SourceTexture; return {}; }
+	if (!Image.IsValid()) { Warn("Texture format is not supported by the existing image loader: " + SourceTexture); return {}; }
 	// 임시 내장 경로 대신 소스 FBX 안의 논리 이름으로 출력 이름을 고정한다.
 	int TextureIndex = 0;
 	for (; TextureIndex < Scene->GetTextureCount() && Scene->GetTexture(TextureIndex) != T; ++TextureIndex) {}
@@ -786,18 +825,15 @@ FString FImport::Material(FbxSurfaceMaterial* M)
 	}
 	if (Sampler && Sampler->GetWrapModeU() == Sampler->GetWrapModeV() && Sampler->GetWrapModeU() == FbxTexture::eRepeat)
 		Asset.Material.SamplerState = ESamplerState::LinearWrap;
-	Asset.Material.DiffuseTexture = Texture(M->FindProperty(FbxSurfaceMaterial::sDiffuse));
+	Asset.Material.DiffuseTexture = Texture(MaterialInput(M, FbxSurfaceMaterial::sDiffuse));
 	if (!Error.empty()) return {};
 	if (!Asset.Material.DiffuseTexture.empty())
 	{
 		// 색상 맵이 있으면 DiffuseFactor를 RGB 공통 배율로 사용한다. W는 불투명도다.
 		Asset.Material.DiffuseOrFactor.X = Asset.Material.DiffuseOrFactor.Y = Asset.Material.DiffuseOrFactor.Z = DiffuseFactor;
 	}
-	Asset.Material.NormalTexture = Texture(M->FindProperty(FbxSurfaceMaterial::sNormalMap));
+	Asset.Material.NormalTexture = Texture(MaterialInput(M, FbxSurfaceMaterial::sNormalMap));
 	if (!Error.empty()) return {};
-	const FbxProperty Bump = M->FindProperty(FbxSurfaceMaterial::sBump);
-	if (!Normal && Bump.IsValid() && Bump.GetSrcObjectCount<FbxTexture>() > 0)
-		Warn("Unsupported Bump map: " + FString(M->GetName()) + "; normal input left empty");
 	Asset.Material.BlendState = Asset.Material.DiffuseOrFactor.W < 1.f ? EBlendState::AlphaBlend : EBlendState::Opaque;
 	const FString OpacityKey = Texture(M->FindProperty(FbxSurfaceMaterial::sTransparentColor));
 	if (!Error.empty()) return {};
@@ -1036,14 +1072,21 @@ bool FImport::CookMesh(const FOutputGroup& Group)
 	const FString Key = MakeKey(Skinned ? "SK" : "SM", Group.Label, Group.Identity);
 	if (Key.empty()) return false;
 	auto Asset = Data(Type, Key, Group.Identity);
-	int MaxLOD = 0; for (auto* Item : Group.Items) MaxLOD = std::max(MaxLOD, Item->LOD);
-	Asset.LODs.SetNum(std::min(4, MaxLOD + 1));
+	// 이름이 _LOD1인 메시만 있는 FBX처럼 LOD0이 없으면 가장 낮은 단계를 LOD0으로 당긴다.
+	int MaxLOD = 0, MinLOD = 4;
+	for (auto* Item : Group.Items)
+	{
+		MaxLOD = std::max(MaxLOD, Item->LOD);
+		if (Item->LOD >= 0) MinLOD = std::min(MinLOD, Item->LOD);
+	}
+	const int FirstLOD = MinLOD < 4 ? MinLOD : 0;
+	Asset.LODs.SetNum(std::min(4, MaxLOD - FirstLOD + 1));
 	if (Skinned) { const auto& Rig = Rigs.at(NodePath(Group.Root)); Asset.RefSkeleton = Rig.Reference; Asset.SkeletonKey = Rig.Key; }
 	for (int L = 0; L < Asset.LODs.Num(); ++L)
 	{
 		std::map<uint32, std::vector<uint32>> Sections;
 		// 그룹 밖 조각은 모든 단계에 포함한다. 그룹의 누락 LOD는 마지막 기하를 반복하지 않는다.
-		for (auto* Item : Group.Items) if (Item->LOD < 0 || Item->LOD == L)
+		for (auto* Item : Group.Items) if (Item->LOD < 0 || Item->LOD - FirstLOD == L)
 			if (!AppendMesh(*Item, Asset, L, Sections)) return false;
 		auto& Mesh = Asset.LODs[L].MeshData;
 		for (const auto& [MaterialIndex, Indices] : Sections)
@@ -1081,7 +1124,14 @@ bool FImport::Run()
 {
 	Gather(Scene->GetRootNode(), true);
 	if (Meshes.empty()) { Error = "No visible supported mesh geometry in FBX"; return false; }
-	FindRigs(); if (!Error.empty()) return false;
+	if (!Options.bImportStaticMeshes && !Options.bImportSkeletalMeshes) { Error = "Select Static or Skeletal mesh import"; return false; }
+	// 리그를 찾지 않으면 스킨 메시도 Static 경로로 들어간다.
+	if (Options.bImportSkeletalMeshes) { FindRigs(); if (!Error.empty()) return false; }
+	if (!Options.bImportStaticMeshes)
+	{
+		std::erase_if(Meshes, [](const FMeshItem& Item) { return !Item.Rig; });
+		if (Meshes.empty()) { Error = "No skinned mesh in FBX; enable Static Mesh import"; return false; }
+	}
 	PreparePoses();
 	// 메시가 연결되는 리그만 출력한다. 포즈/컨트롤 본은 실제 본 테이블에 유지된다.
 	std::set<FbxNode*> Used;
@@ -1108,47 +1158,69 @@ bool FImport::Run()
 	for (const auto& Asset : Output) if (!Asset.Validate(Error)) return false;
 	return true;
 }
+
+struct FManagerDelete { void operator()(FbxManager* P) const { if (P) P->Destroy(); } };
+
+// 메시와 애니메이션이 같은 축과 단위로 읽히도록 씬 준비를 한곳에 둔다.
+struct FLoadedScene
+{
+	std::unique_ptr<FbxManager, FManagerDelete> Manager;
+	FbxScene* Scene = nullptr;
+	double UnitScale = 1;
+	bool bBlender = false;
+};
+
+bool LoadScene(const fs::path& Source, const FFbxImportOptions& Options, const fs::path* Extraction, FLoadedScene& Out, FString& Error)
+{
+	Out.Manager.reset(FbxManager::Create());
+	if (!Out.Manager) { Error = "Cannot create FBX SDK manager"; return false; }
+	auto* IOSettings = FbxIOSettings::Create(Out.Manager.get(), IOSROOT);
+	Out.Manager->SetIOSettings(IOSettings);
+	// 추출 폴더가 없으면 텍스처가 필요 없는 읽기다. SDK가 FBX 옆에 .fbm을 풀지 않게 끈다.
+	if (!Extraction)
+	{
+		IOSettings->SetBoolProp(IMP_FBX_MATERIAL, false); IOSettings->SetBoolProp(IMP_FBX_TEXTURE, false);
+		IOSettings->SetBoolProp(IMP_FBX_EXTRACT_EMBEDDED_DATA, false);
+	}
+	FbxImporter* Parser = FbxImporter::Create(Out.Manager.get(), "");
+	const FString CanonicalSource = FbxPath::ToString(Source);
+	if (!Parser->Initialize(CanonicalSource.c_str(), -1, IOSettings)) { Error = Parser->GetStatus().GetErrorString(); return false; }
+	if (Extraction) Parser->SetEmbeddingExtractionFolder(FbxPath::ToString(*Extraction).c_str());
+	Out.Scene = FbxScene::Create(Out.Manager.get(), "Import");
+	if (!Parser->Import(Out.Scene)) { Error = Parser->GetStatus().GetErrorString(); return false; }
+	if (auto* Info = Out.Scene->GetSceneInfo()) Out.bBlender = Lower(Info->Original_ApplicationName.Get().Buffer()).find("blender") != FString::npos;
+	Out.UnitScale = Out.Scene->GetGlobalSettings().GetSystemUnit().GetScaleFactor() / 100. * Options.UniformScale;
+	if (!std::isfinite(Out.UnitScale) || Out.UnitScale <= 0) { Error = "Invalid FBX scene unit or uniform scale"; return false; }
+	// UE의 Z-up 기준을 사용한다. Deep 변환으로 Bake off의 로컬 기하도 같은 축이 된다.
+	const auto Front = Options.bForceFrontX ? FbxAxisSystem::eParityEven : static_cast<FbxAxisSystem::EFrontVector>(-FbxAxisSystem::eParityOdd);
+	FbxAxisSystem Target(FbxAxisSystem::eZAxis, Front, FbxAxisSystem::eRightHanded);
+	Target.DeepConvertScene(Out.Scene);
+	return true;
+}
 }
 #endif
 
 bool FFbxAssetImporter::IsAvailable() { return WITH_FBX_SDK != 0; }
 
 bool FFbxAssetImporter::Cook(const FString& SourcePath, const FFbxImportOptions& Options, const FString& ExtractionDirectory,
-	TArray<FFbxAssetData>& Out, TArray<FString>& Warnings, FString& Error, const FString& OutputDirectory)
+	TArray<FFbxAssetData>& Out, TArray<FString>& Warnings, FString& Error, const FString& OutputDirectory, const FString& OwnerSource)
 {
 	Out.Empty(); Warnings.Empty(); Error.clear();
 #if WITH_FBX_SDK
 	try
 	{
-		FString SourceKey;
+		FString ActualKey;
 		fs::path Source, Destination, Extraction;
-		if (!FbxPath::GetSourcePath(SourcePath, Source, SourceKey, Error) ||
+		if (!FbxPath::GetSourcePath(SourcePath, Source, ActualKey, Error) ||
 			!FbxPath::GetOutputDirectory(OutputDirectory.empty() ? FbxPath::DefaultOutputDirectory(SourcePath) : OutputDirectory, Destination, Error) ||
 			!FbxPath::GetOutputDirectory(ExtractionDirectory, Extraction, Error)) return false;
-		struct FManagerDelete { void operator()(FbxManager* P) const { if (P) P->Destroy(); } };
-		std::unique_ptr<FbxManager, FManagerDelete> Manager(FbxManager::Create());
-		if (!Manager) { Error = "Cannot create FBX SDK manager"; return false; }
-		Manager->SetIOSettings(FbxIOSettings::Create(Manager.get(), IOSROOT));
-		FbxImporter* Parser = FbxImporter::Create(Manager.get(), "");
-		const FString CanonicalSource = FbxPath::ToString(Source);
-		const FString CanonicalExtraction = FbxPath::ToString(Extraction);
-		if (!Parser->Initialize(CanonicalSource.c_str(), -1, Manager->GetIOSettings())) { Error = Parser->GetStatus().GetErrorString(); return false; }
-		Parser->SetEmbeddingExtractionFolder(CanonicalExtraction.c_str());
-		FbxScene* Scene = FbxScene::Create(Manager.get(), "Import");
-		if (!Parser->Import(Scene)) { Error = Parser->GetStatus().GetErrorString(); return false; }
-		// 후속 애니메이션 임포트: AnimStack/Layer/Curve를 별도 애셋으로 샘플링한다.
-		// 이 단계는 바인드 기하/골격만 구성하며 런타임 포즈 평가를 수행하지 않는다.
-		bool Blender = false;
-		if (auto* Info = Scene->GetSceneInfo()) Blender = Lower(Info->Original_ApplicationName.Get().Buffer()).find("blender") != FString::npos;
-		const double UnitScale = Scene->GetGlobalSettings().GetSystemUnit().GetScaleFactor() / 100.;
-		if (!std::isfinite(UnitScale) || UnitScale <= 0) { Error = "Invalid FBX scene unit"; return false; }
-		// UE의 Z-up/-ParityOdd 기준을 사용한다. Deep 변환으로 Bake off의 로컬 기하도 같은 축이 된다.
-		FbxAxisSystem Target(FbxAxisSystem::eZAxis, static_cast<FbxAxisSystem::EFrontVector>(-FbxAxisSystem::eParityOdd), FbxAxisSystem::eRightHanded);
-		Target.DeepConvertScene(Scene);
-		FbxGeometryConverter Converter(Manager.get());
-		if (!Converter.Triangulate(Scene, true)) { Error = "FBX SDK triangulation failed"; return false; }
-		FImport Import(Scene, Options, SourceKey, Source, Destination, Out, Warnings, Error);
-		Import.UnitScale = UnitScale; Import.bBlender = Blender;
+		FLoadedScene Loaded;
+		if (!LoadScene(Source, Options, &Extraction, Loaded, Error)) return false;
+		FbxGeometryConverter Converter(Loaded.Manager.get());
+		if (!Converter.Triangulate(Loaded.Scene, true)) { Error = "FBX SDK triangulation failed"; return false; }
+		FImport Import(Loaded.Scene, Options, OwnerSource.empty() ? ActualKey : OwnerSource, Source, Destination, Out, Warnings, Error);
+		Import.ActualSourceKey = ActualKey; Import.SourceHash = FbxPath::FileHash(Source);
+		Import.UnitScale = Loaded.UnitScale; Import.bBlender = Loaded.bBlender;
 		const bool Result = Import.Run();
 		if (!Result) Out.Empty();
 		return Result;
@@ -1156,6 +1228,78 @@ bool FFbxAssetImporter::Cook(const FString& SourcePath, const FFbxImportOptions&
 	catch (const std::exception& E) { Error = E.what(); Out.Empty(); return false; }
 #else
 	Error = "FBX SDK is not configured. Set FBX_SDK_ROOT and regenerate the solution; existing .fbxbin assets can still be loaded.";
+	return false;
+#endif
+}
+
+bool FFbxAssetImporter::ExtractAnimationClips(const FString& SourcePath, const FFbxImportOptions& Options, const FReferenceSkeleton& Skeleton,
+	TArray<FAnimationClip>& Out, FString& Error)
+{
+	Out.Reset();
+#if WITH_FBX_SDK
+	try
+	{
+		FString Identity;
+		fs::path Source;
+		if (!FbxPath::GetSourcePath(SourcePath, Source, Identity, Error)) return false;
+		const int32 BoneCount = Skeleton.GetNum();
+		if (BoneCount <= 0) { Error = "Skeleton has no bones"; return false; }
+		FLoadedScene Loaded;
+		if (!LoadScene(Source, Options, nullptr, Loaded, Error)) return false;
+		// 메시의 본 테이블 순서로 샘플링한다. 패널과 런타임은 이름과 순서가 같다고 가정한다.
+		std::vector<FbxNode*> Nodes(BoneCount);
+		TArray<FString> Names;
+		TArray<int32> Parents;
+		for (int32 I = 0; I < BoneCount; ++I)
+		{
+			const auto& Bone = Skeleton.RefBoneInfo[I];
+			Nodes[I] = Loaded.Scene->FindNodeByName(Bone.Name.c_str());
+			if (!Nodes[I]) { Error = "Bone not found in FBX: " + Bone.Name; return false; }
+			Names.Add(Bone.Name); Parents.Add(Bone.ParentIndex);
+		}
+		FbxAMatrix FrameInverse;
+		if (!Options.bBakeSkeletalMeshes && Nodes[0]->GetParent())
+			FrameInverse = Nodes[0]->GetParent()->EvaluateGlobalTransform(FBXSDK_TIME_ZERO).Inverse();
+		const int StackCount = Loaded.Scene->GetSrcObjectCount<FbxAnimStack>();
+		if (StackCount > 256) { Error = "Too many animation stacks"; return false; }
+		for (int StackIndex = 0; StackIndex < StackCount; ++StackIndex)
+		{
+			FbxAnimStack* Stack = Loaded.Scene->GetSrcObject<FbxAnimStack>(StackIndex);
+			if (!Stack) continue;
+			FbxTimeSpan Span = Stack->GetLocalTimeSpan();
+			if (Span.GetDuration().GetSecondDouble() <= 0.0) Loaded.Scene->GetGlobalSettings().GetTimelineDefaultTimeSpan(Span);
+			const double Start = Span.GetStart().GetSecondDouble();
+			const double Duration = Span.GetStop().GetSecondDouble() - Start;
+			if (!std::isfinite(Start) || !std::isfinite(Duration) || Duration <= 0.0) continue;
+			FAnimationClip Clip;
+			const double FrameCountDouble = std::ceil(Duration * Clip.FramesPerSecond) + 1.0;
+			if (FrameCountDouble > 100000.0 || FrameCountDouble * BoneCount > 50000000.0) { Error = "Animation is too long: " + FString(Stack->GetName()); return false; }
+			Loaded.Scene->SetCurrentAnimationStack(Stack);
+			Clip.Name = Stack->GetName();
+			Clip.SkeletonName = Names[0];
+			Clip.DurationSeconds = static_cast<float>(Duration);
+			Clip.BoneNames = Names;
+			Clip.ParentIndices = Parents;
+			const int32 FrameCount = static_cast<int32>(FrameCountDouble);
+			Clip.Frames.Reserve(FrameCount);
+			for (int32 FrameIndex = 0; FrameIndex < FrameCount; ++FrameIndex)
+			{
+				FbxTime Time;
+				Time.SetSecondDouble(Start + std::min(FrameIndex / static_cast<double>(Clip.FramesPerSecond), Duration));
+				FAnimationFrame Frame;
+				Frame.Bones.SetNum(BoneCount);
+				// BuildRig의 바인드 행렬과 같은 변환을 써야 스키닝 공간이 맞는다.
+				for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+					Frame.Bones[Bone] = EngineMatrix(FrameInverse * Nodes[Bone]->EvaluateGlobalTransform(Time), Loaded.UnitScale);
+				Clip.Frames.Add(std::move(Frame));
+			}
+			Out.Add(std::move(Clip));
+		}
+		return true;
+	}
+	catch (const std::exception& E) { Error = E.what(); Out.Reset(); return false; }
+#else
+	Error = "FBX SDK is not configured.";
 	return false;
 #endif
 }

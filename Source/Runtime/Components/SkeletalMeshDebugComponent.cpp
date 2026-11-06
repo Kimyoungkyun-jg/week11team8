@@ -12,6 +12,7 @@ namespace
 	constexpr float TailBaseCos = 0.70710678f;      // cos 45도
 	const FVector4 BoneColor(1.0f, 0.85f, 0.2f, 1.0f);
 	const FVector4 SelectedBoneColor(0.2f, 1.0f, 0.3f, 1.0f);
+	const FVector4 HoveredBoneColor(1.0f, 1.0f, 1.0f, 1.0f);
 
 	// 서로 수직인 원 3개로 구체를 표현한다
 	void AddWireSphere(FLineBatcher& LineBatcher, const FVector& Center, const float Radius, const FVector4& Color)
@@ -75,7 +76,25 @@ void USkeletalMeshDebugComponent::SetSelectedBone(const int32 BoneIndex)
 }
 
 void USkeletalMeshDebugComponent::SetSkeletalMesh(USkeletalMesh* Mesh)
-{ SelectedBoneIndex = -1; Super::SetSkeletalMesh(Mesh); }
+{ SelectedBoneIndex = -1; HoveredBoneIndex = -1; Super::SetSkeletalMesh(Mesh); }
+
+bool USkeletalMeshDebugComponent::ShouldDrawBone(const int32 Bone) const
+{
+	switch (BoneDrawMode)
+	{
+	case EBoneDrawMode::AllHierarchy:
+		return true;
+	case EBoneDrawMode::SelectedOnly:
+		return Bone == SelectedBoneIndex;
+	case EBoneDrawMode::SelectedAndParents:
+		if (!SkeletalMesh) return false;
+		for (int32 Current = SelectedBoneIndex; Current >= 0 && Current < SkeletalMesh->MeshData.Bones.Num(); Current = SkeletalMesh->MeshData.Bones[Current].ParentIndex)
+			if (Current == Bone) return true;
+		return false;
+	default:
+		return false;
+	}
+}
 
 void USkeletalMeshDebugComponent::GetBoneSpheres(TArray<FVector>& OutJoints, TArray<float>& OutRadii) const
 {
@@ -133,16 +152,18 @@ void USkeletalMeshDebugComponent::DrawDebug(FLineBatcher* LineBatcher) const
 
 	for (int32 i = 0; i < Bones.Num(); i++)
 	{
+		if (!ShouldDrawBone(i)) continue;
+
 		const FMatrix BoneToWorld = GetGlobalBoneTransforms()[i] * ComponentToWorld;
 		const FVector& Joint = Joints[i];
-		const FVector4& Color = i == SelectedBoneIndex ? SelectedBoneColor : BoneColor;
+		const FVector4& Color = i == SelectedBoneIndex ? SelectedBoneColor : i == HoveredBoneIndex ? HoveredBoneColor : BoneColor;
 
 		if (bDrawBones)
 		{
 			AddWireSphere(*LineBatcher, Joint, Radii[i], Color);
 
 			const int32 Parent = Bones[i].ParentIndex;
-			if (Parent >= 0)
+			if (Parent >= 0 && ShouldDrawBone(Parent))
 			{
 				AddBoneTail(*LineBatcher, Joints[Parent], Joint, Radii[Parent], Color);
 			}

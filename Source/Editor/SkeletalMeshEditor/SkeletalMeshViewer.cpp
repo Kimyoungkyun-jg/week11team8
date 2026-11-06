@@ -13,7 +13,6 @@
 #include "Render/SkyboxRenderer.h"
 #include "Render/RenderCommand.h"
 #include "Editor/EditorUI/EditorUIScale.h"
-#include "Asset/FbxImporter/SkeletalMeshBake.h"
 #include "Core/EngineLog.h"
 #include "Collision/Ray.h"
 #include "UObject/UObjectGlobals.h"
@@ -189,10 +188,6 @@ void FSkeletalMeshViewerPanel::Tick(float DeltaTime)
 				Viewer->bScrollTreeToSelection = true;
 			}
 		}
-		if (Viewer->SaveNotificationTimer > 0.0f)
-		{
-			Viewer->SaveNotificationTimer -= DeltaTime;
-		}
 		if (Viewer->ViewSize.x >= 1.0f && Viewer->ViewSize.y >= 1.0f)
 			Viewer->Client.Resize(static_cast<uint32>(Viewer->ViewSize.x), static_cast<uint32>(Viewer->ViewSize.y));
 	}
@@ -217,6 +212,7 @@ void FSkeletalMeshViewerPanel::OpenFBX(const FString& Path)
 	Viewer->MeshComponent = Cast<USkeletalMeshDebugComponent>(PreviewActor->AddComponent(USkeletalMeshDebugComponent::StaticClass(), "SkeletalMeshDebug"));
 	PreviewActor->SetRootComponent(Viewer->MeshComponent);
 	Viewer->MeshComponent->SetSkeletalMesh(Mesh);
+	if (auto* Debug = Cast<USkeletalMeshDebugComponent>(Viewer->MeshComponent)) Debug->bDrawBones = true;
 
 	const TArray<FBoneInfo>& Bones = Mesh->MeshData.Bones;
 	Viewer->Children.SetNum(Bones.Num());
@@ -321,6 +317,8 @@ void FSkeletalMeshViewerPanel::OnRender()
 				const int NextMode = (static_cast<int>(Viewer->Gizmo.GetMode()) + 1) % 3;
 				Viewer->Gizmo.SetMode(static_cast<EGizmoMode>(NextMode));
 			}
+			if (bFocused && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false))
+				FocusOnSelectedBone(*Viewer);
 
 			ImGui::BeginChild("Bones", ImVec2(EditorUIScale::Px(280.0f), 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
 			const float AvailableHeight = ImGui::GetContentRegionAvail().y;
@@ -400,7 +398,7 @@ void FSkeletalMeshViewerPanel::DrawBoneDetails(FSkeletalMeshViewer& Viewer)
 			if (Viewer.SelectedBone < Bones.Num())
 			{
 				Mesh->SetBoneTransform(Viewer.SelectedBone, Bones[Viewer.SelectedBone].LocalBindPose);
-				Mesh->PerformCPUSkinning();
+				Mesh->UpdateSkinning();
 				Viewer.BoneGizmoTarget->SetWorldTransform(
 					Mesh->GetGlobalBoneTransforms()[Viewer.SelectedBone] * Mesh->GetWorldMatrix(), false);
 			}
@@ -408,20 +406,8 @@ void FSkeletalMeshViewerPanel::DrawBoneDetails(FSkeletalMeshViewer& Viewer)
 	}
 
 	ImGui::SameLine();
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.22f, 1.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.58f, 0.28f, 1.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.16f, 1.0f));
-	if (ImGui::Button("Save Pose"))
-	{
-		SaveViewerPose(Viewer);
-	}
-	ImGui::PopStyleColor(3);
-
-	if (Viewer.SaveNotificationTimer > 0.0f)
-	{
-		ImGui::SameLine();
-		ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Saved!");
-	}
+	if (ImGui::Button("Focus")) FocusOnSelectedBone(Viewer);
+	ImGui::SetItemTooltip("Focus the camera on the selected bone, or the whole mesh if none is selected (F)");
 
 	if (Viewer.SelectedBone < 0)
 	{
@@ -443,31 +429,37 @@ void FSkeletalMeshViewerPanel::DrawBoneDetails(FSkeletalMeshViewer& Viewer)
 
 	// 로컬 트랜스폼 조작 (종곤님 브랜치 방식)
 	ImGui::SeparatorText("Transform (Local)");
-	FMatrix LocalMat = Mesh->GetBoneTransforms()[Viewer.SelectedBone];
-	FVector Loc = LocalMat.TransformPosition(FVector::ZeroVector);
-	FRotator Rot = MatrixToRotator(LocalMat);
-	FVector Scale(
-		FVector(LocalMat.M[0][0], LocalMat.M[0][1], LocalMat.M[0][2]).Size(),
-		FVector(LocalMat.M[1][0], LocalMat.M[1][1], LocalMat.M[1][2]).Size(),
-		FVector(LocalMat.M[2][0], LocalMat.M[2][1], LocalMat.M[2][2]).Size()
-	);
-	if (Scale.X < 0.0001f) Scale.X = 1.0f;
-	if (Scale.Y < 0.0001f) Scale.Y = 1.0f;
-	if (Scale.Z < 0.0001f) Scale.Z = 1.0f;
+	const FMatrix& LocalMat = Mesh->GetBoneTransforms()[Viewer.SelectedBone];
+	// 편집 중인 값은 그대로 둔다. 기즈모, Reset처럼 밖에서 행렬이 바뀌었을 때만 다시 분해한다.
+	if (Viewer.EditedBone != Viewer.SelectedBone || std::memcmp(&Viewer.EditedMatrix, &LocalMat, sizeof(FMatrix)) != 0)
+	{
+		const FTransform Decomposed = DecomposeMatrix(LocalMat);
+		Viewer.EditedBone = Viewer.SelectedBone;
+		Viewer.EditedMatrix = LocalMat;
+		Viewer.EditedLocation = Decomposed.Location;
+		Viewer.EditedRotation = Decomposed.Rotation;
+		Viewer.EditedScale = Decomposed.Scale;
+		if (Viewer.EditedScale.X < 0.0001f) Viewer.EditedScale.X = 1.0f;
+		if (Viewer.EditedScale.Y < 0.0001f) Viewer.EditedScale.Y = 1.0f;
+		if (Viewer.EditedScale.Z < 0.0001f) Viewer.EditedScale.Z = 1.0f;
+	}
 
-	float LocValues[3] = { Loc.X, Loc.Y, Loc.Z };
-	float ScaleValues[3] = { Scale.X, Scale.Y, Scale.Z };
+	float LocValues[3] = { Viewer.EditedLocation.X, Viewer.EditedLocation.Y, Viewer.EditedLocation.Z };
+	float ScaleValues[3] = { Viewer.EditedScale.X, Viewer.EditedScale.Y, Viewer.EditedScale.Z };
 
 	bool bModified = false;
 	bModified |= DrawVector3Controller("Location", LocValues, 0.0f, 0.05f);
-	bModified |= DrawRotatorAsXYZ("Rotation", Rot, 0.5f);
+	bModified |= DrawRotatorAsXYZ("Rotation", Viewer.EditedRotation, 0.5f);
 	bModified |= DrawVector3Controller("Scale", ScaleValues, 1.0f, 0.01f);
 
 	if (bModified)
 	{
-		FTransform NewLocal(Rot, FVector(LocValues[0], LocValues[1], LocValues[2]), FVector(ScaleValues[0], ScaleValues[1], ScaleValues[2]));
+		Viewer.EditedLocation = FVector(LocValues[0], LocValues[1], LocValues[2]);
+		Viewer.EditedScale = FVector(ScaleValues[0], ScaleValues[1], ScaleValues[2]);
+		FTransform NewLocal(Viewer.EditedRotation, Viewer.EditedLocation, Viewer.EditedScale);
 		Mesh->SetBoneTransform(Viewer.SelectedBone, NewLocal.GetLocalMatrix());
-		Mesh->PerformCPUSkinning();
+		Viewer.EditedMatrix = Mesh->GetBoneTransforms()[Viewer.SelectedBone];
+		Mesh->UpdateSkinning();
 		Viewer.BoneGizmoTarget->SetWorldTransform(
 			Mesh->GetGlobalBoneTransforms()[Viewer.SelectedBone] * Mesh->GetWorldMatrix(), false);
 	}
@@ -485,85 +477,30 @@ void FSkeletalMeshViewerPanel::DrawBoneDetails(FSkeletalMeshViewer& Viewer)
 	}
 }
 
-void FSkeletalMeshViewerPanel::SaveViewerPose(FSkeletalMeshViewer& Viewer)
+void FSkeletalMeshViewerPanel::FocusOnSelectedBone(FSkeletalMeshViewer& Viewer)
 {
-	if (!Viewer.MeshComponent || !Viewer.MeshComponent->GetSkeletalMesh())
+	USkeletalMeshComponent* Mesh = Viewer.MeshComponent;
+	if (!Mesh || !Mesh->GetSkeletalMesh()) return;
+
+	const TArray<FBoneInfo>& Bones = Mesh->GetSkeletalMesh()->MeshData.Bones;
+	const TArray<FMatrix>& Globals = Mesh->GetGlobalBoneTransforms();
+	const int32 Selected = Viewer.SelectedBone;
+	if (Selected < 0 || Selected >= Bones.Num() || Globals.Num() != Bones.Num())
 	{
+		const FBox Bounds = Mesh->CalcBounds();
+		Viewer.Client.FocusOnBounds((Bounds.Min + Bounds.Max) * 0.5f, (Bounds.Max - Bounds.Min).Size() * 0.5f);
 		return;
 	}
 
-	USkeletalMesh* Mesh = Viewer.MeshComponent->GetSkeletalMesh();
-	FSkeletalMeshData& MeshData = Mesh->MeshData;
-
-	const TArray<FMatrix>& LocalTransforms = Viewer.MeshComponent->GetBoneTransforms();
-	const TArray<FMatrix>& GlobalTransforms = Viewer.MeshComponent->GetGlobalBoneTransforms();
-
-	const int32 BoneCount = MeshData.Bones.Num();
-	if (LocalTransforms.Num() != BoneCount || GlobalTransforms.Num() != BoneCount)
-	{
-		return;
-	}
-
-	// 1. 본의 바인드 포즈를 현재 편집된 트랜스폼으로 갱신
-	for (int32 i = 0; i < BoneCount; ++i)
-	{
-		MeshData.Bones[i].LocalBindPose = LocalTransforms[i];
-		MeshData.Bones[i].GlobalBindPose = GlobalTransforms[i];
-		MeshData.Bones[i].InverseBindPose = GlobalTransforms[i].Inverse();
-	}
-
-	// 2. 현재 스키닝된 정점 데이터를 기본 정점에 베이킹
-	Viewer.MeshComponent->PerformCPUSkinning();
-	const TArray<FVertex>& CurrentSkinned = Viewer.MeshComponent->GetSkinnedVertices();
-
-	if (CurrentSkinned.Num() == MeshData.SkinnedVertices.Num() && !CurrentSkinned.IsEmpty())
-	{
-		FVector BoundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
-		FVector BoundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-
-		const int32 VertexCount = CurrentSkinned.Num();
-		for (int32 v = 0; v < VertexCount; ++v)
-		{
-			const FVertex& SkinnedV = CurrentSkinned[v];
-			FSkeletalVertex& MeshV = MeshData.SkinnedVertices[v];
-
-			MeshV.Position = SkinnedV.Position;
-			MeshV.Normal = SkinnedV.Normal;
-			MeshV.Tangent = SkinnedV.Tangent;
-
-			BoundsMin.X = std::min(BoundsMin.X, SkinnedV.Position.X);
-			BoundsMin.Y = std::min(BoundsMin.Y, SkinnedV.Position.Y);
-			BoundsMin.Z = std::min(BoundsMin.Z, SkinnedV.Position.Z);
-
-			BoundsMax.X = std::max(BoundsMax.X, SkinnedV.Position.X);
-			BoundsMax.Y = std::max(BoundsMax.Y, SkinnedV.Position.Y);
-			BoundsMax.Z = std::max(BoundsMax.Z, SkinnedV.Position.Z);
-		}
-
-		MeshData.AABB = FBox{ BoundsMin, BoundsMax };
-
-		// GPU 렌더링용 Static VertexBuffer 갱신
-		uint32 VbSize = static_cast<uint32>(sizeof(FSkeletalVertex) * VertexCount);
-		Mesh->VertexBuffer = RenderCommand::CreateStaticVertexBuffer(
-			MeshData.SkinnedVertices.GetData(), VbSize, sizeof(FSkeletalVertex));
-		Mesh->RebuildRenderData();
-	}
-
-	// 3. .fbx.bin 바이너리 캐시 파일로 영구 저장
-	const FString BinPath = Viewer.Path + ".bin";
-	FSkeletalMeshBake::WriteBaked(BinPath, MeshData);
-
-	// 4. 컴포넌트 내부 바인드 포즈 상태 재동기화
-	Viewer.MeshComponent->InitBoneTransforms();
-
-	// 5. 기즈모 타겟 재동기화
-	if (Viewer.SelectedBone >= 0)
-	{
-		SelectBone(Viewer, Viewer.SelectedBone);
-	}
-
-	Viewer.SaveNotificationTimer = 3.0f;
-	HTR_LOG(Info, "[Viewer] Successfully saved new skeletal mesh bind pose: {}", BinPath);
+	// 가장 긴 자식 뼈까지 담는다. 끝 뼈는 부모까지의 길이를 쓴다.
+	const FMatrix ComponentWorld = Mesh->GetWorldMatrix();
+	const auto JointOf = [&](int32 Bone) { return (Globals[Bone] * ComponentWorld).TransformPosition(FVector::ZeroVector); };
+	const FVector Joint = JointOf(Selected);
+	float Radius = 0.0f;
+	for (int32 Bone = 0; Bone < Bones.Num(); ++Bone)
+		if (Bones[Bone].ParentIndex == Selected) Radius = std::max(Radius, (JointOf(Bone) - Joint).Size());
+	if (Radius <= 0.0f && Bones[Selected].ParentIndex >= 0) Radius = (Joint - JointOf(Bones[Selected].ParentIndex)).Size();
+	Viewer.Client.FocusOnBounds(Joint, Radius);
 }
 
 void FSkeletalMeshViewerPanel::DrawViewportToolbar(FSkeletalMeshViewer& Viewer)
@@ -808,22 +745,6 @@ void FSkeletalMeshViewerPanel::DrawViewportToolbar(FSkeletalMeshViewer& Viewer)
 		DrawList->AddText(ImVec2(TextStartX, TextStartY), IM_COL32(220, 220, 220, 255), SpeedStr);
 	}
 
-	// ---- Toolbar Save Button ----
-	ImGui::SameLine(0.0f, EditorUIScale::Px(6.0f));
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.22f, 0.85f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.58f, 0.28f, 1.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.16f, 1.0f));
-	if (ImGui::Button("Save##ToolbarSave", ImVec2(0.0f, TotalSize.y)))
-	{
-		SaveViewerPose(Viewer);
-	}
-	ImGui::PopStyleColor(3);
-
-	if (Viewer.SaveNotificationTimer > 0.0f)
-	{
-		ImGui::SameLine(0.0f, EditorUIScale::Px(6.0f));
-		ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Saved!");
-	}
 }
 
 void FSkeletalMeshViewerPanel::DrawViewport(FSkeletalMeshViewer& Viewer)
@@ -844,7 +765,10 @@ void FSkeletalMeshViewerPanel::DrawViewport(FSkeletalMeshViewer& Viewer)
 	if (FTexture2D* Color = Viewer.Client.GetColorTarget())
 		ImGui::GetWindowDrawList()->AddImage(Color->GetSRV(), Min, ImVec2(Min.x + Size.x, Min.y + Size.y));
 
-	const int32 HoveredJoint = DrawSkeleton(Viewer, Min, Size);
+	auto* Debug = Cast<USkeletalMeshDebugComponent>(Viewer.MeshComponent);
+	if (Debug) Debug->BoneDrawMode = Viewer.BoneDrawMode;
+	const int32 HoveredJoint = ImGui::IsItemHovered() ? PickBone(Viewer, Min, Size) : -1;
+	if (Debug) Debug->SetHoveredBone(HoveredJoint);
 
 	if (bClicked && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !Viewer.Gizmo.IsUsing())
 	{
@@ -857,7 +781,8 @@ void FSkeletalMeshViewerPanel::DrawViewport(FSkeletalMeshViewer& Viewer)
 
 	// 오른쪽 버튼 + 마우스 회전
 	// WASD/QE 이동
-	if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+	// 포커스 이동은 TickInput에서 진행되므로 마우스가 뷰포트 밖에 있어도 끝까지 돌린다.
+	if (ImGui::IsItemHovered() || ImGui::IsItemActive() || Viewer.Client.IsFraming())
 	{
 		if (ImGui::IsMouseDown(ImGuiMouseButton_Right) && ImGui::GetIO().MouseWheel != 0.0f)
 		{
@@ -874,10 +799,14 @@ void FSkeletalMeshViewerPanel::DrawBoneTree(FSkeletalMeshViewer& Viewer)
 
 	ImGui::PushStyleColor(ImGuiCol_TableRowBg, ImVec4(0.11f, 0.11f, 0.11f, 1.0f));
 	ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-	ImGuiTableFlags TableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+	// 본 계층은 수십 단계까지 깊어진다. 들여쓰기를 줄이고, 그래도 넘치는 이름은 가로 스크롤로 본다.
+	ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, EditorUIScale::Px(10.0f));
+	ImGuiTableFlags TableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit;
 
 	if (ImGui::BeginTable("##BoneTreeTable", 1, TableFlags))
 	{
+		// 폭 0인 고정 열은 가장 긴 행에 맞춰 늘어난다.
+		ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthFixed, 0.0f);
 		for (int32 i = 0; i < Bones.Num(); ++i)
 		{
 			if (Bones[i].ParentIndex < 0)
@@ -885,6 +814,7 @@ void FSkeletalMeshViewerPanel::DrawBoneTree(FSkeletalMeshViewer& Viewer)
 		}
 		ImGui::EndTable();
 	}
+	ImGui::PopStyleVar();
 	ImGui::PopStyleColor(2);
 }
 
@@ -959,6 +889,7 @@ void FSkeletalMeshViewerPanel::DrawBoneNode(FSkeletalMeshViewer& Viewer, int32 B
 	if (BoneIndex == Viewer.SelectedBone && Viewer.bScrollTreeToSelection)
 	{
 		ImGui::SetScrollHereY(0.5f);
+		ImGui::SetScrollFromPosX(ItemMin.x - ImGui::GetWindowPos().x, 0.2f);
 		Viewer.bScrollTreeToSelection = false;
 	}
 
@@ -970,87 +901,43 @@ void FSkeletalMeshViewerPanel::DrawBoneNode(FSkeletalMeshViewer& Viewer, int32 B
 	}
 }
 
-int32 FSkeletalMeshViewerPanel::DrawSkeleton(FSkeletalMeshViewer& Viewer, const ImVec2& ViewMin, const ImVec2& ViewSize)
+int32 FSkeletalMeshViewerPanel::PickBone(FSkeletalMeshViewer& Viewer, const ImVec2& ViewMin, const ImVec2& ViewSize)
 {
-	if (Viewer.BoneDrawMode == EBoneDrawMode::None)
-		return -1;
+	auto* Debug = Cast<USkeletalMeshDebugComponent>(Viewer.MeshComponent);
+	if (!Debug || Viewer.BoneDrawMode == EBoneDrawMode::None) return -1;
 
-	const TArray<FBoneInfo>& Bones = Viewer.MeshComponent->GetSkeletalMesh()->MeshData.Bones;
-	const TArray<FMatrix>& Globals = Viewer.MeshComponent->GetGlobalBoneTransforms();
-	if (Globals.Num() != Bones.Num())
-		return -1;
+	TArray<FVector> Joints;
+	TArray<float> Radii;
+	Debug->GetBoneSpheres(Joints, Radii);
 
-	auto ShouldDrawBone = [&](int32 Bone) -> bool
-	{
-		switch (Viewer.BoneDrawMode)
-		{
-		case EBoneDrawMode::AllHierarchy:
-			return true;
-		case EBoneDrawMode::SelectedOnly:
-			return Viewer.SelectedBone >= 0 && Bone == Viewer.SelectedBone;
-		case EBoneDrawMode::SelectedAndParents:
-			if (Viewer.SelectedBone < 0) return false;
-			for (int32 P = Viewer.SelectedBone; P >= 0 && P < Bones.Num(); P = Bones[P].ParentIndex)
-			{
-				if (P == Bone) return true;
-			}
-			return false;
-		case EBoneDrawMode::None:
-		default:
-			return false;
-		}
-	};
-
-	const FMatrix ComponentWorld = Viewer.MeshComponent->GetWorldMatrix();
+	constexpr float MinPickPixels = 6.0f;   // 작은 구체도 누를 수 있게 한다
+	constexpr float SameSpotPixels = 1.0f;
 	const FMatrix ViewProj = Viewer.Client.GetViewProjectionMatrix();
-
-	TArray<FVector2> Joints;
-	Joints.SetNum(Bones.Num());
-	for (int32 i = 0; i < Bones.Num(); ++i)
-	{
-		const FVector Location = (Globals[i] * ComponentWorld).TransformPosition(FVector::ZeroVector);
-		Joints[i] = WorldToScreen(Location, ViewProj, static_cast<int>(ViewSize.x), static_cast<int>(ViewSize.y));
-	}
-
-	const auto IsBehind = [&](int32 i) { return Joints[i].X == -FLT_MAX; };
-	const auto ToScreen = [&](int32 i) { return ImVec2(ViewMin.x + Joints[i].X, ViewMin.y + Joints[i].Y); };
-
+	const FVector Forward = Viewer.Client.GetViewForward();
+	const FVector Side = std::abs(Forward.Z) > 0.99f ? FVector(1.0f, 0.0f, 0.0f) : FVector::Cross(Forward, FVector(0.0f, 0.0f, 1.0f)).GetSafeNormal();
 	const ImVec2 Mouse = ImGui::GetMousePos();
-	int32 HoveredJoint = -1;
-	float BestDistSq = 8.0f * 8.0f;
-	for (int32 i = 0; i < Bones.Num(); ++i)
+	const int ScreenW = static_cast<int>(ViewSize.x);
+	const int ScreenH = static_cast<int>(ViewSize.y);
+
+	int32 Best = -1;
+	float BestDistance = FLT_MAX;
+	for (int32 i = 0; i < Joints.Num(); ++i)
 	{
-		if (IsBehind(i) || !ShouldDrawBone(i))
-			continue;
-		const ImVec2 P = ToScreen(i);
-		const float DistSq = (P.x - Mouse.x) * (P.x - Mouse.x) + (P.y - Mouse.y) * (P.y - Mouse.y);
-		if (DistSq < BestDistSq)
+		if (!Debug->ShouldDrawBone(i)) continue;
+		const FVector2 Center = WorldToScreen(Joints[i], ViewProj, ScreenW, ScreenH);
+		if (Center.X == -FLT_MAX) continue;   // 카메라 뒤
+		const FVector2 Edge = WorldToScreen(Joints[i] + Side * Radii[i], ViewProj, ScreenW, ScreenH);
+		const float ScreenRadius = Edge.X == -FLT_MAX ? 0.0f : std::hypot(Edge.X - Center.X, Edge.Y - Center.Y);
+		const float Distance = std::hypot(ViewMin.x + Center.X - Mouse.x, ViewMin.y + Center.Y - Mouse.y);
+		if (Distance > std::max(ScreenRadius, MinPickPixels)) continue;
+		// 구체가 겹치면 중심이 커서에 가까운 뼈를 고른다. 거의 같은 자리면 앞 번호(부모)를 유지한다.
+		if (Distance < BestDistance - SameSpotPixels)
 		{
-			BestDistSq = DistSq;
-			HoveredJoint = i;
+			Best = i;
+			BestDistance = Distance;
 		}
 	}
-	
-	ImDrawList* DL = ImGui::GetWindowDrawList();
-	DL->PushClipRect(ViewMin, ImVec2(ViewMin.x + ViewSize.x, ViewMin.y + ViewSize.y), true);
-	for (int32 i = 0; i < Bones.Num(); ++i)
-	{
-		if (IsBehind(i) || !ShouldDrawBone(i))
-			continue;
-
-		const int32 Parent = Bones[i].ParentIndex;
-		if (Parent >= 0 && !IsBehind(Parent) && ShouldDrawBone(Parent))
-			DL->AddLine(ToScreen(Parent), ToScreen(i), IM_COL32(220, 220, 220, 180), 1.5f);
-
-		const bool bSelected = (i == Viewer.SelectedBone);
-		const bool bHovered = (i == HoveredJoint);
-		const ImU32 Color = bSelected 
-			? IM_COL32(255, 170, 40, 255)
-			: (bHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(100, 190, 255, 255));
-		DL->AddCircleFilled(ToScreen(i), (bSelected || bHovered) ? 5.0f : 3.0f, Color);
-	}
-	DL->PopClipRect();
-	return HoveredJoint;
+	return Best;
 }
 
 void FSkeletalMeshViewerPanel::SelectBone(FSkeletalMeshViewer& Viewer, int32 BoneIndex)
@@ -1088,6 +975,6 @@ void FSkeletalMeshViewerPanel::UpdateBoneGizmo(FSkeletalMeshViewer& Viewer, cons
 		const int32 Parent = Mesh->GetSkeletalMesh()->MeshData.Bones[Viewer.SelectedBone].ParentIndex;
 		const FMatrix ParentWorld = (Parent >= 0 ? Globals[Parent] : FMatrix::Identity) * ComponentWorld;
 		Mesh->SetBoneTransform(Viewer.SelectedBone, Viewer.BoneGizmoTarget->GetWorldMatrix() * ParentWorld.Inverse());
-		Mesh->PerformCPUSkinning();
+		Mesh->UpdateSkinning();
 	}
 }
