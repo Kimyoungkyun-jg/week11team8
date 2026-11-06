@@ -8,8 +8,26 @@
 #include "Camera/ViewportCameraMovement.h"
 #include "Math/EngineMath.h"
 #include "Render/RenderCommand.h"
+#include <algorithm>
+#include <cmath>
 
 FEditorViewportClient::FEditorViewportClient() {}
+
+void FEditorViewportClient::SetCameraSpeed(float Value)
+{
+    if (std::isfinite(Value)) CameraSpeed = std::clamp(Value, 0.1f, 10.0f);
+}
+
+void FEditorViewportClient::SetMouseSensitivity(float Value)
+{
+    if (std::isfinite(Value)) MouseSensitivity = std::clamp(Value, 0.01f, 1.0f);
+}
+
+void FEditorViewportClient::SetMaxRange(float Value)
+{
+    if (std::isfinite(Value)) MaxRange = std::clamp(Value, 0.1f, 10000.0f);
+}
+
 
 void FEditorViewportClient::TickInput(float DeltaTime, bool bCaptured,
                                       bool bHovered, int32 WheelDelta,
@@ -211,14 +229,6 @@ FSceneView FEditorViewportClient::CalcSceneView(const FRect &InViewRect) const {
     OutView.bIsPerspective = bIsPerspective;
     OutView.bIsWireframe = ViewportMode == EViewportMode::Wireframe;
 
-    if (GCameraOverlayDebug.bOverride)
-    {
-        const FCameraOverlayDebug& D = GCameraOverlayDebug;
-        OutView.OverlayColor = FLinearColor{ D.FadeColor[0], D.FadeColor[1], D.FadeColor[2], D.FadeAmount };
-        OutView.LetterboxAmount = D.LetterboxAmount;
-        OutView.LetterboxAspect = D.LetterboxAspect;
-        OutView.VignetteIntensity = D.VignetteIntensity;
-    }
 
     return OutView;
 }

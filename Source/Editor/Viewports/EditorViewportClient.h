@@ -80,6 +80,10 @@ public:
 		ViewRotation = InRotation;
 	}
 
+	float GetCameraSpeed() const { return CameraSpeed; }
+	void SetCameraSpeed(float Value);
+	float GetMouseSensitivity() const { return MouseSensitivity; }
+	void SetMouseSensitivity(float Value);
 	float GetViewFOV() const { return ViewFOV; }
 	void SetViewFOV(float InFOV) { ViewFOV = InFOV; }
 	float GetNearClip() const { return NearClip; }
@@ -151,12 +155,10 @@ public:
 	void SetReflectionModel(EReflectionModel Model) { ReflectionModel = Model; }
 	EShadingModel GetShadingModel() const { return ShadingModel; }
 	void SetShadingModel(EShadingModel Model) { ShadingModel = Model; }
-	bool UsesClassicLighting() const { return bUseClassicLighting; }
-	void SetUseClassicLighting(bool bEnabled) { bUseClassicLighting = bEnabled; }
 	float GetMaxRange() const { return MaxRange; }
 	FViewShowFlags& GetShowFlags() { return ShowFlags; }
 	const FViewShowFlags& GetShowFlags() const { return ShowFlags; }
-	void SetMaxRange(float InMaxRange) { MaxRange = InMaxRange; }
+	void SetMaxRange(float InMaxRange);
 
 	// 타깃 크기 변경
 	void Resize(uint32 InWidth, uint32 InHeight);
@@ -170,8 +172,7 @@ protected:
 	bool bActive = false;
 	EViewportMode ViewportMode = EViewportMode::Solid;
 	EReflectionModel ReflectionModel = EReflectionModel::BlinnPhong;
-	EShadingModel ShadingModel = EShadingModel::Gouraud;
-	bool bUseClassicLighting = false;
+	EShadingModel ShadingModel = EShadingModel::Phong;
 
 	FRect Rect{};
 	uint32 Width = 0;
@@ -182,6 +183,8 @@ protected:
 	FVector ViewLocation = FVector(0.0f, 0.0f, 0.0f);
 	FRotator ViewRotation = FRotator(0.0f, 0.0f, 0.0f);
 	float ViewFOV = 60.0f;
+	float CameraSpeed = 1.0f;
+	float MouseSensitivity = 1.0f;
 	float AspectRatio = 1.777778f;
 	float NearClip = 0.1f;
 	float FarClip = 10000.0f;

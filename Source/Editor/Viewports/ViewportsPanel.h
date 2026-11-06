@@ -12,6 +12,8 @@ public:
 	// 활성 뷰포트 인덱스 설정
 	void SetActiveViewIndex(const int32 InIndex) { ActiveViewIndex = InIndex; }
 	int32 GetActiveViewIndex() const { return ActiveViewIndex; }
+	void SetRenderingPath(ERenderingPath Path);
+	ERenderingPath GetRenderingPath() const { return RenderingPath; }
 
 	// 네 View의 렌더 타깃과 UI 제어 상태를 초기화한다.
 	bool Init() override;
@@ -69,11 +71,13 @@ public:
 
 private:
 	int32 ActiveViewIndex = 0;
+	ERenderingPath RenderingPath = ERenderingPath::Deferred;
 	bool bShowNoCamera = false;
 
 	// 통계 정보 출력
 	void DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, FEditorViewportClient* Client) const;
 	void DrawCameraSpeedNotice(ImDrawList* DrawList) const;
+	void DrawCameraSettings(FEditorViewportClient& Client);
 	int32 CameraSpeedViewIndex = -1;
 	float CameraSpeedValue = 0.0f;
 	double CameraSpeedShownTime = -100.0;

@@ -29,7 +29,7 @@ struct FSceneRenderOptions
 
 	ERenderingPath RenderingPath = ERenderingPath::Deferred;
 	EReflectionModel ReflectionModel = EReflectionModel::BlinnPhong;
-	EShadingModel ShadingModel = EShadingModel::Gouraud;
+	EShadingModel ShadingModel = EShadingModel::Phong;
 	bool bUnlit = false;
 	bool bOverrideMaterialLighting = false;
 

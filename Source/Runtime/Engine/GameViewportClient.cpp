@@ -234,7 +234,7 @@ FSceneView FGameViewportClient::CalcSceneView(const FRect& InViewRect)
 			OutView.VignetteIntensity = PCM->VignetteIntensity;
 
 			// 시퀀서 Fade 트랙 / Settings 슬라이더가 PCM 값을 덮어씀
-			if (GCameraOverlayDebug.bOverride)
+			if (bAllowCameraOverlayDebug && GCameraOverlayDebug.bOverride)
 			{
 				const FCameraOverlayDebug& D = GCameraOverlayDebug;
 				OutView.OverlayColor = FLinearColor{ D.FadeColor[0], D.FadeColor[1], D.FadeColor[2], D.FadeAmount };
@@ -281,7 +281,7 @@ FSceneView FGameViewportClient::CalcSceneView(const FRect& InViewRect)
 	OutView.Frustum = ExtractFrustumPlanes(OutView.ViewProjectionMatrix);
 	OutView.FrustumCorners = GenerateFrustumCorners(OutView.ViewProjectionMatrix.Inverse());
 
-	if (GCameraOverlayDebug.bOverride)
+	if (bAllowCameraOverlayDebug && GCameraOverlayDebug.bOverride)
 	{
 		const FCameraOverlayDebug& D = GCameraOverlayDebug;
 		OutView.OverlayColor = FLinearColor{ D.FadeColor[0], D.FadeColor[1], D.FadeColor[2], D.FadeAmount };
@@ -357,6 +357,14 @@ void FGameViewportClient::GetAxisInputBySIEMode(EGameInputAxis Key, float Delta)
 	}
 }
 
+float FGameViewportClient::ConsumeSIECameraSpeedSteps()
+{
+	if (!bSIEMode || !bSIEKeyDown[static_cast<int32>(EKeyCode::RButton)]) return 0.0f;
+	const float Steps = SIEWheelDelta / 120.0f;
+	SIEWheelDelta = 0.0f;
+	return Steps;
+}
+
 void FGameViewportClient::TickSIEInput(float DeltaTime, float MoveSpeed, float MouseSensitivity)
 {
 	if (!bSIEMode || !CameraComponent)
@@ -415,6 +423,7 @@ void FGameViewportClient::Reset()
 	GameInstance = nullptr;
 	Engine = nullptr;
 	CameraComponent = nullptr;
+	bAllowCameraOverlayDebug = false;
 
 	ViewTargets.Reset();
 	Width = 0;

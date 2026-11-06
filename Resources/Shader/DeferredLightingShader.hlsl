@@ -23,7 +23,8 @@ cbuffer DeferredLightConstants : register(b0)
     // 1: SingleLightIndex 광원 하나만 ScreenShadowMask를 곱해 가산 블렌드로 더한다 (언리얼 RenderLights)
     uint bSingleLightPass;
     uint SingleLightIndex;
-    uint2 LightPassPadding;
+    uint ReflectionModel; // EReflectionModel: Phong=0, Blinn-Phong=1, Lambert=2
+    uint bOverrideMaterialLighting;
 };
 
 StructuredBuffer<FLightRenderParameters> SceneLights : register(t6);
@@ -50,14 +51,21 @@ void AccumulateLocalLight(inout float3 Diffuse, inout float3 Specular,
 
     Diffuse += Albedo * (1.0f - saturate(Metallic)) * Radiance * NdotL;
 
-    float3 H = L + V;
-    float HLengthSquared = dot(H, H);
-    if (HLengthSquared <= 1.0e-8f) return;
-    H *= rsqrt(HLengthSquared);
-
-    float3 F0 = SpecularData.rgb;
-    float Shininess = max(1.0f, SpecularData.a);
-    Specular += F0 * Radiance * pow(saturate(dot(N, H)), Shininess) * NdotL;
+    if (ReflectionModel == 2u) return; // Lambert has no specular term.
+    float SpecularTerm;
+    if (ReflectionModel == 0u)
+    {
+        SpecularTerm = saturate(dot(reflect(-L, N), V));
+    }
+    else
+    {
+        float3 H = L + V;
+        float HLengthSquared = dot(H, H);
+        if (HLengthSquared <= 1.0e-8f) return;
+        H *= rsqrt(HLengthSquared);
+        SpecularTerm = saturate(dot(N, H));
+    }
+    Specular += SpecularData.rgb * Radiance * pow(SpecularTerm, max(1.0f, SpecularData.a));
 }
 
 // 광원 하나의 기여 (그림자 제외). Directional은 확산광만 쓴다.
@@ -179,9 +187,9 @@ float4 mainPS(FPSInput Input) : SV_Target
     float4 NormalData = NormalRoughness.Load(int3(Pixel, 0));
     float4 EmissiveData = EmissiveModel.Load(int3(Pixel, 0));
     float4 SpecularData = SpecularShininess.Load(int3(Pixel, 0));
-    if (EmissiveData.a > 0.5f && EmissiveData.a < 2.5f) SpecularData.rgb = 0.0f;
+    if (bOverrideMaterialLighting == 0u && EmissiveData.a > 0.5f && EmissiveData.a < 2.5f) SpecularData.rgb = 0.0f;
     float3 Albedo = MaterialData.rgb;
-    if (EmissiveData.a > 3.5f)
+    if (bOverrideMaterialLighting == 0u && EmissiveData.a > 3.5f)
         return bSingleLightPass != 0 ? 0.0f : float4(Albedo + EmissiveData.rgb, 1.0f);
     float Metallic = MaterialData.a;
     // GBuffer가 bReceiveShadow를 w 부호에 넣는다 (StaticMeshGBufferShader.hlsl)

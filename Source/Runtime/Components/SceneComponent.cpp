@@ -154,17 +154,19 @@ void USceneComponent::DetachFromParent(EAttachmentRule Rule)
 	UpdateChildVisibility(this, false, false, false);
 }
 
-FRotator USceneComponent::GetWorldRotation() const
+FQuat USceneComponent::GetWorldRotationQuat() const
 {
 	if (AttachParent)
 	{
-		FQuat ParentQuat = AttachParent->GetWorldRotation().Quaternion();
-		FQuat LocalQuat = Transform.GetOrientation();
-
-		return (ParentQuat * LocalQuat).ToFRotator();
+		return (AttachParent->GetWorldRotationQuat() * Transform.GetOrientation()).Normalized();
 	}
 
-	return Transform.Rotation;
+	return Transform.GetOrientation();
+}
+
+FRotator USceneComponent::GetWorldRotation() const
+{
+	return AttachParent ? GetWorldRotationQuat().ToFRotator() : Transform.Rotation;
 }
 
 FVector USceneComponent::GetWorldLocation() const
@@ -201,12 +203,23 @@ FMatrix USceneComponent::GetWorldMatrix() const
 		AttachParent->GetWorldMatrix().TransformPosition(Transform.Location);
 
 	const FQuat WorldRotation = 
-		AttachParent->GetWorldRotation().Quaternion() * Transform.GetOrientation();
+		GetWorldRotationQuat();
 
 	const FVector WorldScale =
 		Transform.Scale * AttachParent->GetWorldScale3D();
 
-	return FTransform(WorldRotation.ToFRotator(), WorldLocation, WorldScale).GetLocalMatrix();
+	// Keep the composed rotation as a quaternion: editor arrows have a local 90-degree
+	// pitch, where an Euler round trip makes their world direction unstable.
+	FMatrix WorldMatrix = WorldRotation.ToFMatrix();
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		for (int32 Component = 0; Component < 3; ++Component)
+		{
+			WorldMatrix[Axis][Component] *= WorldScale.V[Axis];
+		}
+	}
+	WorldMatrix.SetOrigin(WorldLocation);
+	return WorldMatrix;
 }
 
 void USceneComponent::SetWorldTransform(const FMatrix& InWorldMatrix, bool bSweep)
@@ -262,7 +275,7 @@ void USceneComponent::SetWorldRotation(FRotator NewRotation, bool bSweep)
 
 	if (GetAttachParent() != nullptr)
 	{
-		FQuat NewRelQuat = GetAttachParent()->GetWorldRotation().Quaternion().Inverse() * NewRelRotation.Quaternion();
+		FQuat NewRelQuat = GetAttachParent()->GetWorldRotationQuat().Inverse() * NewRelRotation.Quaternion();
 		NewRelRotation = NewRelQuat.ToFRotator();
 	}
 
@@ -278,7 +291,7 @@ void USceneComponent::SetWorldLocationAndRotation(FVector NewLocation, FRotator 
 	{
 		NewRelLocation = GetAttachParent()->GetWorldMatrix().Inverse().TransformPosition(NewRelLocation);
 
-		FQuat NewRelQuat = GetAttachParent()->GetWorldRotation().Quaternion().Inverse() * NewRelRotation.Quaternion();
+		FQuat NewRelQuat = GetAttachParent()->GetWorldRotationQuat().Inverse() * NewRelRotation.Quaternion();
 		NewRelRotation = NewRelQuat.ToFRotator();
 	}
 

@@ -200,7 +200,7 @@ void FSceneRenderer::InitViews(FRenderer* Renderer, const FSceneRenderOptions& O
 	FinalizeShadowLights(Options);
 }
 
-bool FSceneRenderer::BindDeferredLighting(FRenderer* Renderer, uint32 Width, uint32 Height, int32 SingleLightIndex)
+bool FSceneRenderer::BindDeferredLighting(FRenderer* Renderer, uint32 Width, uint32 Height, int32 SingleLightIndex, const FSceneRenderOptions& Options)
 {
 	FSceneLightResources& LightResources = RenderData.ViewLightResources;
 
@@ -213,6 +213,8 @@ bool FSceneRenderer::BindDeferredLighting(FRenderer* Renderer, uint32 Width, uin
 
 	FDeferredLightConstants Constants{};
 	Constants.bSingleLightPass = SingleLightIndex >= 0 ? 1u : 0u;
+	Constants.ReflectionModel = static_cast<uint32>(Options.ReflectionModel);
+	Constants.bOverrideMaterialLighting = Options.bOverrideMaterialLighting ? 1u : 0u;
 	Constants.SingleLightIndex = SingleLightIndex >= 0 ? static_cast<uint32>(SingleLightIndex) : 0u;
 	Constants.InverseViewProjection = View.ViewProjectionMatrix.Inverse();
 	Constants.CameraPosition = FVector4(View.ViewLocation.X, View.ViewLocation.Y, View.ViewLocation.Z, View.bIsPerspective ? 1.0f : 0.0f);
@@ -426,10 +428,10 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 					LightingPass.ReadTextures = { BaseColor, Normal, Depth, Emissive, Specular };
 					if (SingleLightIndex >= 0) LightingPass.ReadTextures.push_back(ShadowMask);   // t3
 					LightingPass.ColorAttachments = { { LightingHDR, ERenderGraphLoadAction::Load } };
-					return Graph.AddRasterPass(std::move(LightingPass), [this, Renderer, Width, Height, SingleLightIndex]
+					return Graph.AddRasterPass(std::move(LightingPass), [this, Renderer, Width, Height, SingleLightIndex, Options]
 						{
 							if (!bCorePassSucceeded) return;
-							if (!BindDeferredLighting(Renderer, Width, Height, SingleLightIndex))
+							if (!BindDeferredLighting(Renderer, Width, Height, SingleLightIndex, Options))
 							{
 								bCorePassSucceeded = false;
 								return;

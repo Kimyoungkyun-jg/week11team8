@@ -90,7 +90,6 @@ private:
 	static constexpr float SectionGap = 10.0f;
 	static constexpr float SubsectionGap = 4.0f;
 
-    void DrawCameraProperties();
 	std::function<bool()> IsPlayingQuery;
 	std::function<bool()> SkipGizmoHotkeyQuery;
 };

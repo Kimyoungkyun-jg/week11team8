@@ -265,7 +265,11 @@ bool UEditorEngine::Init()
 	OutlinerPanel->SetSelectionCallback(
 		[this](USceneComponent* Root)
 		{
-			Gizmo->SetTarget(Root, true);
+			TArray<USceneComponent*> Targets;
+			for (AActor* Actor : Selection.GetActors())
+				if (USceneComponent* Component = Actor->GetRootComponent())
+					Targets.Add(Component);
+			Gizmo->SetTargets(Root, Targets, true);
 			DetailsPanel->SetTarget(Root ? Root->GetOwner() : nullptr);
 
 			UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Root);
@@ -285,7 +289,11 @@ bool UEditorEngine::Init()
 				AActor* Owner = SceneComponent->GetOwner();
 				if (Owner && SceneComponent == Owner->GetRootComponent())
 				{
-					Gizmo->SetTarget(SceneComponent, true);
+					TArray<USceneComponent*> Targets;
+					for (AActor* Actor : Selection.GetActors())
+						if (USceneComponent* Root = Actor->GetRootComponent())
+							Targets.Add(Root);
+					Gizmo->SetTargets(SceneComponent, Targets, true);
 				}
 				else
 				{
@@ -713,12 +721,13 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 	if (CapturedViewportIndex != -1 && WheelDelta != 0)
 	{
 		const float Steps = static_cast<float>(WheelDelta) / 120.0f;
-		SettingsPanel->SetCameraSpeed(SettingsPanel->GetSettings().CameraSpeed * std::pow(1.25f, Steps));
-		ViewportsPanel->ShowCameraSpeed(CapturedViewportIndex, SettingsPanel->GetSettings().CameraSpeed);
+		if (FEditorViewportClient* CapturedClient = ViewportsPanel->GetViewportClient(CapturedViewportIndex))
+		{
+			CapturedClient->SetCameraSpeed(CapturedClient->GetCameraSpeed() * std::pow(1.25f, Steps));
+			ViewportsPanel->ShowCameraSpeed(CapturedViewportIndex, CapturedClient->GetCameraSpeed());
+		}
 		WheelDelta = 0;
 	}
-	const float MoveSpeed = 10.0f * SettingsPanel->GetSettings().CameraSpeed;
-	const float MouseSens = 0.2f * SettingsPanel->GetSettings().MouseSensitivity;
 
 	for (int32 i = 0; i < 4; ++i)
 	{
@@ -727,14 +736,14 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 			continue;
 
 		Client->TickInput(DeltaTime, i == CapturedViewportIndex,
-			i == HoveredViewIndex, WheelDelta, MoveSpeed, MouseSens);
+			i == HoveredViewIndex, WheelDelta, 10.0f * Client->GetCameraSpeed(), 0.2f * Client->GetMouseSensitivity());
 	}
 
 	// 활성 뷰포트 시점 동기화
 	const int32 ActiveIndex = ViewportsPanel->GetActiveViewIndex();
 	if (FEditorViewportClient* ActiveClient = ViewportsPanel->GetViewportClient(ActiveIndex))
 	{
-		if (ACameraActor* MainCam = GetActiveWorld()->GetMainCamera())
+		if (ACameraActor* MainCam = !PlayWorld && EditorWorld ? EditorWorld->GetMainCamera() : nullptr)
 		{
 			if (UCameraComponent* CamCom = MainCam->GetCameraComponent())
 			{
@@ -751,6 +760,10 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 // 월드를 한 번 Tick·Capture한 뒤 에디터와 피킹을 갱신한다.
 void UEditorEngine::TickWorldAndEditor(const float DeltaTime)
 {
+	const FEditorSettings& RenderSettings = SettingsPanel->GetSettings();
+	USkeletalMeshComponent::SetSkinningMode(RenderSettings.RenderingPath == ERenderingPath::Forward
+		? RenderSettings.SkinningMode : ESkinningMode::CPU);
+
 	// 게임 입력 처리
 	if (PlayWorld)
 	{
@@ -1156,8 +1169,15 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 	{
 		GameViewport.GetAxisInputBySIEMode(EGameInputAxis::MouseX, MouseX);
 		GameViewport.GetAxisInputBySIEMode(EGameInputAxis::MouseY, MouseY);
-		GameViewport.TickSIEInput(DeltaTime, SettingsPanel->GetSettings().CameraSpeed,
-			SettingsPanel->GetSettings().MouseSensitivity);
+		FEditorViewportClient* Source = ViewportsPanel ? ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex) : nullptr;
+		const float SpeedSteps = GameViewport.ConsumeSIECameraSpeedSteps();
+		if (Source && SpeedSteps != 0.0f)
+		{
+			Source->SetCameraSpeed(Source->GetCameraSpeed() * std::pow(1.25f, SpeedSteps));
+			ViewportsPanel->ShowCameraSpeed(PIEStartEditorViewIndex, Source->GetCameraSpeed());
+		}
+		GameViewport.TickSIEInput(DeltaTime, 10.0f * (Source ? Source->GetCameraSpeed() : 1.0f),
+			0.2f * (Source ? Source->GetMouseSensitivity() : 1.0f));
 	}
 	else
 	{
@@ -1236,13 +1256,11 @@ void UEditorEngine::BuildSceneRenderOptions(FGameViewportClient* ViewClient, FSc
 	{
 		return;
 	}
-	USkeletalMeshComponent::SetSkinningMode(SettingsPanel->GetSettings().RenderingPath == ERenderingPath::Forward
-		? SettingsPanel->GetSettings().SkinningMode : ESkinningMode::CPU);
 
-	// 게임 뷰포트에는 Show 메뉴가 없으므로 활성 에디터 뷰의 후처리 표시 항목을 따른다.
+	// 게임 뷰포트에는 Show 메뉴가 없으므로 실행을 시작한 에디터 뷰의 설정을 따른다. 다른 뷰를 클릭해도 바뀌지 않는다.
 	FViewShowFlags ShowFlags;
 	if (ViewportsPanel)
-		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(ViewportsPanel->GetActiveViewIndex()))
+		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex))
 			ShowFlags = ActiveView->GetShowFlags();
 	Options.bEnableFXAA = ShowFlags.bFXAA;
 	Options.bCacheShadows = SettingsPanel->GetSettings().bCacheShadows;
@@ -1251,16 +1269,12 @@ void UEditorEngine::BuildSceneRenderOptions(FGameViewportClient* ViewClient, FSc
 	Options.ReflectionModel = SettingsPanel->GetSettings().ReflectionModel;
 	Options.ShadingModel = SettingsPanel->GetSettings().ShadingModel;
 	if (ViewportsPanel)
-		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(ViewportsPanel->GetActiveViewIndex());
-			ActiveView && ActiveView->UsesClassicLighting())
+		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex))
 		{
 			Options.ReflectionModel = ActiveView->GetReflectionModel();
 			Options.ShadingModel = ActiveView->GetShadingModel();
-			Options.RenderingPath = ERenderingPath::Forward;
 			Options.bOverrideMaterialLighting = true;
 		}
-	USkeletalMeshComponent::SetSkinningMode(Options.RenderingPath == ERenderingPath::Forward
-		? SettingsPanel->GetSettings().SkinningMode : ESkinningMode::CPU);
 	Options.LightCullingMode = SettingsPanel->GetSettings().LightCullingMode;
 	Options.DirectionalShadowMapSize = SettingsPanel->GetSettings().GetDirectionalShadowMapSize();
 	Options.PointShadowMapSize = SettingsPanel->GetSettings().GetPointShadowMapSize();
@@ -1281,25 +1295,15 @@ void UEditorEngine::BuildSceneRenderOptions(FEditorViewportClient* ViewClient, b
 	{
 		return;
 	}
-	USkeletalMeshComponent::SetSkinningMode(SettingsPanel->GetSettings().RenderingPath == ERenderingPath::Forward
-		? SettingsPanel->GetSettings().SkinningMode : ESkinningMode::CPU);
 
 	const FViewShowFlags& ShowFlags = ViewClient->GetShowFlags();
 	Options.bEnableFXAA = ShowFlags.bFXAA;
 	Options.bCacheShadows = SettingsPanel->GetSettings().bCacheShadows;
 	Options.PcfMode = SettingsPanel->GetSettings().PcfMode;
 	Options.RenderingPath = SettingsPanel->GetSettings().RenderingPath;
-	Options.ReflectionModel = SettingsPanel->GetSettings().ReflectionModel;
-	Options.ShadingModel = SettingsPanel->GetSettings().ShadingModel;
-	if (ViewClient->UsesClassicLighting())
-	{
-		Options.ReflectionModel = ViewClient->GetReflectionModel();
-		Options.ShadingModel = ViewClient->GetShadingModel();
-		Options.RenderingPath = ERenderingPath::Forward;
-		Options.bOverrideMaterialLighting = true;
-	}
-	USkeletalMeshComponent::SetSkinningMode(Options.RenderingPath == ERenderingPath::Forward
-		? SettingsPanel->GetSettings().SkinningMode : ESkinningMode::CPU);
+	Options.ReflectionModel = ViewClient->GetReflectionModel();
+	Options.ShadingModel = ViewClient->GetShadingModel();
+	Options.bOverrideMaterialLighting = true;
 	Options.LightCullingMode = SettingsPanel->GetSettings().LightCullingMode;
 	Options.DirectionalShadowMapSize = SettingsPanel->GetSettings().GetDirectionalShadowMapSize();
 	Options.PointShadowMapSize = SettingsPanel->GetSettings().GetPointShadowMapSize();
@@ -1764,6 +1768,7 @@ void UEditorEngine::StartPlayInEditorSession()
 		return;
 	}
 	PlayWorld = GameInstance->GetWorld();
+	if (PIEContext.GameViewport) PIEContext.GameViewport->SetAllowCameraOverlayDebug(true);
 	if (!bNewWindow && PIEContext.GameViewport && ViewportsPanel)
 	{
 		ViewportsPanel->SetGameViewportClient(PIEStartEditorViewIndex, PIEContext.GameViewport.get());
@@ -1784,6 +1789,8 @@ UWorld* UEditorEngine::CreatePIEWorldByDuplication(FWorldContext& PIEContext, UW
 		UCameraComponent* Camera = NewPIEWorld->GetMainCamera()->GetCameraComponent();
 		Camera->SetWorldLocationAndRotation(Source->GetViewLocation(), Source->GetViewRotation(), false);
 		Camera->SetFieldOfView(Source->GetViewFOV());
+		Camera->SetNearZ(Source->GetNearClip());
+		Camera->SetFarZ(Source->GetFarClip());
 		Camera->SetOrthoWidth(Source->GetOrthoWidth());
 		Camera->SetIsOrthogonal(!Source->IsPerspective());
 	}

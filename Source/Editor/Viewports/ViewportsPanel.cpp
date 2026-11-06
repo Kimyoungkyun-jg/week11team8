@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <cassert>
 #include <format>
 
@@ -44,6 +45,15 @@ bool FViewportsPanel::Init() {
 	ViewportClients[3]->SetViewportType(ELevelViewportType::Right);
 
 	return true;
+}
+
+void FViewportsPanel::SetRenderingPath(ERenderingPath Path)
+{
+	RenderingPath = Path;
+	if (Path == ERenderingPath::Deferred)
+		for (auto& Client : ViewportClients)
+			if (Client && Client->GetShadingModel() == EShadingModel::Gouraud)
+				Client->SetShadingModel(EShadingModel::Phong);
 }
 
 // 패널의 프레임 갱신 인터페이스이며 별도 계산은 하지 않는다.
@@ -296,7 +306,7 @@ void FViewportsPanel::OnRender() {
 		bToolbarVisible[ViewIndex] = true;
 		ToolbarMin[ViewIndex] = ImGui::GetCursorScreenPos();
 		ToolbarMax[ViewIndex] = { ContentOrigin.x + Rect.X + Rect.Width,
-			ToolbarMin[ViewIndex].y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() };
+			ToolbarMin[ViewIndex].y + ImGui::GetFrameHeight() };
 		ImGui::PushID(100 + ViewIndex);
 		// 드롭다운·메뉴 팝업 공통 여백. 팝업 창은 Begin 시점의 WindowPadding을 쓰므로
 		// 하위 메뉴(BeginMenu)를 열 때도 같은 값을 다시 넣어야 한다.
@@ -361,9 +371,76 @@ void FViewportsPanel::OnRender() {
 				ImGui::EndMenu();
 			}
 			ModeItem(EViewportMode::LightCulling);
+			ImGui::Separator();
+			float DepthRange = Client->GetMaxRange();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(130.0f));
+			if (ImGui::DragFloat("Scene Depth Range", &DepthRange, 0.5f, 0.1f, 10000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
+				Client->SetMaxRange(DepthRange);
+			ImGui::SetItemTooltip("White in Scene Depth represents this distance for this viewport only.");
 			ImGui::PopStyleVar();
 			ImGui::EndPopup();
 		}
+		// Keep both model selectors in the first toolbar row, including split views.
+		const float ReservedWidth = EditorUIScale::Px(16.0f + 120.0f) +
+			EditorUIScale::ButtonWidth(Labels[Mode]) + EditorUIScale::ButtonWidth("Show") +
+			EditorUIScale::ButtonWidth("Camera") + EditorUIScale::ButtonWidth("Single") +
+			ImGui::GetStyle().ItemSpacing.x * 6.0f;
+		const float ModelsWidth = std::max(2.0f, Rect.Width - ReservedWidth);
+		const float ReflectionWidth = std::min(EditorUIScale::Px(115.0f), ModelsWidth * 0.60f);
+		const float ShadingWidth = std::min(EditorUIScale::Px(85.0f), ModelsWidth - ReflectionWidth);
+		ImGui::SameLine();
+		const char* ReflectionNames[] = { "Phong", "Blinn-Phong", "Lambert" };
+		const char* ShadingNames[] = { "Gouraud", "Phong" };
+		const char* ReflectionPreview = ReflectionNames[static_cast<int>(Client->GetReflectionModel())];
+		const char* ShadingPreview = ShadingNames[static_cast<int>(Client->GetShadingModel())];
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
+		ImGui::SetNextItemWidth(ReflectionWidth);
+		if (ImGui::BeginCombo("##ReflectionModel", ReflectionPreview))
+		{
+			ImGui::TextDisabled("Reflection equation");
+			for (int Index = 0; Index < IM_ARRAYSIZE(ReflectionNames); ++Index)
+				if (ImGui::Selectable(ReflectionNames[Index], Index == static_cast<int>(Client->GetReflectionModel())))
+				{
+					Client->SetReflectionModel(static_cast<EReflectionModel>(Index));
+				}
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("Reflection equation: Phong uses R dot V; Blinn-Phong uses N dot H; Lambert is diffuse only. Applies independently to this viewport in Forward and Deferred rendering.");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ShadingWidth);
+		if (ImGui::BeginCombo("##ShadingModel", ShadingPreview))
+		{
+			ImGui::TextDisabled("Lighting evaluation / interpolation");
+			for (int Index = 0; Index < IM_ARRAYSIZE(ShadingNames); ++Index)
+			{
+				const bool bRequiresForward = Index == static_cast<int>(EShadingModel::Gouraud) && RenderingPath == ERenderingPath::Deferred;
+				ImGui::BeginDisabled(bRequiresForward);
+				if (ImGui::Selectable(ShadingNames[Index], Index == static_cast<int>(Client->GetShadingModel())))
+					Client->SetShadingModel(static_cast<EShadingModel>(Index));
+				ImGui::EndDisabled();
+				if (bRequiresForward && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+					ImGui::SetTooltip("Gouraud requires Forward rendering. Set Rendering Path to Forward in Settings.");
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("Gouraud evaluates lighting at vertices and interpolates the result. Phong interpolates normals and evaluates lighting per pixel. Independent of the reflection equation.");
+		ImGui::PopStyleVar();
+		ImGui::SameLine();
+		ImGui::BeginDisabled(GameViewportClient && ViewIndex == GameViewportIndex);
+		if (ImGui::Button("Camera"))
+		{
+			ActiveViewIndex = ViewIndex;
+			ImGui::OpenPopup("ViewportCamera");
+		}
+		ImGui::EndDisabled();
+		ImGui::SetNextWindowSizeConstraints(ImVec2(EditorUIScale::Px(360.0f), 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
+		if (ImGui::BeginPopup("ViewportCamera"))
+		{
+			DrawCameraSettings(*Client);
+			ImGui::EndPopup();
+		}
+		ImGui::PopStyleVar();
 		ImGui::SameLine();
 		// 뷰별 표시 항목 (TEAM5 Show Flags). 모든 표시 토글은 여기 한 곳에 있다.
 		if (ImGui::Button("Show"))
@@ -410,7 +487,11 @@ void FViewportsPanel::OnRender() {
 			(FStatOverlay::IsEnabled(EStatFlags::Profile) ||
 				FStatOverlay::IsEnabled(EStatFlags::Decal) ||
 				FStatRegistry::Find(EditorStats::STAT_PickingTime))) {
-			ImGui::SameLine();
+			const float ResetWidth = EditorUIScale::ButtonWidth("Reset Stats");
+			if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + ResetWidth <= ContentOrigin.x + Rect.X + Rect.Width)
+				ImGui::SameLine();
+			else
+				ImGui::SetCursorScreenPos({ ToolbarMin[ViewIndex].x, ToolbarMin[ViewIndex].y + ImGui::GetFrameHeightWithSpacing() });
 			if (ImGui::Button("Reset Stats"))
 			{
 				FStatRegistry::Reset();
@@ -419,50 +500,9 @@ void FViewportsPanel::OnRender() {
 			StatResetButtonMin = ImGui::GetItemRectMin();
 			StatResetButtonMax = ImGui::GetItemRectMax();
 			bStatResetButtonVisible = true;
+			ToolbarMax[ViewIndex].y = std::max(ToolbarMax[ViewIndex].y, StatResetButtonMax.y);
 		}
-		ImGui::SetCursorScreenPos({ ContentOrigin.x + Rect.X + EditorUIScale::Px(8.0f),
-			ContentOrigin.y + Rect.Y + EditorUIScale::Px(8.0f) + ImGui::GetFrameHeightWithSpacing() });
-		const float ModelWidth = std::min(EditorUIScale::Px(200.0f),
-			std::max(1.0f, (Rect.Width - EditorUIScale::Px(16.0f) - ImGui::GetStyle().ItemSpacing.x) * 0.5f));
-		const char* ReflectionNames[] = { "Phong", "Blinn-Phong", "Lambert" };
-		const char* ShadingNames[] = { "Gouraud", "Phong" };
-		const FString ReflectionPreview = FString("Reflection: ") +
-			(Client->UsesClassicLighting() ? ReflectionNames[static_cast<int>(Client->GetReflectionModel())] : "Renderer");
-		const FString ShadingPreview = FString("Shading: ") +
-			(Client->UsesClassicLighting() ? ShadingNames[static_cast<int>(Client->GetShadingModel())] : "Renderer");
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
-		ImGui::SetNextItemWidth(ModelWidth);
-		if (ImGui::BeginCombo("##ReflectionModel", ReflectionPreview.c_str()))
-		{
-			ImGui::TextDisabled("Reflection equation (Forward)");
-			for (int Index = 0; Index < IM_ARRAYSIZE(ReflectionNames); ++Index)
-				if (ImGui::Selectable(ReflectionNames[Index], Client->UsesClassicLighting() && Index == static_cast<int>(Client->GetReflectionModel())))
-				{
-					Client->SetReflectionModel(static_cast<EReflectionModel>(Index));
-					Client->SetUseClassicLighting(true);
-				}
-			ImGui::Separator();
-			if (ImGui::Selectable("Use renderer settings", !Client->UsesClassicLighting())) Client->SetUseClassicLighting(false);
-			ImGui::EndCombo();
-		}
-		ImGui::SetItemTooltip("Reflection equation: Phong uses R dot V; Blinn-Phong uses N dot H; Lambert is diffuse only. Selecting a model uses Forward rendering for this viewport.");
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(ModelWidth);
-		if (ImGui::BeginCombo("##ShadingModel", ShadingPreview.c_str()))
-		{
-			ImGui::TextDisabled("Lighting evaluation / interpolation");
-			for (int Index = 0; Index < IM_ARRAYSIZE(ShadingNames); ++Index)
-				if (ImGui::Selectable(ShadingNames[Index], Client->UsesClassicLighting() && Index == static_cast<int>(Client->GetShadingModel())))
-				{
-					Client->SetShadingModel(static_cast<EShadingModel>(Index));
-					Client->SetUseClassicLighting(true);
-				}
-			ImGui::Separator();
-			if (ImGui::Selectable("Use renderer settings", !Client->UsesClassicLighting())) Client->SetUseClassicLighting(false);
-			ImGui::EndCombo();
-		}
-		ImGui::SetItemTooltip("Gouraud evaluates lighting at vertices and interpolates the result. Phong interpolates normals and evaluates lighting per pixel. Independent of the reflection equation.");
-		ImGui::PopStyleVar();
+
 		ImGui::PopID();
 	}
 
@@ -482,6 +522,162 @@ void FViewportsPanel::OnRender() {
 
 	ImGui::End();
 	ImGui::PopStyleVar();
+}
+
+// This popup edits only the client belonging to its viewport toolbar.
+void FViewportsPanel::DrawCameraSettings(FEditorViewportClient& Client)
+{
+	ImGui::Text("Viewport %d - %s", Client.GetViewIndex() + 1,
+		ViewportTypeLabels[static_cast<int>(Client.GetViewportType())]);
+	const bool bOrthogonal = !Client.IsPerspective();
+
+	ImGui::SeparatorText("Movement");
+	float Speed = Client.GetCameraSpeed();
+	ImGui::SetNextItemWidth(EditorUIScale::Px(180.0f));
+	if (ImGui::SliderFloat("Camera Speed", &Speed, 0.1f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+		Client.SetCameraSpeed(Speed);
+	float Sensitivity = Client.GetMouseSensitivity();
+	ImGui::SetNextItemWidth(EditorUIScale::Px(180.0f));
+	if (ImGui::SliderFloat("Rotate Sensitivity", &Sensitivity, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+		Client.SetMouseSensitivity(Sensitivity);
+
+	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(4.0f)));
+	ImGui::TextDisabled("Projection");
+
+	// 카메라 투영 설정 표
+	if (ImGui::BeginTable("Camera Projection", 2))
+	{
+		ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Ortho Width").x);
+		ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+		// FOV 또는 Ortho Width
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(0);
+		ImGui::Text(bOrthogonal ? "Ortho Width" : "FOV");
+
+		ImGui::TableSetColumnIndex(1);
+		ImGui::SetNextItemWidth(-1.0f);
+
+		if (bOrthogonal)
+		{
+			float OrthoWidth = Client.GetOrthoWidth();
+			if (ImGui::DragFloat("##OrthoWidth", &OrthoWidth, 0.1f) && std::isfinite(OrthoWidth))
+			{
+				OrthoWidth = FMath::Clamp(OrthoWidth, 0.01f, 1000000.0f);
+				Client.SetOrthoWidth(OrthoWidth);
+			}
+		}
+		else
+		{
+			float FOV = Client.GetViewFOV();
+			if (ImGui::DragFloat("##FOV", &FOV, 0.1f) && std::isfinite(FOV))
+			{
+				FOV = FMath::Clamp(FOV, 1.0f, 179.0f);
+				Client.SetViewFOV(FOV);
+			}
+		}
+
+		// 가까운 평면과 먼 평면
+		ImGui::TableNextRow();
+
+		ImGui::TableSetColumnIndex(0);
+		ImGui::Text("Near");
+
+		ImGui::TableSetColumnIndex(1);
+		float Near = Client.GetNearClip();
+
+		ImGui::SetNextItemWidth(-1.0f);
+		bool Changed = ImGui::InputFloat("##Near", &Near);
+
+		ImGui::TableNextRow();
+
+		ImGui::TableSetColumnIndex(0);
+		ImGui::Text("Far");
+
+		ImGui::TableSetColumnIndex(1);
+		float Far = Client.GetFarClip();
+		ImGui::SetNextItemWidth(-1.0f);
+		Changed |= ImGui::InputFloat("##Far", &Far);
+
+		if (Changed && std::isfinite(Near) && std::isfinite(Far) && Near > 0 && Far > Near)
+		{
+			Client.SetClipPlanes(Near, Far);
+		}
+		ImGui::EndTable();
+	}
+
+	// 카메라 변환 설정 표
+	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(4.0f)));
+	ImGui::TextDisabled("Transform");
+
+	bool bLocationChanged = false;
+	bool bRotationChanged = false;
+
+	if (ImGui::BeginTable("Camera Transform", 2))
+	{
+		ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Ortho Width").x);
+		ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+		ImGui::TableNextRow();
+
+		// 카메라 위치
+		ImGui::TableSetColumnIndex(0);
+		ImGui::Text("Location");
+
+		ImGui::TableSetColumnIndex(1);
+		float Available = ImGui::GetContentRegionAvail().x;
+		float ItemWidth = (Available - ImGui::GetStyle().ItemSpacing.x * 2.0f) / 3.0f;
+
+		FVector Location = Client.GetViewLocation();
+
+		ImGui::SetNextItemWidth(ItemWidth);
+		bLocationChanged |= ImGui::DragFloat("##LocationX", &Location.X, 0.1f);
+
+		ImGui::SameLine();
+
+		ImGui::SetNextItemWidth(ItemWidth);
+		bLocationChanged |= ImGui::DragFloat("##LocationY", &Location.Y, 0.1f);
+
+		ImGui::SameLine();
+
+		ImGui::SetNextItemWidth(ItemWidth);
+		bLocationChanged |= ImGui::DragFloat("##LocationZ", &Location.Z, 0.1f);
+
+		if (bLocationChanged && std::isfinite(Location.X) && std::isfinite(Location.Y) && std::isfinite(Location.Z))
+		{
+			Client.SetViewLocation(Location);
+		}
+
+		ImGui::TableNextRow();
+
+		// 카메라 회전
+		ImGui::TableSetColumnIndex(0);
+		ImGui::Text("Rotation");
+
+		ImGui::TableSetColumnIndex(1);
+		FRotator Rotation = Client.GetViewRotation();
+
+		ImGui::SetNextItemWidth(ItemWidth);
+		bRotationChanged |= ImGui::DragFloat("##Pitch", &Rotation.Pitch, 0.1f);
+
+		ImGui::SameLine();
+
+		ImGui::SetNextItemWidth(ItemWidth);
+		bRotationChanged |= ImGui::DragFloat("##Yaw", &Rotation.Yaw, 0.1f);
+
+		ImGui::SameLine();
+
+		ImGui::SetNextItemWidth(ItemWidth);
+		ImGui::BeginDisabled(!bOrthogonal);
+		bRotationChanged |= ImGui::DragFloat("##Roll", &Rotation.Roll, 0.1f);
+		ImGui::EndDisabled();
+
+		if (bRotationChanged && std::isfinite(Rotation.Pitch) && std::isfinite(Rotation.Yaw) && std::isfinite(Rotation.Roll))
+		{
+			Client.SetViewRotation(Rotation);
+		}
+		ImGui::EndTable();
+	}
 }
 
 void FViewportsPanel::ShowCameraSpeed(const int32 ViewIndex, const float Speed)
@@ -945,11 +1141,10 @@ void FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 	if (Lines.Num() == 0 && ProfileLines.Num() == 0)
 		return;
 
-	// 제어 위젯 한 줄 아래에서 시작해 Combo와 겹치지 않게 한다.
+	// Start below this viewport toolbar so the stats never overlap its controls.
 	const float LineHeight = ImGui::GetTextLineHeight();
 	const ImVec2 Origin{ ViewMin.x + EditorUIScale::Px(StatOverlayMargin),
-			ViewMin.y + EditorUIScale::Px(StatOverlayMargin) + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() +
-			EditorUIScale::Px(StatOverlayMargin) };
+			ToolbarMax[Client->GetViewIndex()].y + EditorUIScale::Px(StatOverlayMargin) };
 
 	// 최대 너비 계산
 	float MaxWidth = 0.0f;

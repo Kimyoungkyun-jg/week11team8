@@ -69,7 +69,7 @@ FGameSettings FGameSettings::Load(const FString& Path)
 
 	FSceneRenderOptions& Options = Settings.RenderOptions;
 	Options.RenderingPath = ParseRenderingPath(Config.GetString("Rendering", "RenderingPath", ""), Options.RenderingPath);
-	Options.SetLegacyLightingModel(ParseLightingModel(Config.GetString("Rendering", "LightingModel", ""), ELightingModel::Gouraud));
+	Options.SetLegacyLightingModel(ParseLightingModel(Config.GetString("Rendering", "LightingModel", ""), ELightingModel::Phong));
 	const FString Reflection = Config.GetString("Rendering", "ReflectionModel", "");
 	if (Reflection == "Phong") Options.ReflectionModel = EReflectionModel::Phong;
 	else if (Reflection == "BlinnPhong" || Reflection == "Blinn-Phong") Options.ReflectionModel = EReflectionModel::BlinnPhong;
@@ -96,5 +96,7 @@ FGameSettings FGameSettings::Load(const FString& Path)
 	Options.DirectionalShadowMapSize = GetUInt("Rendering", "DirectionalShadowMapSize", Options.DirectionalShadowMapSize, false);
 	Options.PointShadowMapSize = GetUInt("Rendering", "PointShadowMapSize", Options.PointShadowMapSize, false);
 	Options.SpotShadowMapSize = GetUInt("Rendering", "SpotShadowMapSize", Options.SpotShadowMapSize, false);
+	if (Options.RenderingPath == ERenderingPath::Deferred && Options.ShadingModel == EShadingModel::Gouraud)
+		Options.ShadingModel = EShadingModel::Phong;
 	return Settings;
 }

@@ -46,8 +46,6 @@ FSettingsPanel::~FSettingsPanel()
 bool FSettingsPanel::Init()
 {
 	LoadSettings();
-	USkeletalMeshComponent::SetSkinningMode(Settings.RenderingPath == ERenderingPath::Forward
-		? Settings.SkinningMode : ESkinningMode::CPU);
 	return true;
 }
 
@@ -79,28 +77,18 @@ void FSettingsPanel::OnRender()
 	int RenderingPathIndex = static_cast<int>(Settings.RenderingPath);
 	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
 	if (ImGui::Combo("Rendering Path", &RenderingPathIndex, RenderingPaths, IM_ARRAYSIZE(RenderingPaths)))
+	{
 		Settings.RenderingPath = static_cast<ERenderingPath>(RenderingPathIndex);
+		if (ViewportsPanel) ViewportsPanel->SetRenderingPath(Settings.RenderingPath);
+	}
+	ImGui::SetItemTooltip("Deferred uses per-pixel Phong shading. Switching to Deferred changes Gouraud views to Phong while keeping their reflection models.");
 	const char* SkinningModes[] = { "CPU", "GPU" };
 	int SkinningModeIndex = static_cast<int>(Settings.SkinningMode);
 	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
 	if (ImGui::Combo("Skinning Mode", &SkinningModeIndex, SkinningModes, IM_ARRAYSIZE(SkinningModes)))
 		Settings.SkinningMode = static_cast<ESkinningMode>(SkinningModeIndex);
-	USkeletalMeshComponent::SetSkinningMode(Settings.RenderingPath == ERenderingPath::Forward
-		? Settings.SkinningMode : ESkinningMode::CPU);
 	if (Settings.RenderingPath != ERenderingPath::Forward && Settings.SkinningMode == ESkinningMode::GPU)
 		ImGui::TextDisabled("GPU skinning applies to Forward rendering only.");
-
-	const char* ReflectionModels[] = { "Phong", "Blinn-Phong", "Lambert" };
-	int ReflectionIndex = static_cast<int>(Settings.ReflectionModel);
-	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
-	if (ImGui::Combo("Default Reflection Model", &ReflectionIndex, ReflectionModels, IM_ARRAYSIZE(ReflectionModels)))
-		Settings.ReflectionModel = static_cast<EReflectionModel>(ReflectionIndex);
-	const char* ShadingModels[] = { "Gouraud", "Phong" };
-	int ShadingIndex = static_cast<int>(Settings.ShadingModel);
-	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
-	if (ImGui::Combo("Default Shading Model", &ShadingIndex, ShadingModels, IM_ARRAYSIZE(ShadingModels)))
-		Settings.ShadingModel = static_cast<EShadingModel>(ShadingIndex);
-	ImGui::TextDisabled("Classic models apply to Forward rendering. Each viewport can select its own pair.");
 
 	const char* DecalMethods[] = { "Mesh Re-rendering", "Depth Reconstruction" };
 	int DecalMethodIndex = static_cast<int>(Settings.DecalRenderMethod);
@@ -118,10 +106,6 @@ void FSettingsPanel::OnRender()
 	}
 	ImGui::TextDisabled("Forward Phong shading only; Off evaluates all visible local lights.");
 
-	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
-	if (ImGui::DragFloat("Scene Depth Range", &Settings.SceneDepthMaxRange, 0.5f, 0.1f, 10000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
-		ApplySceneDepthRange();
-	ImGui::SetItemTooltip("Scene Depth view: white represents this distance from the camera. Applies to all viewports.");
 
 	//////////////////////////////////////////////////////////
 
@@ -151,16 +135,6 @@ void FSettingsPanel::OnRender()
 	// 에디터 수치 설정 (Values)
 	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SectionGap)));
 	ImGui::SeparatorText("Editor Settings");
-
-	UCameraComponent* CamCom = World->GetMainCamera()->GetCameraComponent();
-
-	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
-	ImGui::SliderFloat("Camera Rotate Sensitivity", &Settings.MouseSensitivity, 0.01f, 1.0f, "%.2f");
-	CamCom->SetMouseSensitivity(Settings.MouseSensitivity);
-
-	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
-	ImGui::SliderFloat("Camera Speed", &Settings.CameraSpeed, 0.1f, 10.0f, "%.2f");
-	CamCom->SetMoveSpeed(Settings.CameraSpeed);
 
 	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
 	ImGui::SliderInt("Grid Spacing", &Settings.GridSpacing, 1, 100);
@@ -252,10 +226,10 @@ bool FSettingsPanel::SaveSettings() const
 	}
 
 	File << "[Rendering]\n";
+	File << "ViewportLightingDefaultsVersion=1\n";
 	File << "Wireframe=" << Settings.bWireframe << "\n";
 	File << "CacheShadows=" << Settings.bCacheShadows << "\n";
 	File << "PcfMode=" << static_cast<uint32_t>(Settings.PcfMode) << "\n";
-	File << "SceneDepthMaxRange=" << Snapshot.SceneDepthMaxRange << "\n";
 
 	File << "GammaCorrection=" << Settings.bGammaCorrection << "\n";
 	File << "DisplayGamma=" << Settings.DisplayGamma << "\n";
@@ -270,8 +244,6 @@ bool FSettingsPanel::SaveSettings() const
 	File << "\n";
 
 	File << "[Editor]\n";
-	File << "CameraMoveSpeed=" << Settings.CameraSpeed << "\n";
-	File << "CameraRotateSensitivity=" << Settings.MouseSensitivity << "\n";
 	File << "GridSpacing=" << Settings.GridSpacing << "\n";
 	File << "\n";
 
@@ -284,13 +256,17 @@ bool FSettingsPanel::SaveSettings() const
 	for (int32 Index = 0; Index < 4; ++Index)
     {
         File << "View" << Index << "Fov=" << Snapshot.ViewFov[Index] << "\n";
+        File << "View" << Index << "CameraSpeed=" << Snapshot.ViewCameraSpeed[Index] << "\n";
+        File << "View" << Index << "MouseSensitivity=" << Snapshot.ViewMouseSensitivity[Index] << "\n";
+        File << "View" << Index << "SceneDepthRange=" << Snapshot.ViewSceneDepthRange[Index] << "\n";
+        File << "View" << Index << "NearClip=" << Snapshot.ViewNearClip[Index] << "\n";
+        File << "View" << Index << "FarClip=" << Snapshot.ViewFarClip[Index] << "\n";
         File << "View" << Index << "OrthoWidth=" << Snapshot.ViewOrthoWidth[Index] << "\n";
         File << "View" << Index << "Preset=" << Snapshot.ViewPreset[Index] << "\n";
         File << "View" << Index << "Wireframe=" << Snapshot.ViewWireframe[Index] << "\n";
         File << "View" << Index << "Mode=" << Snapshot.ViewMode[Index] << "\n";
         File << "View" << Index << "ReflectionModel=" << Snapshot.ViewReflectionModel[Index] << "\n";
         File << "View" << Index << "ShadingModel=" << Snapshot.ViewShadingModel[Index] << "\n";
-        File << "View" << Index << "ClassicLighting=" << Snapshot.ViewClassicLighting[Index] << "\n";
         for (const FViewShowFlagInfo& Info : ViewShowFlagInfos)
             File << "View" << Index << "Show" << Info.Key << "=" << (Snapshot.ViewShowFlags[Index].*Info.Member ? 1 : 0) << "\n";
         File << "View" << Index << "LocationX=" << Snapshot.ViewLocation[Index].X << "\n";
@@ -319,6 +295,7 @@ bool FSettingsPanel::LoadSettings()
 		return false;
 	}
 
+	bool bHasViewportLightingDefaults = false;
 	uint8 LocationComponentMasks[4]{};
 	uint8 RotationComponentMasks[4]{};
 	for (int32 Index = 0; Index < 4; ++Index)
@@ -349,6 +326,16 @@ bool FSettingsPanel::LoadSettings()
                     if (!(Number >> Value) || !std::isfinite(Value)) continue;
                     if (Key == Prefix + "Fov" && Value >= 1 && Value <= 179)
                         Settings.ViewFov[Index] = Value;
+                    else if (Key == Prefix + "CameraSpeed" && Value >= 0.1f && Value <= 10.0f)
+                        Settings.ViewCameraSpeed[Index] = Value;
+                    else if (Key == Prefix + "MouseSensitivity" && Value >= 0.01f && Value <= 1.0f)
+                        Settings.ViewMouseSensitivity[Index] = Value;
+                    else if (Key == Prefix + "SceneDepthRange" && Value >= 0.1f && Value <= 10000.0f)
+                        Settings.ViewSceneDepthRange[Index] = Value;
+                    else if (Key == Prefix + "NearClip" && Value > 0)
+                        Settings.ViewNearClip[Index] = Value;
+                    else if (Key == Prefix + "FarClip" && Value > 0)
+                        Settings.ViewFarClip[Index] = Value;
                     else if (Key == Prefix + "OrthoWidth" && Value >= 0.01f)
                         // 파일 값은 절대 상한으로 먼저 제한하고, 실제 View 비율 상한은 Adapter가 적용한다.
                         Settings.ViewOrthoWidth[Index] = FMath::Clamp(Value, 0.01f, 1000000.0f);
@@ -363,8 +350,6 @@ bool FSettingsPanel::LoadSettings()
                         Settings.ViewReflectionModel[Index] = static_cast<int32>(Value);
                     else if (Key == Prefix + "ShadingModel" && Value >= 0 && Value <= 1 && Value == static_cast<int32>(Value))
                         Settings.ViewShadingModel[Index] = static_cast<int32>(Value);
-                    else if (Key == Prefix + "ClassicLighting" && (Value == 0 || Value == 1))
-                        Settings.ViewClassicLighting[Index] = Value != 0;
 					else if (Key.rfind(Prefix + "Show", 0) == 0 && (Value == 0 || Value == 1))
 					{
 						for (const FViewShowFlagInfo& Info : ViewShowFlagInfos)
@@ -421,7 +406,7 @@ bool FSettingsPanel::LoadSettings()
 					if (Mode >= 0 && Mode <= static_cast<int>(EPcfMode::PCSS))
 						Settings.PcfMode = static_cast<EPcfMode>(Mode);
 				}
-				else if (Key == "SceneDepthMaxRange") Settings.SceneDepthMaxRange = std::stof(ValueStr);
+				else if (Key == "SceneDepthMaxRange") Settings.LegacySceneDepthMaxRange = std::stof(ValueStr);
 
 				else if (Key == "GammaCorrection")   Settings.bGammaCorrection = std::stoi(ValueStr);
 				else if (Key == "DisplayGamma")      Settings.DisplayGamma = std::stof(ValueStr);
@@ -446,6 +431,8 @@ bool FSettingsPanel::LoadSettings()
 					if (ValueStr == "GPU") Settings.SkinningMode = ESkinningMode::GPU;
 					else if (ValueStr == "CPU") Settings.SkinningMode = ESkinningMode::CPU;
 				}
+				else if (Key == "ViewportLightingDefaultsVersion")
+					bHasViewportLightingDefaults = ValueStr == "1";
 				else if (Key == "LightingModel") // Legacy editor.ini migration.
 				{
 					Settings.ReflectionModel = ValueStr == "Lambert" ? EReflectionModel::Lambert : EReflectionModel::BlinnPhong;
@@ -468,8 +455,8 @@ bool FSettingsPanel::LoadSettings()
 					else if (ValueStr == "MeshRerendering") Settings.DecalRenderMethod = EDecalRenderMethod::MeshRerendering;
 				}
 
-				else if (Key == "CameraMoveSpeed") Settings.CameraSpeed = std::stof(ValueStr);
-				else if (Key == "CameraRotateSensitivity") Settings.MouseSensitivity = std::stof(ValueStr);
+				else if (Key == "CameraMoveSpeed") Settings.LegacyCameraSpeed = std::stof(ValueStr);
+				else if (Key == "CameraRotateSensitivity") Settings.LegacyMouseSensitivity = std::stof(ValueStr);
 				else if (Key == "GridSpacing") Settings.GridSpacing = std::stoi(ValueStr);
 				else if (Key == "Horizontal") Settings.MultipleViewportsHorizontal = std::stof(ValueStr);
 				else if (Key == "Vertical") Settings.MultipleViewportsVertical = std::stof(ValueStr);
@@ -496,9 +483,24 @@ bool FSettingsPanel::LoadSettings()
 	}
 
 	File.close();
-	if (!std::isfinite(Settings.SceneDepthMaxRange))
-		Settings.SceneDepthMaxRange = 50.0f;
-	Settings.SceneDepthMaxRange = FMath::Clamp(Settings.SceneDepthMaxRange, 0.1f, 10000.0f);
+	if (!std::isfinite(Settings.LegacySceneDepthMaxRange))
+		Settings.LegacySceneDepthMaxRange = 50.0f;
+	// Adopt the requested model pair once for preferences written before these defaults.
+	if (!bHasViewportLightingDefaults)
+	{
+		Settings.ReflectionModel = EReflectionModel::BlinnPhong;
+		Settings.ShadingModel = EShadingModel::Phong;
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			Settings.ViewReflectionModel[Index] = static_cast<int32>(EReflectionModel::BlinnPhong);
+			Settings.ViewShadingModel[Index] = static_cast<int32>(EShadingModel::Phong);
+		}
+	}
+	Settings.LegacySceneDepthMaxRange = FMath::Clamp(Settings.LegacySceneDepthMaxRange, 0.1f, 10000.0f);
+	if (!std::isfinite(Settings.LegacyCameraSpeed)) Settings.LegacyCameraSpeed = 1.0f;
+	if (!std::isfinite(Settings.LegacyMouseSensitivity)) Settings.LegacyMouseSensitivity = 1.0f;
+	Settings.LegacyCameraSpeed = FMath::Clamp(Settings.LegacyCameraSpeed, 0.1f, 10.0f);
+	Settings.LegacyMouseSensitivity = FMath::Clamp(Settings.LegacyMouseSensitivity, 0.01f, 1.0f);
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		Settings.bViewLocationSaved[Index] = LocationComponentMasks[Index] == 0x7;
@@ -534,15 +536,17 @@ void FSettingsPanel::ReadViewportSettings(FEditorSettings& Out) const
 			continue;
 
 		Out.ViewFov[Index] = Client->GetViewFOV();
+		Out.ViewCameraSpeed[Index] = Client->GetCameraSpeed();
+		Out.ViewMouseSensitivity[Index] = Client->GetMouseSensitivity();
+		Out.ViewSceneDepthRange[Index] = Client->GetMaxRange();
+		Out.ViewNearClip[Index] = Client->GetNearClip();
+		Out.ViewFarClip[Index] = Client->GetFarClip();
 		Out.ViewOrthoWidth[Index] = Client->GetOrthoWidth();
 		Out.ViewWireframe[Index] = Client->IsWireframe() ? 1 : 0;
 		Out.ViewMode[Index] = static_cast<int32>(Client->GetViewportMode());
 		Out.ViewReflectionModel[Index] = static_cast<int32>(Client->GetReflectionModel());
 		Out.ViewShadingModel[Index] = static_cast<int32>(Client->GetShadingModel());
-		Out.ViewClassicLighting[Index] = Client->UsesClassicLighting();
 		Out.ViewShowFlags[Index] = Client->GetShowFlags();
-		if (Index == 0)
-			Out.SceneDepthMaxRange = Client->GetMaxRange();
 		Out.ViewLocation[Index] = Client->GetViewLocation();
 		Out.ViewRotation[Index] = Client->GetViewRotation().Quaternion();
 	}
@@ -556,7 +560,6 @@ void FSettingsPanel::ApplyViewportSettings()
 {
 	if (!ViewportsPanel)
 		return;
-	ApplySceneDepthRange();
 
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
@@ -564,8 +567,14 @@ void FSettingsPanel::ApplyViewportSettings()
 		if (!Client)
 			continue;
 
+		Client->SetCameraSpeed(Settings.ViewCameraSpeed[Index] > 0.0f ? Settings.ViewCameraSpeed[Index] : Settings.LegacyCameraSpeed);
+		Client->SetMouseSensitivity(Settings.ViewMouseSensitivity[Index] > 0.0f ? Settings.ViewMouseSensitivity[Index] : Settings.LegacyMouseSensitivity);
+		Client->SetMaxRange(Settings.ViewSceneDepthRange[Index] > 0.0f ? Settings.ViewSceneDepthRange[Index] : Settings.LegacySceneDepthMaxRange);
 		if (Settings.ViewFov[Index] > 0.0f)
 			Client->SetViewFOV(Settings.ViewFov[Index]);
+		const float Near = Settings.ViewNearClip[Index] > 0.0f ? Settings.ViewNearClip[Index] : Client->GetNearClip();
+		const float Far = Settings.ViewFarClip[Index] > 0.0f ? Settings.ViewFarClip[Index] : Client->GetFarClip();
+		if (Near < Far) Client->SetClipPlanes(Near, Far);
 		if (Settings.ViewWireframe[Index] >= 0)
 			Client->SetViewportMode(Settings.ViewWireframe[Index] == 1 ? EViewportMode::Wireframe : EViewportMode::Solid);
 		if (Settings.ViewMode[Index] >= 0)
@@ -574,21 +583,9 @@ void FSettingsPanel::ApplyViewportSettings()
 			? static_cast<EReflectionModel>(Settings.ViewReflectionModel[Index]) : Settings.ReflectionModel);
 		Client->SetShadingModel(Settings.ViewShadingModel[Index] >= 0
 			? static_cast<EShadingModel>(Settings.ViewShadingModel[Index]) : Settings.ShadingModel);
-		Client->SetUseClassicLighting(Settings.ViewClassicLighting[Index]);
 		Client->GetShowFlags() = Settings.ViewShowFlags[Index];
 	}
-}
-
-void FSettingsPanel::ApplySceneDepthRange()
-{
-	if (!ViewportsPanel)
-		return;
-
-	for (int32 Index = 0; Index < 4; ++Index)
-	{
-		if (FEditorViewportClient* Client = ViewportsPanel->GetViewportClient(Index))
-			Client->SetMaxRange(Settings.SceneDepthMaxRange);
-	}
+	ViewportsPanel->SetRenderingPath(Settings.RenderingPath);
 }
 
 void FSettingsPanel::DrawDefaultPawnSettings()

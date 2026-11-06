@@ -37,16 +37,23 @@ public:
 	// Gizmo 대상 설정
 	void SetTarget(USceneComponent* InTarget, bool InbUseActorBounds = false)
 	{ 
+		EndDrag();
+		HoveredAxis = -1;
 		Target = InTarget; 
 		bUseActorBounds = InbUseActorBounds; 
+		Targets.Reset();
+		if (Target)
+			Targets.Add(Target);
 	}
+	// Primary를 공통 피벗으로 삼아 선택된 컴포넌트 전체를 변환한다.
+	void SetTargets(USceneComponent* InPrimary, const TArray<USceneComponent*>& InTargets, bool InbUseActorBounds = false);
 	USceneComponent* GetTarget() const { return Target; }
 
 	// Gizmo 모드(이동, 회전, 크기)
-	void SetMode(EGizmoMode InMode) { Mode = InMode; }
+	void SetMode(EGizmoMode InMode) { if (Mode != InMode) EndDrag(); Mode = InMode; }
 	EGizmoMode GetMode() const { return Mode; }
 
-	void SetSpace(EGizmoSpace InSpace) { Space = InSpace; }
+	void SetSpace(EGizmoSpace InSpace) { if (Space != InSpace) EndDrag(); Space = InSpace; }
 	EGizmoSpace GetSpace() const { return Space; }
 
 	// Active View의 Ray와 행렬만 사용해 Hover·Drag 상태를 갱신한다.
@@ -91,15 +98,29 @@ private:
 	FTransform Transform = FTransform();
 	USceneComponent* Target = nullptr;
 	bool bUseActorBounds = false;
+	TArray<USceneComponent*> Targets;
+	struct FDragTargetStart
+	{
+		USceneComponent* Component;
+		FVector WorldLocation;
+		FQuat WorldRotation;
+		FVector WorldScale;
+		FVector RelativeScale;
+		ULocalLightComponent* Light;
+		float LightRadius;
+	};
+	TArray<FDragTargetStart> DragTargetStarts;
+	void ApplyTranslation(const FVector& Delta);
+	void ApplyRotation(const FQuat& Delta);
+	void ApplyScale(const FVector& Factors, float LightFactor);
+	FQuat DragStartWorldRotation;
+	FVector DragScaleAxes[3];
 
 	int HoveredAxis = -1;
 	int DraggingAxis = -1;
 
 	FVector2 DragStartMousePos;
 	FVector DragStartPoint;
-	FVector DragStartLocation;
-	FRotator DragStartRotation;
-	FVector DragStartScale;
 	FVector DragAxisDirection;
 	FVector DragStartRenderLocation;
 
@@ -113,9 +134,7 @@ private:
 	float ViewRenderScale = 1.0f;
 
 	// 크기 모드로 점·스팟·사각 라이트를 고르면 스케일 대신 감쇠 반지름을 바꾼다 (TEAM6).
-	float DragStartRadius = 0.0f;
-	bool ApplyScaleToLight(float Factor);
-	ULocalLightComponent* GetTargetLight() const;
+	static ULocalLightComponent* GetTargetLight(USceneComponent* Component);
 
 	float DragStartAngle;
 	float RingRadius = 1.0f;

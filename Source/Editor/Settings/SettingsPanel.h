@@ -24,13 +24,13 @@ struct FEditorSettings
 	ERenderingPath RenderingPath = ERenderingPath::Deferred;
 	ESkinningMode SkinningMode = ESkinningMode::CPU;
 	EReflectionModel ReflectionModel = EReflectionModel::BlinnPhong;
-	EShadingModel ShadingModel = EShadingModel::Gouraud;
+	EShadingModel ShadingModel = EShadingModel::Phong;
 	EDecalRenderMethod DecalRenderMethod = EDecalRenderMethod::MeshRerendering;
 
 	// Values
-	float SceneDepthMaxRange = 50.0f;
-	float CameraSpeed = 1.0f;
-	float MouseSensitivity = 1.0f;
+	float LegacySceneDepthMaxRange = 50.0f;
+	float LegacyCameraSpeed = 1.0f;
+	float LegacyMouseSensitivity = 1.0f;
 	int32 GridSpacing = 1;
 	float MultipleViewportsHorizontal = 0.5f;
 	float MultipleViewportsVertical = 0.5f;
@@ -39,13 +39,17 @@ struct FEditorSettings
 
     // 미저장 표식은 초기 카메라 값을 유지한다. 위치·회전은 저장하지 않는다.
     float ViewFov[4]{};
+    float ViewCameraSpeed[4]{};
+    float ViewMouseSensitivity[4]{};
+    float ViewSceneDepthRange[4]{};
+    float ViewNearClip[4]{};
+    float ViewFarClip[4]{};
     float ViewOrthoWidth[4]{};
     int32 ViewPreset[4]{-1,-1,-1,-1};
     int32 ViewWireframe[4]{-1,-1,-1,-1};
     int32 ViewMode[4]{-1,-1,-1,-1};
-    int32 ViewReflectionModel[4]{-1,-1,-1,-1};
-    int32 ViewShadingModel[4]{-1,-1,-1,-1};
-    bool ViewClassicLighting[4]{};
+    int32 ViewReflectionModel[4]{1,1,1,1};
+    int32 ViewShadingModel[4]{1,1,1,1};
     // 뷰포트 Show 메뉴의 뷰별 표시 항목
     FViewShowFlags ViewShowFlags[4]{};
 
@@ -85,8 +89,6 @@ public:
 	void SetViewportsPanel(FViewportsPanel* InPanel) { ViewportsPanel = InPanel; }
 
 	const FEditorSettings& GetSettings() const { return Settings; }
-	// 뷰포트의 우클릭+휠이 슬라이더와 같은 범위(0.1~10)로 바꾼다.
-	void SetCameraSpeed(float InSpeed) { Settings.CameraSpeed = InSpeed < 0.1f ? 0.1f : (InSpeed > 10.0f ? 10.0f : InSpeed); }
 	// 실행 중 레이아웃 변경을 editor.ini 저장 대상과 동일한 설정 객체에 반영한다.
 	FEditorSettings& GetMutableSettings() { return Settings; }
 	// 알려진 모든 설정 섹션을 한 번에 다시 써서 editor.ini 값이 서로 덮어쓰이지 않게 저장한다.
@@ -103,7 +105,6 @@ private:
 
     // View별 Transform·투영·표시 설정을 읽어 저장용 스냅샷에 반영한다.
     void ReadViewportSettings(FEditorSettings& Out) const;
-	void ApplySceneDepthRange();
 	void DrawDefaultPawnSettings();
 	void DrawGameFrameworkSettings();
 	void DrawShadowMapSettings();

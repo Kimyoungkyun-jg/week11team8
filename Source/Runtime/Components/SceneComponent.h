@@ -70,6 +70,7 @@ public:
 	FBox CalcBounds() const { return CalcLocalBounds().GetWorldAABB(GetWorldMatrix()); }
 
 	FVector GetWorldLocation() const;
+	FQuat GetWorldRotationQuat() const;
 	FRotator GetWorldRotation() const;
 	FVector GetWorldScale3D() const;
 	FMatrix GetWorldMatrix() const;

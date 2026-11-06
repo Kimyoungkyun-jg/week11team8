@@ -1,8 +1,6 @@
 #include "EnginePCH.h"
 
 #include "Editor/EditorControls/EditorControlsPanel.h"
-#include "Camera/CameraActor.h"
-#include "Camera/CameraComponent.h"
 
 #include "Engine/World.h"
 #include "Editor/Viewports/ViewportsPanel.h"
@@ -11,7 +9,6 @@
 #include "Input/InputSystem.h"
 #include "Editor/EditorUI/EditorUIScale.h"
 
-#include <cmath>
 
 // 패널 초기화 성공을 반환한다.
 bool FEditorControlsPanel::Init()
@@ -99,15 +96,7 @@ void FEditorControlsPanel::DrawToolbar()
 		if (ImGui::Combo("##GizmoSpace", &Space, SpaceItems, IM_ARRAYSIZE(SpaceItems)))
 			Gizmo->SetSpace(static_cast<EGizmoSpace>(Space));
 	}
-	ImGui::SameLine();
-	if (ImGui::Button("Camera")) ImGui::OpenPopup("ViewportCamera");
-	// 안쪽 입력칸이 남은 폭을 채우는 방식이라 최소 폭이 없으면 팝업이 내용만큼 좁아진다.
-	ImGui::SetNextWindowSizeConstraints(ImVec2(EditorUIScale::Px(320.0f), 0.0f), ImVec2(FLT_MAX, FLT_MAX));
-	if (ImGui::BeginPopup("ViewportCamera"))
-	{
-		DrawCameraProperties();
-		ImGui::EndPopup();
-	}
+
 }
 
 // 액터 생성·카메라 속성·기즈모·경로 추적 UI를 그린다.
@@ -184,10 +173,6 @@ void FEditorControlsPanel::OnRender()
 
 	//////////////////////////////////////////////////////
 
-	DrawCameraProperties();
-
-	//////////////////////////////////////////////////////
-
 	// Gizmo가 없으면 이 섹션을 통째로 건너뛴다.
 	if (Gizmo)
 	{
@@ -231,162 +216,4 @@ void FEditorControlsPanel::OnRender()
 	//////////////////////////////////////////////////////
 
 	ImGui::End();
-}
-
-// 실제 View 속성을 편집하며 패널 이동 후에도 마지막 View를 유지하고 변경된 값만 반영한다.
-void FEditorControlsPanel::DrawCameraProperties()
-{
-	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SectionGap)));
-	ImGui::SeparatorText("Viewport");
-
-	UCameraComponent* CamCom = World && World->GetMainCamera() ? World->GetMainCamera()->GetCameraComponent() : nullptr;
-	if (!CamCom) return;
-
-	FEditorViewportClient* ActiveClient = ViewportsPanel ? ViewportsPanel->GetViewportClient(ViewportsPanel->GetActiveViewIndex()) : nullptr;
-
-	bool bOrthogonal = ActiveClient ? !ActiveClient->IsPerspective() : CamCom->GetIsOrthogonal();
-
-	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SubsectionGap)));
-	ImGui::TextDisabled("Projection");
-
-	// 카메라 투영 설정 표
-	if (ImGui::BeginTable("Camera Projection", 2))
-	{
-		ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Ortho Width").x);
-		ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-		// FOV 또는 Ortho Width
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text(bOrthogonal ? "Ortho Width" : "FOV");
-
-		ImGui::TableSetColumnIndex(1);
-		ImGui::SetNextItemWidth(-1.0f);
-
-		if (bOrthogonal)
-		{
-			float OrthoWidth = ActiveClient ? ActiveClient->GetOrthoWidth() : CamCom->GetOrthoWidth();
-			if (ImGui::DragFloat("##OrthoWidth", &OrthoWidth, 0.1f) && std::isfinite(OrthoWidth))
-			{
-				OrthoWidth = FMath::Clamp(OrthoWidth, 0.01f, 1000000.0f);
-				CamCom->SetOrthoWidth(OrthoWidth);
-				if (ActiveClient) ActiveClient->SetOrthoWidth(OrthoWidth);
-			}
-		}
-		else
-		{
-			float FOV = ActiveClient ? ActiveClient->GetViewFOV() : CamCom->GetFieldOfView();
-			if (ImGui::DragFloat("##FOV", &FOV, 0.1f) && std::isfinite(FOV))
-			{
-				FOV = FMath::Clamp(FOV, 1.0f, 179.0f);
-				CamCom->SetFieldOfView(FOV);
-				if (ActiveClient) ActiveClient->SetViewFOV(FOV);
-			}
-		}
-
-		// 가까운 평면과 먼 평면
-		ImGui::TableNextRow();
-
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("Near");
-
-		ImGui::TableSetColumnIndex(1);
-		float Near = ActiveClient ? ActiveClient->GetNearClip() : CamCom->GetNearZ();
-
-		ImGui::SetNextItemWidth(-1.0f);
-		bool Changed = ImGui::InputFloat("##Near", &Near);
-
-		ImGui::TableNextRow();
-
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("Far");
-
-		ImGui::TableSetColumnIndex(1);
-		float Far = ActiveClient ? ActiveClient->GetFarClip() : CamCom->GetFarZ();
-		ImGui::SetNextItemWidth(-1.0f);
-		Changed |= ImGui::InputFloat("##Far", &Far);
-
-		if (Changed && std::isfinite(Near) && std::isfinite(Far) && Near > 0 && Far > Near)
-		{
-			CamCom->SetNearZ(Near);
-			if (ActiveClient) ActiveClient->SetClipPlanes(Near, Far);
-			CamCom->SetFarZ(Far);
-		}
-		ImGui::EndTable();
-	}
-
-	// 카메라 변환 설정 표
-	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SubsectionGap)));
-	ImGui::TextDisabled("Transform");
-
-	bool bLocationChanged = false;
-	bool bRotationChanged = false;
-
-	if (ImGui::BeginTable("Camera Transform", 2))
-	{
-		ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Ortho Width").x);
-		ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-		ImGui::TableNextRow();
-
-		// 카메라 위치
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("Location");
-
-		ImGui::TableSetColumnIndex(1);
-		float Available = ImGui::GetContentRegionAvail().x;
-		float ItemWidth = (Available - ImGui::GetStyle().ItemSpacing.x * 2.0f) / 3.0f;
-
-		FVector Location = ActiveClient ? ActiveClient->GetViewLocation() : CamCom->GetRelativeLocation();
-
-		ImGui::SetNextItemWidth(ItemWidth);
-		bLocationChanged |= ImGui::DragFloat("##LocationX", &Location.X, 0.1f);
-
-		ImGui::SameLine();
-
-		ImGui::SetNextItemWidth(ItemWidth);
-		bLocationChanged |= ImGui::DragFloat("##LocationY", &Location.Y, 0.1f);
-
-		ImGui::SameLine();
-
-		ImGui::SetNextItemWidth(ItemWidth);
-		bLocationChanged |= ImGui::DragFloat("##LocationZ", &Location.Z, 0.1f);
-
-		if (bLocationChanged && std::isfinite(Location.X) && std::isfinite(Location.Y) && std::isfinite(Location.Z))
-		{
-			CamCom->SetRelativeLocation(Location);
-			if (ActiveClient) ActiveClient->SetViewLocation(Location);
-		}
-
-		ImGui::TableNextRow();
-
-		// 카메라 회전
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("Rotation");
-
-		ImGui::TableSetColumnIndex(1);
-		FRotator Rotation = ActiveClient ? ActiveClient->GetViewRotation() : CamCom->GetRelativeRotation();
-
-		ImGui::SetNextItemWidth(ItemWidth);
-		bRotationChanged |= ImGui::DragFloat("##Pitch", &Rotation.Pitch, 0.1f);
-
-		ImGui::SameLine();
-
-		ImGui::SetNextItemWidth(ItemWidth);
-		bRotationChanged |= ImGui::DragFloat("##Yaw", &Rotation.Yaw, 0.1f);
-
-		ImGui::SameLine();
-
-		ImGui::SetNextItemWidth(ItemWidth);
-		ImGui::BeginDisabled(!bOrthogonal);
-		bRotationChanged |= ImGui::DragFloat("##Roll", &Rotation.Roll, 0.1f);
-		ImGui::EndDisabled();
-
-		if (bRotationChanged && std::isfinite(Rotation.Pitch) && std::isfinite(Rotation.Yaw) && std::isfinite(Rotation.Roll))
-		{
-			CamCom->SetRelativeRotation(Rotation);
-			if (ActiveClient) ActiveClient->SetViewRotation(Rotation);
-		}
-		ImGui::EndTable();
-	}
 }
