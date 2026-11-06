@@ -87,12 +87,12 @@ void SerializeCommon(FBinary& Ar, FFbxAssetData& Data)
 	Ar.String(Data.SourcePath); Ar.String(Data.SourceObject);
 	auto& O = Data.Options;
 	uint8 Flags = (O.bBakeStaticMeshes ? 1 : 0) | (O.bCombineStaticMeshes ? 2 : 0) | (O.bBakeSkeletalMeshes ? 4 : 0) |
-		(O.bCombineSkeletalMeshes ? 8 : 0) | (O.bImportStaticMeshes ? 16 : 0) | (O.bImportSkeletalMeshes ? 32 : 0) | (O.bForceFrontX ? 64 : 0);
+		(O.bCombineSkeletalMeshes ? 8 : 0) | (O.bImportStaticMeshes ? 16 : 0) | (O.bImportSkeletalMeshes ? 32 : 0) | (O.bForceFrontX ? 64 : 0) | (O.bImportRigidAnimation ? 128 : 0);
 	Ar.Pod(Flags);
 	if (Ar.In)
 	{
 		O.bBakeStaticMeshes = Flags & 1; O.bCombineStaticMeshes = Flags & 2; O.bBakeSkeletalMeshes = Flags & 4;
-		O.bCombineSkeletalMeshes = Flags & 8; O.bImportStaticMeshes = Flags & 16; O.bImportSkeletalMeshes = Flags & 32; O.bForceFrontX = Flags & 64;
+		O.bCombineSkeletalMeshes = Flags & 8; O.bImportStaticMeshes = Flags & 16; O.bImportSkeletalMeshes = Flags & 32; O.bForceFrontX = Flags & 64; O.bImportRigidAnimation = Flags & 128;
 	}
 	Ar.Pod(O.UniformScale);
 	Ar.String(Data.ActualSourcePath); Ar.Pod(Data.SourceHash);

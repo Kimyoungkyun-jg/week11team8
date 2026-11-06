@@ -465,7 +465,7 @@ AGENTS.md
 # 빌드 결과 exe가 루트 등에 커밋되지 않게 한다. premake 실행 파일만 예외
 *.exe
 !Setup/premake5.exe
-/Docs/Runtime/ParticleSystem.md
+/Docs/
 Tools/SnowMountain/build_snow_mountain.py
 /Tools
 

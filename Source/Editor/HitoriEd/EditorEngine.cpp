@@ -97,8 +97,8 @@ FEngineConfig UEditorEngine::GetConfig() const
 // Device·Window·Swapchain·AssetManager는 FEngineLoop가 먼저 만들어 둔다.
 bool UEditorEngine::Init()
 {
-	// 시작 단계(에셋 로드 등) 로그도 남도록 가장 먼저 등록한다. 종료 중 로그가 와도 안전하도록 해제하지 않는다.
-	static FFileLogSink* EditorLogFile = new FFileLogSink(EditorResourcePaths::EditorLogFile);
+	// 에셋 로드처럼 등록 전에 찍힌 로그는 FLog가 보관했다가 넘겨준다. 종료 중 로그가 와도 안전하도록 해제하지 않는다.
+	static FFileLogSink* EditorLogFile = new FFileLogSink(EditorResourcePaths::EditorLogFile, EditorResourcePaths::EditorLogBackupCount);
 	FLog::AddSink(EditorLogFile);
 
 	if (!Super::Init())

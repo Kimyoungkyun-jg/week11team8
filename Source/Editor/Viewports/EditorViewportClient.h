@@ -104,6 +104,9 @@ public:
 	// 카메라 입력 처리
 	void TickInput(float DeltaTime, bool bCaptured, bool bHovered,
 		int32 WheelDelta, float MoveSpeed, float MouseSensitivity);
+	// 뷰어용. 별도 OS 창에서는 FInputSystem이 입력을 받지 못하므로 ImGui 입력을 읽는다.
+	void TickInputFromImGui(float DeltaTime, bool bCaptured, bool bHovered,
+		int32 WheelDelta, float MoveSpeed, float MouseSensitivity);
 
 	// 기즈모 조작과 피킹 처리
 	void
@@ -195,6 +198,8 @@ protected:
 	float OrthoWidth = 10.0f;
 	float MaxRange = 50.0f;
 	FViewShowFlags ShowFlags;
+
+	void ApplyCameraInput(const struct FViewportCameraInput& Input, float DeltaTime, float MoveSpeed, float MouseSensitivity);
 
 	// 포커스 이동. 사용자가 카메라를 잡거나 휠을 굴리면 그 자리에서 멈춘다.
 	void TickFrameTransition(float DeltaTime);

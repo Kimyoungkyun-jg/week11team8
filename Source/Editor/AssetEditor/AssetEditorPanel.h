@@ -27,6 +27,7 @@ private:
 	URenderAsset* Asset = nullptr;
 	UWorld* PreviewWorld = nullptr;
 	FEditorViewportClient Client;
+	float CameraSpeed = 1.0f;
 	TUniquePtr<FSkyboxRenderer> Skybox;
 	bool bVisible = false;
 };

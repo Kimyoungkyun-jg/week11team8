@@ -24,10 +24,11 @@ namespace EditorResourcePaths
 	// 리타깃 프로필은 사용자가 만드는 콘텐츠라 Assets 아래에 둔다.
 	constexpr const char* RetargetProfileFolder = "Assets/RetargetProfiles";
 
-	// 사용자별 설정과 로그는 프로젝트 루트의 개별 폴더에 저장한다.
+	// 사용자별 설정은 프로젝트 루트 Settings에, 실행 로그는 Saved/Logs에 저장한다.
 	constexpr const char* SettingsFolder = "Settings";
-	constexpr const char* LogFolder = "Logs";
+	constexpr const char* LogFolder = "Saved/Logs";
 	constexpr const char* EditorSettingsFile = "Settings/editor.ini";
 	constexpr const char* ImGuiLayoutFile = "Settings/imgui.ini";
-	constexpr const char* EditorLogFile = "Logs/HitoriEditor.log";
+	constexpr const char* EditorLogFile = "Saved/Logs/HitoriEditor.log";
+	constexpr int EditorLogBackupCount = 10;
 }
