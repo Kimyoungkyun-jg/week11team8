@@ -300,24 +300,61 @@ void FViewportsPanel::OnRender() {
 		if (!Client || !Client->IsActive())
 			continue;
 		const FRect& Rect = Client->GetRect();
+		const ImVec2 ViewMin{ ContentOrigin.x + Rect.X, ContentOrigin.y + Rect.Y };
+		const ImVec2 ViewMax{ ViewMin.x + Rect.Width, ViewMin.y + Rect.Height };
+		ImGui::PushClipRect(ViewMin, ViewMax, true);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(EditorUIScale::Px(8.0f), EditorUIScale::Px(4.0f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(EditorUIScale::Px(4.0f), EditorUIScale::Px(4.0f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, EditorUIScale::Px(4.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+		// 메뉴를 여는 컨트롤은 콤보의 화살표까지 같은 중립색으로 맞춘다.
+		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive));
 		ImGui::SetCursorScreenPos(
 			{ ContentOrigin.x + Rect.X + EditorUIScale::Px(8.0f),
 			 ContentOrigin.y + Rect.Y + EditorUIScale::Px(8.0f) });
 		bToolbarVisible[ViewIndex] = true;
 		ToolbarMin[ViewIndex] = ImGui::GetCursorScreenPos();
-		ToolbarMax[ViewIndex] = { ContentOrigin.x + Rect.X + Rect.Width,
-			ToolbarMin[ViewIndex].y + ImGui::GetFrameHeight() };
+		ToolbarMax[ViewIndex] = ToolbarMin[ViewIndex];
+		ImDrawListSplitter ToolbarLayers;
+		ToolbarLayers.Split(DrawList, 2);
+		ToolbarLayers.SetCurrentChannel(DrawList, 1);
+		// 현재 뷰의 오른쪽 경계를 기준으로 줄바꿈한다. 다른 분할 뷰로 넘치지 않는다.
+		const float AvailableWidth = std::max(1.0f, Rect.Width - EditorUIScale::Px(16.0f));
+		float RowWidth = 0.0f;
+		float RowY = ToolbarMin[ViewIndex].y;
+		const auto PlaceControl = [&](float Width)
+		{
+			Width = std::min(Width, AvailableWidth);
+			const float Spacing = RowWidth > 0.0f ? ImGui::GetStyle().ItemSpacing.x : 0.0f;
+			if (RowWidth > 0.0f && RowWidth + Spacing + Width > AvailableWidth)
+			{
+				RowWidth = 0.0f;
+				RowY += ImGui::GetFrameHeightWithSpacing();
+			}
+			else
+				RowWidth += Spacing;
+			ImGui::SetCursorScreenPos({ ToolbarMin[ViewIndex].x + RowWidth, RowY });
+			ImGui::SetNextItemWidth(Width);
+			RowWidth += Width;
+			ToolbarMax[ViewIndex].x = std::max(ToolbarMax[ViewIndex].x, ToolbarMin[ViewIndex].x + RowWidth);
+			ToolbarMax[ViewIndex].y = RowY + ImGui::GetFrameHeight();
+		};
+		const auto ComboWidth = [](const char* Label)
+		{
+			return EditorUIScale::ButtonWidth(Label) + ImGui::GetFrameHeight();
+		};
 		ImGui::PushID(100 + ViewIndex);
 		// 드롭다운·메뉴 팝업 공통 여백. 팝업 창은 Begin 시점의 WindowPadding을 쓰므로
 		// 하위 메뉴(BeginMenu)를 열 때도 같은 값을 다시 넣어야 한다.
 		const ImVec2 MenuWindowPadding{ EditorUIScale::Px(10.0f), EditorUIScale::Px(8.0f) };
 		const float MenuItemSpacingY = EditorUIScale::Px(6.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
 
 		const int SelectedType = static_cast<int>(Client->GetViewportType());
-		ImGui::SetNextItemWidth(EditorUIScale::Px(120.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
+		PlaceControl(ComboWidth("Perspective"));
 		const bool bTypeComboOpen = ImGui::BeginCombo("##ViewportType", ViewportTypeLabels[SelectedType]);
-		ImGui::PopStyleVar();
 		if (bTypeComboOpen) {
 			ImGui::PushStyleVarY(ImGuiStyleVar_ItemSpacing, MenuItemSpacingY);
 			for (int TypeIndex = 0; TypeIndex < IM_ARRAYSIZE(ViewportTypeLabels); ++TypeIndex) {
@@ -330,7 +367,6 @@ void FViewportsPanel::OnRender() {
 			ImGui::PopStyleVar();
 			ImGui::EndCombo();
 		}
-		ImGui::SameLine();
 		// 뷰 모드 (UE처럼 Lit/Unlit/Wireframe + 버퍼 시각화).
 		// 라벨 순서는 EViewportMode 값 순서와 같다.
 		const int Mode = static_cast<int>(Client->GetViewportMode());
@@ -347,10 +383,8 @@ void FViewportsPanel::OnRender() {
 			ImGui::PopStyleVar();
 			return bOpen;
 		};
-		if (ImGui::Button(Labels[Mode])) ImGui::OpenPopup("ViewModeMenu");
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
-		const bool bViewModeOpen = ImGui::BeginPopup("ViewModeMenu");
-		ImGui::PopStyleVar();
+		PlaceControl(ComboWidth(Labels[Mode]));
+		const bool bViewModeOpen = ImGui::BeginCombo("##ViewMode", Labels[Mode], ImGuiComboFlags_HeightLargest);
 		if (bViewModeOpen)
 		{
 			ImGui::PushStyleVarY(ImGuiStyleVar_ItemSpacing, MenuItemSpacingY);
@@ -378,76 +412,68 @@ void FViewportsPanel::OnRender() {
 				Client->SetMaxRange(DepthRange);
 			ImGui::SetItemTooltip("White in Scene Depth represents this distance for this viewport only.");
 			ImGui::PopStyleVar();
-			ImGui::EndPopup();
+			ImGui::EndCombo();
 		}
-		// Keep both model selectors in the first toolbar row, including split views.
-		const float ReservedWidth = EditorUIScale::Px(16.0f + 120.0f) +
-			EditorUIScale::ButtonWidth(Labels[Mode]) + EditorUIScale::ButtonWidth("Show") +
-			EditorUIScale::ButtonWidth("Camera") + EditorUIScale::ButtonWidth("Single") +
-			ImGui::GetStyle().ItemSpacing.x * 6.0f;
-		const float ModelsWidth = std::max(2.0f, Rect.Width - ReservedWidth);
-		const float ReflectionWidth = std::min(EditorUIScale::Px(115.0f), ModelsWidth * 0.60f);
-		const float ShadingWidth = std::min(EditorUIScale::Px(85.0f), ModelsWidth - ReflectionWidth);
-		ImGui::SameLine();
+		ImGui::SetItemTooltip("View mode and buffer visualization for this viewport.");
+		PlaceControl(ComboWidth("Lighting"));
 		const char* ReflectionNames[] = { "Phong", "Blinn-Phong", "Lambert" };
 		const char* ShadingNames[] = { "Gouraud", "Phong" };
 		const char* ReflectionPreview = ReflectionNames[static_cast<int>(Client->GetReflectionModel())];
 		const char* ShadingPreview = ShadingNames[static_cast<int>(Client->GetShadingModel())];
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
-		ImGui::SetNextItemWidth(ReflectionWidth);
-		if (ImGui::BeginCombo("##ReflectionModel", ReflectionPreview))
+		ImGui::SetNextWindowSizeConstraints(ImVec2(EditorUIScale::Px(280.0f), 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+		if (ImGui::BeginCombo("##Lighting", "Lighting", ImGuiComboFlags_HeightLargest))
 		{
-			ImGui::TextDisabled("Reflection equation");
-			for (int Index = 0; Index < IM_ARRAYSIZE(ReflectionNames); ++Index)
-				if (ImGui::Selectable(ReflectionNames[Index], Index == static_cast<int>(Client->GetReflectionModel())))
-				{
-					Client->SetReflectionModel(static_cast<EReflectionModel>(Index));
-				}
-			ImGui::EndCombo();
-		}
-		ImGui::SetItemTooltip("Reflection equation: Phong uses R dot V; Blinn-Phong uses N dot H; Lambert is diffuse only. Applies independently to this viewport in Forward and Deferred rendering.");
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(ShadingWidth);
-		if (ImGui::BeginCombo("##ShadingModel", ShadingPreview))
-		{
-			ImGui::TextDisabled("Lighting evaluation / interpolation");
-			for (int Index = 0; Index < IM_ARRAYSIZE(ShadingNames); ++Index)
+			ImGui::PushStyleVarY(ImGuiStyleVar_ItemSpacing, MenuItemSpacingY);
+			ImGui::SeparatorText("Reflection");
+			ImGui::SetNextItemWidth(EditorUIScale::Px(150.0f));
+			if (ImGui::BeginCombo("##ReflectionModel", ReflectionPreview))
 			{
-				const bool bRequiresForward = Index == static_cast<int>(EShadingModel::Gouraud) && RenderingPath == ERenderingPath::Deferred;
-				ImGui::BeginDisabled(bRequiresForward);
-				if (ImGui::Selectable(ShadingNames[Index], Index == static_cast<int>(Client->GetShadingModel())))
-					Client->SetShadingModel(static_cast<EShadingModel>(Index));
-				ImGui::EndDisabled();
-				if (bRequiresForward && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-					ImGui::SetTooltip("Gouraud requires Forward rendering. Set Rendering Path to Forward in Settings.");
+				for (int Index = 0; Index < IM_ARRAYSIZE(ReflectionNames); ++Index)
+				{
+					const bool bSelected = Index == static_cast<int>(Client->GetReflectionModel());
+					if (ImGui::Selectable(ReflectionNames[Index], bSelected))
+						Client->SetReflectionModel(static_cast<EReflectionModel>(Index));
+					if (bSelected) ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
 			}
+			ImGui::SetItemTooltip("Phong: R dot V. Blinn-Phong: N dot H. Lambert: diffuse only. Applies independently to this viewport.");
+			ImGui::SeparatorText("Shading");
+			ImGui::SetNextItemWidth(EditorUIScale::Px(150.0f));
+			if (ImGui::BeginCombo("##ShadingModel", ShadingPreview))
+			{
+				for (int Index = 0; Index < IM_ARRAYSIZE(ShadingNames); ++Index)
+				{
+					const bool bSelected = Index == static_cast<int>(Client->GetShadingModel());
+					const bool bRequiresForward = Index == static_cast<int>(EShadingModel::Gouraud) && RenderingPath == ERenderingPath::Deferred;
+					ImGui::BeginDisabled(bRequiresForward);
+					if (ImGui::Selectable(ShadingNames[Index], bSelected))
+						Client->SetShadingModel(static_cast<EShadingModel>(Index));
+					if (bSelected) ImGui::SetItemDefaultFocus();
+					ImGui::EndDisabled();
+					if (bRequiresForward && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+						ImGui::SetTooltip("Gouraud requires Forward rendering. Set Rendering Path to Forward in Settings.");
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::SetItemTooltip("Gouraud: vertex lighting. Phong: per-pixel lighting. Independent of the reflection equation.");
+			ImGui::PopStyleVar();
 			ImGui::EndCombo();
 		}
-		ImGui::SetItemTooltip("Gouraud evaluates lighting at vertices and interpolates the result. Phong interpolates normals and evaluates lighting per pixel. Independent of the reflection equation.");
-		ImGui::PopStyleVar();
-		ImGui::SameLine();
+		ImGui::SetItemTooltip("Reflection: %s\nShading: %s", ReflectionPreview, ShadingPreview);
+		PlaceControl(ComboWidth("Camera"));
 		ImGui::BeginDisabled(GameViewportClient && ViewIndex == GameViewportIndex);
-		if (ImGui::Button("Camera"))
+		ImGui::SetNextWindowSizeConstraints(ImVec2(EditorUIScale::Px(360.0f), 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+		if (ImGui::BeginCombo("##ViewportCamera", "Camera", ImGuiComboFlags_HeightLargest))
 		{
 			ActiveViewIndex = ViewIndex;
-			ImGui::OpenPopup("ViewportCamera");
+			DrawCameraSettings(*Client);
+			ImGui::EndCombo();
 		}
 		ImGui::EndDisabled();
-		ImGui::SetNextWindowSizeConstraints(ImVec2(EditorUIScale::Px(360.0f), 0.0f), ImVec2(FLT_MAX, FLT_MAX));
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
-		if (ImGui::BeginPopup("ViewportCamera"))
-		{
-			DrawCameraSettings(*Client);
-			ImGui::EndPopup();
-		}
-		ImGui::PopStyleVar();
-		ImGui::SameLine();
 		// 뷰별 표시 항목 (TEAM5 Show Flags). 모든 표시 토글은 여기 한 곳에 있다.
-		if (ImGui::Button("Show"))
-			ImGui::OpenPopup("ViewShowFlags");
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(EditorUIScale::Px(12.0f), EditorUIScale::Px(10.0f)));
-		const bool bShowOpen = ImGui::BeginPopup("ViewShowFlags");
-		ImGui::PopStyleVar();
+		PlaceControl(ComboWidth("Show"));
+		const bool bShowOpen = ImGui::BeginCombo("##ViewShowFlags", "Show", ImGuiComboFlags_HeightLargest);
 		if (bShowOpen)
 		{
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(EditorUIScale::Px(8.0f), EditorUIScale::Px(6.0f)));
@@ -466,21 +492,25 @@ void FViewportsPanel::OnRender() {
 					ImGui::TextDisabled("Cascade 0-3: red, yellow, green, blue");
 			}
 			ImGui::PopStyleVar();
-			ImGui::EndPopup();
+			ImGui::EndCombo();
 		}
-		ImGui::SameLine();
-		if (CurrentLayoutMode == ELayoutMode::QuadSplit) {
-			if (ImGui::Button("Single")) {
-				RequestedLayoutMode = ELayoutMode::Single;
-				RequestedSingleViewIndex = ViewIndex;
-				bHasLayoutRequest = true;
-			}
-		}
-		else if (ViewIndex == CurrentSingleViewIndex &&
-			ImGui::Button("Quad")) {
-			RequestedLayoutMode = ELayoutMode::QuadSplit;
-			RequestedSingleViewIndex = ViewIndex;
-			bHasLayoutRequest = true;
+		PlaceControl(ComboWidth("Layout"));
+		if (ImGui::BeginCombo("##ViewportLayout", "Layout"))
+		{
+			ImGui::PushStyleVarY(ImGuiStyleVar_ItemSpacing, MenuItemSpacingY);
+			const auto LayoutItem = [&](const char* Label, ELayoutMode Layout)
+			{
+				if (ImGui::Selectable(Label, CurrentLayoutMode == Layout))
+				{
+					RequestedLayoutMode = Layout;
+					RequestedSingleViewIndex = ViewIndex;
+					bHasLayoutRequest = true;
+				}
+			};
+			LayoutItem("Single View", ELayoutMode::Single);
+			LayoutItem("Quad View", ELayoutMode::QuadSplit);
+			ImGui::PopStyleVar();
+			ImGui::EndCombo();
 		}
 		if (ViewIndex == ActiveViewIndex && !Client->IsLightCulling() &&
 			FStatOverlay::IsAnyEnabled() &&
@@ -488,11 +518,8 @@ void FViewportsPanel::OnRender() {
 				FStatOverlay::IsEnabled(EStatFlags::Decal) ||
 				FStatRegistry::Find(EditorStats::STAT_PickingTime))) {
 			const float ResetWidth = EditorUIScale::ButtonWidth("Reset Stats");
-			if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + ResetWidth <= ContentOrigin.x + Rect.X + Rect.Width)
-				ImGui::SameLine();
-			else
-				ImGui::SetCursorScreenPos({ ToolbarMin[ViewIndex].x, ToolbarMin[ViewIndex].y + ImGui::GetFrameHeightWithSpacing() });
-			if (ImGui::Button("Reset Stats"))
+			PlaceControl(ResetWidth);
+			if (ImGui::Button("Reset Stats", ImVec2(std::min(ResetWidth, AvailableWidth), 0.0f)))
 			{
 				FStatRegistry::Reset();
 				Client->GetRenderData().DecalStats.ResetHistory();
@@ -504,6 +531,19 @@ void FViewportsPanel::OnRender() {
 		}
 
 		ImGui::PopID();
+		ImGui::PopStyleVar(); // WindowPadding
+		ToolbarLayers.SetCurrentChannel(DrawList, 0);
+		const float Padding = EditorUIScale::Px(4.0f);
+		ToolbarMin[ViewIndex].x -= Padding;
+		ToolbarMin[ViewIndex].y -= Padding;
+		ToolbarMax[ViewIndex].x += Padding;
+		ToolbarMax[ViewIndex].y += Padding;
+		DrawList->AddRectFilled(ToolbarMin[ViewIndex], ToolbarMax[ViewIndex], IM_COL32(24, 24, 27, 225), EditorUIScale::Px(6.0f));
+		DrawList->AddRect(ToolbarMin[ViewIndex], ToolbarMax[ViewIndex], ImGui::GetColorU32(ImGuiCol_Border), EditorUIScale::Px(6.0f));
+		ToolbarLayers.Merge(DrawList);
+		ImGui::PopStyleColor(3);
+		ImGui::PopStyleVar(4);
+		ImGui::PopClipRect();
 	}
 
 

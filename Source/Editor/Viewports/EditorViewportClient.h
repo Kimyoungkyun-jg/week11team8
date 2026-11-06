@@ -14,6 +14,7 @@
 
 #include <functional>
 
+struct FSceneRenderOptions;
 class UWorld;
 class FGizmo;
 class AActor;
@@ -118,6 +119,9 @@ public:
 
 	// 카메라 전방 벡터
 	FVector GetViewForward() const;
+
+	// Apply only view-owned options; preserve the renderer-wide path and quality settings.
+	void ApplyRenderSettings(FSceneRenderOptions& Options) const;
 
 	// 씬 뷰 생성
 	FSceneView CalcSceneView(const FRect& InViewRect) const;

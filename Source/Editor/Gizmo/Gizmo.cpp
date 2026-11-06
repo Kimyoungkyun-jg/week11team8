@@ -3,6 +3,7 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Actor/LightActorBase.h"
 #include "Camera/CameraComponent.h"
+#include <algorithm>
 
 static const FVector AxisDirs[3] = {
 	FVector(1, 0, 0),
