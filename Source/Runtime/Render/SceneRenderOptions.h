@@ -28,7 +28,18 @@ struct FSceneRenderOptions
 	bool bShowCameraOverlay = true;
 
 	ERenderingPath RenderingPath = ERenderingPath::Deferred;
-	ELightingModel LightingModel = ELightingModel::Gouraud;
+	EReflectionModel ReflectionModel = EReflectionModel::BlinnPhong;
+	EShadingModel ShadingModel = EShadingModel::Gouraud;
+	bool bUnlit = false;
+	bool bOverrideMaterialLighting = false;
+
+	// Old "Phong" was actually Blinn-Phong; keep existing files visually compatible.
+	void SetLegacyLightingModel(ELightingModel Model)
+	{
+		ReflectionModel = Model == ELightingModel::Lambert ? EReflectionModel::Lambert : EReflectionModel::BlinnPhong;
+		ShadingModel = Model == ELightingModel::Gouraud ? EShadingModel::Gouraud : EShadingModel::Phong;
+		bUnlit = Model == ELightingModel::Unlit;
+	}
 	EDecalRenderMethod DecalRenderMethod = EDecalRenderMethod::MeshRerendering;
 
 	bool bDecalReceiverStencil = true;

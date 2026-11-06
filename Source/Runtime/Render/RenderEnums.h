@@ -21,6 +21,22 @@ enum class ESkinningMode : uint8_t
 	GPU
 };
 
+// Reflection determines the lighting equation, independently of interpolation.
+enum class EReflectionModel
+{
+    Phong,
+    BlinnPhong,
+    Lambert
+};
+
+// Gouraud interpolates vertex lighting; Phong evaluates interpolated normals per pixel.
+enum class EShadingModel
+{
+    Gouraud,
+    Phong
+};
+
+// Legacy material/config values. Preserve numeric values for existing assets.
 enum class ELightingModel
 {
     Gouraud,

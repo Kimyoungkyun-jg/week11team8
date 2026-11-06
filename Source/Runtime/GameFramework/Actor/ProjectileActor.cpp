@@ -10,6 +10,7 @@ AProjectileActor::AProjectileActor()
 {
     PrimaryActorTick.bCanEverTick = true;
     PrimaryActorTick.bStartWithTickEnabled = false;
+    SetRootComponent(CreateDefaultSubobject<USceneComponent>("DefaultSceneRoot"));
     GetRootComponent()->SetCollisionRadiusOverride(0.5f);
     StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>("ProjectileMeshComponent");
     // 이동용 루트는 표시 상태와 분리한다. 숨겨진 메쉬를 부모로 두면 FireBall 자식도 함께 숨겨진다.

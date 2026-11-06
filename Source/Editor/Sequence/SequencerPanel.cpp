@@ -248,7 +248,7 @@ void FSequencerPanel::Tick(float DeltaTime)
 
 void FSequencerPanel::OnRender()
 {
-	if (!ImGui::Begin("Sequencer"))
+	if (!BeginPanel())
 	{
 		ImGui::End();
 		return;

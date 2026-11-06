@@ -16,6 +16,7 @@ public:
 	void Tick(float DeltaTime) override;
 	void OnRender() override;
 	const char* GetPanelName() const override { return "Asset Editor"; }
+	bool IsRootPanel() const override { return true; }
 	void OpenAsset(const FString& Path);
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();

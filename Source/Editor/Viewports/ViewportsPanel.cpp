@@ -81,6 +81,13 @@ FVector2 FViewportsPanel::GetLocalMousePosition() const {
 // 엔진 입력 처리는 ImGui NewFrame보다 먼저 실행되므로 현재 OS 커서로 버튼
 // 영역을 검사한다.
 bool FViewportsPanel::IsHovered() const {
+	if (!IsOpen() || bToolbarPopupOpen) return false;
+	const FVector2 LocalMouse = GetLocalMousePosition();
+	const ImVec2 ScreenMouse{ LocalMouse.X + ContentOrigin.x, LocalMouse.Y + ContentOrigin.y };
+	for (int Index = 0; Index < 4; ++Index)
+		if (bToolbarVisible[Index] && ScreenMouse.x >= ToolbarMin[Index].x && ScreenMouse.x < ToolbarMax[Index].x &&
+			ScreenMouse.y >= ToolbarMin[Index].y && ScreenMouse.y < ToolbarMax[Index].y)
+			return false;
 	if (bStatResetButtonVisible && FStatOverlay::IsAnyEnabled()) {
 		POINT Cursor{};
 		if (::GetCursorPos(&Cursor) && Cursor.x >= StatResetButtonMin.x &&
@@ -125,10 +132,17 @@ bool FViewportsPanel::ConsumeLayoutRequest(ELayoutMode& OutMode,
 // View Texture와 Splitter·Layout·Preset UI를 그리고 요청을 기록한다.
 void FViewportsPanel::OnRender() {
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0.0f, 0.0f });
-	ImGui::Begin("Viewports", nullptr,
+	if (!BeginPanel(
 		ImGuiWindowFlags_NoScrollbar |
-		ImGuiWindowFlags_NoScrollWithMouse |
-		ImGuiWindowFlags_NoTitleBar);
+		ImGuiWindowFlags_NoScrollWithMouse))
+	{
+		bHovered = false;
+		bFocused = false;
+		bStatResetButtonVisible = false;
+		ImGui::End();
+		ImGui::PopStyleVar();
+		return;
+	}
 
 	ContentOrigin = ImGui::GetCursorScreenPos();
 	ContentSize = ImGui::GetContentRegionAvail();
@@ -137,6 +151,7 @@ void FViewportsPanel::OnRender() {
 	bHovered = ImGui::IsWindowHovered();
 	bFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 	bStatResetButtonVisible = false;
+	std::fill(std::begin(bToolbarVisible), std::end(bToolbarVisible), false);
 
 	// 전체 캔버스를 한 번 확보한 뒤 각 렌더 타깃을 창 DrawList에 직접 그린다.
 	// Image 항목 네 개를 따로 배치하면 ImGui 레이아웃과 클리핑 상태가 삽입 순서에
@@ -278,6 +293,10 @@ void FViewportsPanel::OnRender() {
 		ImGui::SetCursorScreenPos(
 			{ ContentOrigin.x + Rect.X + EditorUIScale::Px(8.0f),
 			 ContentOrigin.y + Rect.Y + EditorUIScale::Px(8.0f) });
+		bToolbarVisible[ViewIndex] = true;
+		ToolbarMin[ViewIndex] = ImGui::GetCursorScreenPos();
+		ToolbarMax[ViewIndex] = { ContentOrigin.x + Rect.X + Rect.Width,
+			ToolbarMin[ViewIndex].y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() };
 		ImGui::PushID(100 + ViewIndex);
 		// 드롭다운·메뉴 팝업 공통 여백. 팝업 창은 Begin 시점의 WindowPadding을 쓰므로
 		// 하위 메뉴(BeginMenu)를 열 때도 같은 값을 다시 넣어야 한다.
@@ -302,7 +321,7 @@ void FViewportsPanel::OnRender() {
 			ImGui::EndCombo();
 		}
 		ImGui::SameLine();
-		// 뷰 모드 (UE처럼 Lit/Unlit/Wireframe + 버퍼 시각화). Scene Depth 범위도 여기서 바꾼다.
+		// 뷰 모드 (UE처럼 Lit/Unlit/Wireframe + 버퍼 시각화).
 		// 라벨 순서는 EViewportMode 값 순서와 같다.
 		const int Mode = static_cast<int>(Client->GetViewportMode());
 		const char* Labels[] = { "Lit", "Wireframe", "Scene Depth", "World Normal", "Light Culling", "Shadow Cascades", "Shadow Mask", "Unlit" };
@@ -342,14 +361,6 @@ void FViewportsPanel::OnRender() {
 				ImGui::EndMenu();
 			}
 			ModeItem(EViewportMode::LightCulling);
-			ImGui::Separator();
-			// 모든 뷰가 같은 깊이 범위를 쓴다 (editor.ini의 SceneDepthMaxRange).
-			float MaxRange = Client->GetMaxRange();
-			ImGui::SetNextItemWidth(EditorUIScale::Px(120.0f));
-			if (ImGui::DragFloat("Scene Depth Range", &MaxRange, 0.5f, 0.1f, 10000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
-				for (const auto& Other : ViewportClients)
-					if (Other) Other->SetMaxRange(MaxRange);
-			ImGui::SetItemTooltip("White represents this distance from the camera.");
 			ImGui::PopStyleVar();
 			ImGui::EndPopup();
 		}
@@ -409,6 +420,49 @@ void FViewportsPanel::OnRender() {
 			StatResetButtonMax = ImGui::GetItemRectMax();
 			bStatResetButtonVisible = true;
 		}
+		ImGui::SetCursorScreenPos({ ContentOrigin.x + Rect.X + EditorUIScale::Px(8.0f),
+			ContentOrigin.y + Rect.Y + EditorUIScale::Px(8.0f) + ImGui::GetFrameHeightWithSpacing() });
+		const float ModelWidth = std::min(EditorUIScale::Px(200.0f),
+			std::max(1.0f, (Rect.Width - EditorUIScale::Px(16.0f) - ImGui::GetStyle().ItemSpacing.x) * 0.5f));
+		const char* ReflectionNames[] = { "Phong", "Blinn-Phong", "Lambert" };
+		const char* ShadingNames[] = { "Gouraud", "Phong" };
+		const FString ReflectionPreview = FString("Reflection: ") +
+			(Client->UsesClassicLighting() ? ReflectionNames[static_cast<int>(Client->GetReflectionModel())] : "Renderer");
+		const FString ShadingPreview = FString("Shading: ") +
+			(Client->UsesClassicLighting() ? ShadingNames[static_cast<int>(Client->GetShadingModel())] : "Renderer");
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, MenuWindowPadding);
+		ImGui::SetNextItemWidth(ModelWidth);
+		if (ImGui::BeginCombo("##ReflectionModel", ReflectionPreview.c_str()))
+		{
+			ImGui::TextDisabled("Reflection equation (Forward)");
+			for (int Index = 0; Index < IM_ARRAYSIZE(ReflectionNames); ++Index)
+				if (ImGui::Selectable(ReflectionNames[Index], Client->UsesClassicLighting() && Index == static_cast<int>(Client->GetReflectionModel())))
+				{
+					Client->SetReflectionModel(static_cast<EReflectionModel>(Index));
+					Client->SetUseClassicLighting(true);
+				}
+			ImGui::Separator();
+			if (ImGui::Selectable("Use renderer settings", !Client->UsesClassicLighting())) Client->SetUseClassicLighting(false);
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("Reflection equation: Phong uses R dot V; Blinn-Phong uses N dot H; Lambert is diffuse only. Selecting a model uses Forward rendering for this viewport.");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ModelWidth);
+		if (ImGui::BeginCombo("##ShadingModel", ShadingPreview.c_str()))
+		{
+			ImGui::TextDisabled("Lighting evaluation / interpolation");
+			for (int Index = 0; Index < IM_ARRAYSIZE(ShadingNames); ++Index)
+				if (ImGui::Selectable(ShadingNames[Index], Client->UsesClassicLighting() && Index == static_cast<int>(Client->GetShadingModel())))
+				{
+					Client->SetShadingModel(static_cast<EShadingModel>(Index));
+					Client->SetUseClassicLighting(true);
+				}
+			ImGui::Separator();
+			if (ImGui::Selectable("Use renderer settings", !Client->UsesClassicLighting())) Client->SetUseClassicLighting(false);
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("Gouraud evaluates lighting at vertices and interpolates the result. Phong interpolates normals and evaluates lighting per pixel. Independent of the reflection equation.");
+		ImGui::PopStyleVar();
 		ImGui::PopID();
 	}
 
@@ -424,6 +478,7 @@ void FViewportsPanel::OnRender() {
 		DrawStatOverlay(DrawList, { ContentOrigin.x + Client->GetRect().X, ContentOrigin.y + Client->GetRect().Y }, Client);
 	}
 	DrawCameraSpeedNotice(DrawList);
+	bToolbarPopupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 
 	ImGui::End();
 	ImGui::PopStyleVar();
@@ -893,7 +948,7 @@ void FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 	// 제어 위젯 한 줄 아래에서 시작해 Combo와 겹치지 않게 한다.
 	const float LineHeight = ImGui::GetTextLineHeight();
 	const ImVec2 Origin{ ViewMin.x + EditorUIScale::Px(StatOverlayMargin),
-			ViewMin.y + EditorUIScale::Px(StatOverlayMargin) + ImGui::GetFrameHeight() +
+			ViewMin.y + EditorUIScale::Px(StatOverlayMargin) + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() +
 			EditorUIScale::Px(StatOverlayMargin) };
 
 	// 최대 너비 계산

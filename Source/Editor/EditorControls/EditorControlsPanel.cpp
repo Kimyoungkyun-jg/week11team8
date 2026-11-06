@@ -52,12 +52,21 @@ AActor* FEditorControlsPanel::SpawnInFrontOfCamera(UClass* Class)
 	// 화면을 그리는 활성 편집 View의 시점을 쓴다. 메인 카메라 컴포넌트의 월드 회전은 View와 다를 수 있다.
 	constexpr float SpawnDistance = 10.0f;
 	const FEditorViewportClient* Client = ViewportsPanel ? ViewportsPanel->GetViewportClient(ViewportsPanel->GetActiveViewIndex()) : nullptr;
-	if (!Client)
-		return World->SpawnActor(Class);
-
 	FTransform SpawnTransform;
-	SpawnTransform.Location = Client->GetViewLocation() + Client->GetViewForward() * SpawnDistance;
-	return World->SpawnActor(Class, NAME_None, &SpawnTransform);
+	if (Client)
+		SpawnTransform.Location = Client->GetViewLocation() + Client->GetViewForward() * SpawnDistance;
+	AActor* Actor = World->SpawnActor(Class, NAME_None, &SpawnTransform);
+	// Blueprint/SCS가 없는 이 엔진에서는 에디터의 빈 액터 배치에서만 기본 루트를 제공한다.
+	// 런타임 SpawnActor<AActor>()는 컴포넌트 없는 네이티브 액터로 남는다.
+	if (Actor && Class == AActor::StaticClass())
+	{
+		if (USceneComponent* Root = Cast<USceneComponent>(Actor->AddComponent(USceneComponent::StaticClass(), "DefaultSceneRoot")))
+		{
+			Root->MarkUserCreated();
+			Root->SetTransform(SpawnTransform);
+		}
+	}
+	return Actor;
 }
 
 void FEditorControlsPanel::DrawToolbar()
@@ -105,7 +114,11 @@ void FEditorControlsPanel::DrawToolbar()
 void FEditorControlsPanel::OnRender()
 {
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(400.0f), EditorUIScale::Px(300.0f)), ImGuiCond_FirstUseEver);
-	ImGui::Begin("Editor Controls");
+	if (!BeginPanel())
+	{
+		ImGui::End();
+		return;
+	}
 	ImGui::Spacing();
 
 	char FpsText[64];

@@ -5,8 +5,8 @@
 
 namespace
 {
-	// Settings/imgui.ini가 없을 때(처음 실행, 설정 삭제 후)만 쓰는 UE 비슷한 기본 배치.
-	// 가운데 뷰포트, 오른쪽 위 Outliner·아래 Details, 아래 Content Drawer·Output Log·Sequencer·도구 창, 왼쪽 Editor Controls·Settings
+	// 저장된 배치가 없거나 사용자가 초기화할 때 사용하는 기본 배치.
+	// 가운데 Viewports, 오른쪽 Outliner/Details, 아래 콘텐츠·로그·시퀀서, 왼쪽 설정.
 	void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& Size)
 	{
 		ImGui::DockBuilderRemoveNode(DockspaceId);
@@ -25,43 +25,11 @@ namespace
 		ImGui::DockBuilderDockWindow("Content Drawer", Bottom);
 		ImGui::DockBuilderDockWindow("Output Log", Bottom);
 		ImGui::DockBuilderDockWindow("Sequencer", Bottom);
-		// 도구 창도 떠 있지 않게 아래 탭으로 넣는다. 스켈레탈 메시 뷰어는 FBX마다 창이 따로 열린다.
-		ImGui::DockBuilderDockWindow("UI Editor", Bottom);
-		ImGui::DockBuilderDockWindow("Pose Retarget", Bottom);
 		ImGui::DockBuilderDockWindow("Settings", Left);
 		ImGui::DockBuilderFinish(DockspaceId);
 	}
 }
 
-
-const ImGuiWindowClass& FEditorUI::GetRootWindowClass()
-{
-	static const ImGuiWindowClass RootClass = []
-	{
-		ImGuiWindowClass Class;
-		Class.ClassId = 0x524F4F54;   // 'ROOT'
-		Class.DockingAllowUnclassed = false;
-		return Class;
-	}();
-	return RootClass;
-}
-
-const ImGuiWindowClass& FEditorUI::GetLevelWindowClass()
-{
-	static const ImGuiWindowClass LevelClass = []
-	{
-		ImGuiWindowClass Class;
-		Class.ClassId = 0x4C564C43; // LVLC
-		Class.DockingAllowUnclassed = false;
-		return Class;
-	}();
-	return LevelClass;
-}
-
-ImGuiID FEditorUI::GetRootDockId()
-{
-	return 0x524F4F44;   // 'ROOD'. 바깥 도킹 공간. 에셋 에디터가 처음 열릴 때 여기에 탭으로 붙는다
-}
 
 bool FEditorUI::Init(bool bInUseDockSpace, bool bInPassthruCentralNode)
 {
@@ -71,6 +39,33 @@ bool FEditorUI::Init(bool bInUseDockSpace, bool bInPassthruCentralNode)
 	Toolbar = MakeUnique<FLevelEditorToolbar>();
 
 	return true;
+}
+
+void FEditorUI::RegisterPanelSettings()
+{
+	for (auto& Panel : Panels)
+		Panel->RegisterOpenStateSettings(Panel->GetOpenStateSettingsName());
+
+	ImGuiSettingsHandler Handler;
+	Handler.TypeName = "LevelEditor";
+	Handler.TypeHash = ImHashStr(Handler.TypeName);
+	Handler.UserData = this;
+	Handler.ReadOpenFn = [](ImGuiContext*, ImGuiSettingsHandler* Settings, const char* Name) -> void*
+	{
+		return std::strcmp(Name, "Panel") == 0 ? Settings->UserData : nullptr;
+	};
+	Handler.ReadLineFn = [](ImGuiContext*, ImGuiSettingsHandler*, void* Entry, const char* Line)
+	{
+		auto* UI = static_cast<FEditorUI*>(Entry);
+		if (std::strcmp(Line, "Open=1") == 0) UI->bLevelEditorOpen = true;
+		else if (std::strcmp(Line, "Open=0") == 0) UI->bLevelEditorOpen = false;
+	};
+	Handler.WriteAllFn = [](ImGuiContext*, ImGuiSettingsHandler* Settings, ImGuiTextBuffer* Buffer)
+	{
+		const auto* UI = static_cast<const FEditorUI*>(Settings->UserData);
+		Buffer->appendf("[LevelEditor][Panel]\nOpen=%d\n\n", UI->bLevelEditorOpen ? 1 : 0);
+	};
+	ImGui::AddSettingsHandler(&Handler);
 }
 
 void FEditorUI::Tick(float DeltaTime)
@@ -86,94 +81,59 @@ void FEditorUI::OnRender()
 {
 	DrawMainMenuBar();
 
-	if (bUseDockSpace)
+	const bool bDockingEnabled = bUseDockSpace && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable);
+	bool bLevelEditorVisible = !bDockingEnabled;
+	if (bDockingEnabled)
 	{
-		static bool dockspaceOpen = true;
-		static bool optFullscreen = true;
-		static bool optPadding = false;
-		static ImGuiDockNodeFlags dockspaceFlags = bPassthruCentralNode
-			? ImGuiDockNodeFlags_PassthruCentralNode
-			: ImGuiDockNodeFlags_None;
+		const ImGuiViewport* Viewport = ImGui::GetMainViewport();
+		ImGui::SetNextWindowPos(Viewport->WorkPos);
+		ImGui::SetNextWindowSize(Viewport->WorkSize);
+		ImGui::SetNextWindowViewport(Viewport->ID);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+		const ImGuiWindowFlags HostFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar
+			| ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+			| ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings;
+		ImGui::Begin("DockingSpace", nullptr, HostFlags);
+		ImGui::PopStyleVar(3);
+		ImGui::DockSpace(EditorDocking::RootDockId, ImVec2(0.0f, 0.0f),
+			ImGuiDockNodeFlags_NoDockingSplit, &EditorDocking::GetRootWindowClass());
+		ImGui::End();
 
-		// We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
-		// because it would be confusing to have two docking targets within each others.
-		//ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDocking;
-		if (optFullscreen)
+		if (!ImGui::DockBuilderGetNode(EditorDocking::LevelDockId)) bResetLevelLayout = true;
+		if (bLevelEditorOpen)
 		{
-			const ImGuiViewport* viewport = ImGui::GetMainViewport();
-			ImGui::SetNextWindowPos(viewport->WorkPos);
-			ImGui::SetNextWindowSize(viewport->WorkSize);
-			ImGui::SetNextWindowViewport(viewport->ID);
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-			windowFlags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-			windowFlags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+			EditorDocking::PrepareWindow(EditorDocking::LevelWindowName, true);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			bLevelEditorVisible = ImGui::Begin(EditorDocking::LevelWindowName, &bLevelEditorOpen,
+				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+			ImGui::PopStyleVar();
+			if (!bLevelEditorOpen)
+			{
+				bLevelEditorVisible = false;
+				ImGui::MarkIniSettingsDirty();
+			}
+
+			if (bLevelEditorVisible)
+			{
+				if (Toolbar) Toolbar->Draw();
+				if (bResetLevelLayout || !ImGui::DockBuilderGetNode(EditorDocking::LevelDockId))
+				{
+					BuildDefaultDockLayout(EditorDocking::LevelDockId, ImGui::GetContentRegionAvail());
+					bResetLevelLayout = false;
+				}
+			}
+			// Keep the inner dock tree alive when another editor tab is selected.
+			const ImGuiDockNodeFlags LevelFlags = !bLevelEditorVisible ? ImGuiDockNodeFlags_KeepAliveOnly
+				: bPassthruCentralNode ? ImGuiDockNodeFlags_PassthruCentralNode : ImGuiDockNodeFlags_None;
+			ImGui::DockSpace(EditorDocking::LevelDockId, ImVec2(0.0f, 0.0f), LevelFlags, &EditorDocking::GetLevelWindowClass());
+			ImGui::End();
 		}
 		else
 		{
-			dockspaceFlags &= ~ImGuiDockNodeFlags_PassthruCentralNode;
-		}
-
-		// When using ImGuiDockNodeFlags_PassthruCentralNode, DockSpace() will render our background
-		// and handle the pass-thru hole, so we ask Begin() to not render a background.
-		if (dockspaceFlags & ImGuiDockNodeFlags_PassthruCentralNode)
-			windowFlags |= ImGuiWindowFlags_NoBackground;
-
-		// Important: note that we proceed even if Begin() returns false (aka window is collapsed).
-		// This is because we want to keep our DockSpace() active. If a DockSpace() is inactive,
-		// all active windows docked into it will lose their parent and become undocked.
-		// We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
-		// any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
-		if (!optPadding)
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-
-		//ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, Daydream::Application::GetInstance().isMaximzed ? ImVec2(6.0f, 6.0f) : ImVec2(0.0f, 0.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, false ? ImVec2(6.0f, 6.0f) : ImVec2(0.0f, 0.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-		ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
-
-		ImGui::Begin("DockingSpace", &dockspaceOpen, windowFlags);
-		//m_DockSpacePos = { ImGui::GetWindowPos().x, ImGui::GetWindowPos().y };
-		//STS_CORE_WARN("Dock Space Coord = {0}, {1}", m_DockSpacePos.x, m_DockSpacePos.y);
-		ImGui::PopStyleColor(); // MenuBarBg
-		ImGui::PopStyleVar(2);
-
-		if (!optPadding)
-			ImGui::PopStyleVar();
-
-		if (optFullscreen)
-			ImGui::PopStyleVar(2);
-
-		// 2단 도킹 (TEAM5). 바깥 공간에는 루트 창(Level Editor, 스켈레탈 메시 뷰어 같은 에셋 에디터)만 탭으로 붙는다.
-		// 레벨 패널은 창 클래스가 없어서 바깥 공간과 에셋 에디터에 붙지 않고, Level Editor 안의 공간에만 붙는다.
-		ImGuiIO& io = ImGui::GetIO();
-		const bool bDockingEnabled = (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
-		const ImGuiWindowClass& RootClass = GetRootWindowClass();
-		if (bDockingEnabled)
-			ImGui::DockSpace(GetRootDockId(), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None, &RootClass);
-
-		ImGui::End();
-
-		if (bDockingEnabled)
-		{
-			ImGui::SetNextWindowClass(&RootClass);
-			ImGui::SetNextWindowDockID(GetRootDockId(), ImGuiCond_FirstUseEver);
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-			ImGui::Begin("Level Editor###LevelEditorRootWindow", nullptr,
-				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-			ImGui::PopStyleVar();
-
-			// 툴바는 Level Editor 안에 그려서 다른 루트 탭(에셋 에디터)을 보면 함께 가려진다.
-			if (Toolbar) Toolbar->Draw();
-
-			// 저장된 배치가 있으면 imgui.ini가 노드를 만들어 두므로 처음 실행할 때만 기본 배치를 만든다.
-			constexpr ImGuiID LevelDockSpaceId = 0x4C564C44;   // 'LVLD'. 고정 값이라 창 ID 스택과 무관하게 배치가 유지된다
-			if (ImGui::DockBuilderGetNode(LevelDockSpaceId) == nullptr)
-				BuildDefaultDockLayout(LevelDockSpaceId, ImGui::GetContentRegionAvail());
-			// 탭이 가려져 Begin이 false여도 호출해야 패널의 도킹이 풀리지 않는다
-			ImGui::DockSpace(LevelDockSpaceId, ImVec2(0.0f, 0.0f), dockspaceFlags, &GetLevelWindowClass());
-			ImGui::End();
+			ImGui::DockSpace(EditorDocking::LevelDockId, ImVec2(0.0f, 0.0f),
+				ImGuiDockNodeFlags_KeepAliveOnly, &EditorDocking::GetLevelWindowClass());
 		}
 	}
 	else if (Toolbar)
@@ -183,11 +143,10 @@ void FEditorUI::OnRender()
 
 	for (auto& Panel : Panels)
 	{
-		if (Panel->IsOpen())
-		{
-			ImGui::SetNextWindowClass(&GetLevelWindowClass());
+		if (Panel->IsOpen() && (Panel->IsRootPanel() || bLevelEditorVisible))
 			Panel->OnRender();
-		}
+		else
+			Panel->OnHidden();
 	}
 	DrawFbxImportDialog();
 }
@@ -224,14 +183,50 @@ void FEditorUI::DrawMainMenuBar()
 			for (auto& Panel : Panels)
 				SortedPanels.Add(Panel.get());
 			EditorSort::SortByName(SortedPanels, [](const IEditorPanel* Panel) { return FString(Panel->GetPanelName()); });
-			for (IEditorPanel* Panel : SortedPanels)
+			const auto DrawPanelItems = [&](bool bRootPanels)
 			{
-				bool bOpen = Panel->IsOpen();
-
-				if (ImGui::MenuItem(Panel->GetPanelName(), nullptr, bOpen))
+				for (IEditorPanel* Panel : SortedPanels)
 				{
-					Panel->SetOpen(!bOpen);
+					if (Panel->IsRootPanel() != bRootPanels) continue;
+					const bool bOpen = Panel->IsOpen();
+					if (ImGui::MenuItem(Panel->GetPanelName(), nullptr, bOpen))
+					{
+						Panel->SetOpen(!bOpen);
+						if (!bOpen && !bRootPanels)
+						{
+							bLevelEditorOpen = true;
+							ImGui::SetWindowFocus(EditorDocking::LevelWindowName);
+						}
+					}
 				}
+			};
+			const bool bDockingEnabled = bUseDockSpace && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable);
+			if (ImGui::BeginMenu("Editors"))
+			{
+				if (bDockingEnabled)
+				{
+					if (ImGui::MenuItem("Level Editor", nullptr, &bLevelEditorOpen))
+					{
+						ImGui::MarkIniSettingsDirty();
+						if (bLevelEditorOpen) ImGui::SetWindowFocus(EditorDocking::LevelWindowName);
+					}
+					ImGui::Separator();
+				}
+				DrawPanelItems(true);
+				ImGui::EndMenu();
+			}
+			if (ImGui::BeginMenu("Level Panels"))
+			{
+				DrawPanelItems(false);
+				ImGui::EndMenu();
+			}
+			ImGui::Separator();
+			if (ImGui::MenuItem("Reset Level Layout", nullptr, false, bDockingEnabled))
+			{
+				bResetLevelLayout = true;
+				bLevelEditorOpen = true;
+				ImGui::MarkIniSettingsDirty();
+				ImGui::SetWindowFocus(EditorDocking::LevelWindowName);
 			}
 			ImGui::EndMenu();
 		}

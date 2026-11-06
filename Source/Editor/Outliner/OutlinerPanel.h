@@ -17,7 +17,7 @@ using SelectionCallback = std::function<void(USceneComponent*)>;
 using DeleteActorCallback = std::function<void(AActor*)>;
 using ActorDoubleClickCallback = std::function<void(AActor*)>;
 
-// 레벨의 액터 목록. 이름 변경(F2·우클릭)과 더블 클릭 포커스는 TEAM5 아웃라이너를 따른다 (UE와 같은 조작).
+// 레벨의 액터 목록. 더블 클릭·F2·우클릭 메뉴로 액터 이름을 변경한다.
 class FOutlinerPanel : public IEditorPanel
 {
 public:
@@ -26,7 +26,7 @@ public:
 
     void SetSelectionCallback(SelectionCallback InCallback) { Callback = InCallback; }
     void SetDeleteActorCallback(DeleteActorCallback InCallback) { DeleteCallback = InCallback;}
-    // 더블 클릭한 액터로 뷰포트 카메라를 옮길 때 쓴다.
+    // Focus 메뉴에서 액터로 뷰포트 카메라를 옮길 때 쓴다.
     void SetActorDoubleClickCallback(ActorDoubleClickCallback InCallback) { DoubleClickCallback = InCallback; }
     // 에디터 전체가 공유하는 다중 선택 목록 (TEAM1). 연결하지 않으면 한 개만 선택한다.
     void SetSelection(FEditorSelection* InSelection) { Selection = InSelection; }

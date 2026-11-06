@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -553,11 +554,9 @@ void FPoseRetargetPanel::DrawMapping()
 
 void FPoseRetargetPanel::OnRender()
 {
-	bool bOpen = IsOpen();
-	if (!ImGui::Begin(GetPanelName(), &bOpen))
+	if (!BeginPanel())
 	{
 		ImGui::End();
-		SetOpen(bOpen);
 		return;
 	}
 	DrawRigPicker(0);
@@ -660,7 +659,6 @@ void FPoseRetargetPanel::OnRender()
 		ImGui::EndChild();
 	}
 	ImGui::End();
-	SetOpen(bOpen);
 }
 
 void FPoseRetargetPanel::DrawBones(int32 Index, FLineBatcher& Lines, const FMatrix& ViewProjection) const

@@ -1,21 +1,28 @@
 #pragma pack_matrix(row_major)
 
+// Reflection equation and shading frequency are orthogonal compile-time axes.
+#if !defined(SHADING_MODEL_GOURAUD) && !defined(SHADING_MODEL_PHONG) && !defined(VIEW_MODE_UNLIT) && !defined(VIEW_MODE_WORLD_NORMAL)
+    #define SHADING_MODEL_PHONG 1
+#endif
+#if !defined(REFLECTION_MODEL_PHONG) && !defined(REFLECTION_MODEL_BLINN_PHONG) && !defined(REFLECTION_MODEL_LAMBERT)
+    #define REFLECTION_MODEL_LAMBERT 1
+#endif
+#ifndef REFLECTION_MODEL_LAMBERT
+    #define REFLECTION_MODEL_LAMBERT 0
+#endif
+#if (SHADING_MODEL_GOURAUD + SHADING_MODEL_PHONG + VIEW_MODE_UNLIT + VIEW_MODE_WORLD_NORMAL) != 1
+    #error Exactly one shading model or view mode must be enabled.
+#endif
+#if (REFLECTION_MODEL_PHONG + REFLECTION_MODEL_BLINN_PHONG + REFLECTION_MODEL_LAMBERT) != 1
+    #error Exactly one reflection model must be enabled.
+#endif
+
 #include "LightData.hlsli"
 #include "LightEvaluation.hlsli"
 #include "LightGridCommon.hlsli"
 #include "NormalMapCommon.hlsli"
 #include "Skinning.hlsli"
 #include "MaterialUV.hlsli"
-
-// 셰이더 스캐너는 매크로 정의 없이 이 파일을 컴파일하므로 기본 변형에는 Lambert를 쓴다.
-// 명시적인 변형은 조명 모델 또는 뷰 모드 하나만 1로 설정한다.
-#if !defined(LIGHTING_MODEL_GOURAUD) && !defined(LIGHTING_MODEL_LAMBERT) && !defined(LIGHTING_MODEL_PHONG) && !defined(LIGHTING_MODEL_UNLIT) && !defined(VIEW_MODE_WORLD_NORMAL)
-    #define LIGHTING_MODEL_LAMBERT 1
-#endif
-
-#if (LIGHTING_MODEL_GOURAUD + LIGHTING_MODEL_LAMBERT + LIGHTING_MODEL_PHONG + LIGHTING_MODEL_UNLIT + VIEW_MODE_WORLD_NORMAL) != 1
-    #error Exactly one lighting model or view mode must be enabled.
-#endif
 
 struct FAmbientLightInfo
 {
@@ -93,7 +100,7 @@ struct VS_OUT
     float3 MaterialWorldPos : TEXCOORD6;
     float3 MaterialLocalPos : TEXCOORD7;
     float3 MaterialLocalNormal : TEXCOORD8;
-#if LIGHTING_MODEL_GOURAUD
+#if SHADING_MODEL_GOURAUD
     float3 VertexDiffuse : TEXCOORD1;
     float3 VertexSpecular : TEXCOORD2;
 #elif !VIEW_MODE_WORLD_NORMAL
@@ -114,8 +121,12 @@ struct FUberOutput
 // Gouraud는 채널을 받지 않으므로 정점 셰이더에서 불려도 마스크를 읽지 않는다.
 float GetLightShadow(FLightRenderParameters Light, float3 PixelPosition)
 {
+#if SHADING_MODEL_GOURAUD
+    return 1.0f;
+#else
     if (Light.ShadowMapChannel == INVALID_SHADOW_CHANNEL || ShadowFlags.x < 0.5f) return 1.0f;
     return ScreenShadowMask.Load(int3(int2(PixelPosition.xy), 0))[Light.ShadowMapChannel];
+#endif
 }
 
 // 조명과 World Normal 보기가 같은 노멀맵 해석 및 TBN 변환을 사용한다.
@@ -426,8 +437,8 @@ VS_OUT Uber_VS(VS_IN Input)
     // CPU가 구한 로컬 공간 부호에 월드 변환의 거울 반전만 반영한다.
     float Handedness = Input.Tangent.w * (determinant((float3x3)World) < 0.0f ? -1.0f : 1.0f);
     Output.WorldTangent = float4(T, Handedness);
-#if LIGHTING_MODEL_GOURAUD
-    FLightResult Lit = CalculateLighting(float3(0.0f, 0.0f, 0.0f), WorldPosition.xyz, ViewPosition.x, N, true);
+#if SHADING_MODEL_GOURAUD
+    FLightResult Lit = CalculateLighting(float3(0.0f, 0.0f, 0.0f), WorldPosition.xyz, ViewPosition.x, N, !REFLECTION_MODEL_LAMBERT);
     Output.VertexDiffuse = Lit.Diffuse;
     Output.VertexSpecular = Lit.Specular;
 #elif !VIEW_MODE_WORLD_NORMAL
@@ -471,7 +482,7 @@ FUberOutput Uber_PS(VS_OUT Input)
         Albedo = Albedo * (1.0f - LitDecal.a) + LitDecal.rgb;
     }
 
-#if LIGHTING_MODEL_LAMBERT || LIGHTING_MODEL_PHONG
+#if SHADING_MODEL_PHONG
     if (bReceiveDecal)
     {
         float4 DecalNormal =
@@ -494,18 +505,14 @@ FUberOutput Uber_PS(VS_OUT Input)
         float3 Diffuse;
     float3 Specular = 0.0f;
 
-#if LIGHTING_MODEL_GOURAUD
+#if SHADING_MODEL_GOURAUD
     Diffuse = Input.VertexDiffuse;
     Specular = Input.VertexSpecular;
-#elif LIGHTING_MODEL_LAMBERT
-    // 픽셀 위치와 깊이를 함께 전달한다.
-    Diffuse = CalculateTiledLighting(Input.Position.xyz, Input.WorldPosition, Input.ViewDepth, ShadingNormal, false).Diffuse;
-#elif LIGHTING_MODEL_PHONG
-    // 같은 목록 선택 경로에서 기존 Blinn-Phong 조명을 계산한다.
-    FLightResult Lit = CalculateTiledLighting(Input.Position.xyz, Input.WorldPosition, Input.ViewDepth, ShadingNormal, true);
+#elif SHADING_MODEL_PHONG
+    FLightResult Lit = CalculateTiledLighting(Input.Position.xyz, Input.WorldPosition, Input.ViewDepth, ShadingNormal, !REFLECTION_MODEL_LAMBERT);
     Diffuse = Lit.Diffuse;
     Specular = Lit.Specular;
-#elif LIGHTING_MODEL_UNLIT
+#elif VIEW_MODE_UNLIT
     // 조명·그림자를 계산하지 않고 표면 색을 그대로 낸다.
     Diffuse = 1.0f;
 #endif

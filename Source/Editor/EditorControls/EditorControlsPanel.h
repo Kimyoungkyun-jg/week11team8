@@ -47,10 +47,11 @@ public:
 
 	// 목록은 알파벳순이다. Items와 Classes는 같은 인덱스끼리 짝이므로 순서를 함께 바꿔야 한다.
 	// 기본 선택은 StaticMesh다.
-	int32 SelectedIndex = 9;
+	int32 SelectedIndex = 10;
 
-	const char* Items[11] = {
+	const char* Items[12] = {
 		"Decal",
+		"Empty Actor",
 		"FakeSpotLight",
 		"FireBall",
 		"HeightFog",
@@ -72,6 +73,7 @@ public:
 	TArray<UClass*> Classes
 	{
 		ADecalActor::StaticClass(),
+		AActor::StaticClass(),
 		AFakeSpotLightActor::StaticClass(),
 		AFireBallActor::StaticClass(),
 		AExponentialHeightFogActor::StaticClass(),

@@ -246,7 +246,7 @@ bool FSceneRenderer::BindForwardLighting(FRenderer* Renderer, const FSceneRender
 	}
 
 	FPipelineState* BasePSO = FRenderResourceManager::GetPSO(EPSOType::StaticMesh_Forward);
-	FShaderProgram* Program = FRenderResourceManager::GetForwardShaderProgram(Options.LightingModel);
+	FShaderProgram* Program = FRenderResourceManager::GetForwardShaderProgram(Options.ReflectionModel, Options.ShadingModel, false, Options.bUnlit);
 	if (!BasePSO || !Program)
 	{
 		return false;
@@ -516,7 +516,7 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 		{
 			FMeshPassProcessor Processor;
 			if (!Processor.Build(View, RenderData.RenderQueue, &RenderData,
-				EMeshPassType::Forward, ForwardBatches, Options.LightingModel)) return false;
+				EMeshPassType::Forward, ForwardBatches, Options)) return false;
 		}
 		
 		// Receiver Decal 수집
@@ -651,8 +651,8 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 		std::memcpy(GridLighting.LightOffsets, RenderData.LightParameterOffsets, sizeof(RenderData.LightParameterOffsets));
 
 		// 픽셀 조명 경로에서만 목록을 사용한다.
-		const ELightCullingMode CullingMode = !View.bIsWireframe && Options.LightingModel != ELightingModel::Gouraud &&
-			Options.LightingModel != ELightingModel::Unlit ? Options.LightCullingMode : ELightCullingMode::Off;
+		const ELightCullingMode CullingMode = !View.bIsWireframe && Options.ShadingModel != EShadingModel::Gouraud &&
+			!Options.bUnlit ? Options.LightCullingMode : ELightCullingMode::Off;
 
 		// Off도 이번 프레임의 화면 정보와 입력 광원 개수를 갱신한다.
 		bool bUseDepthPrepass = false;
@@ -963,9 +963,11 @@ bool FSceneRenderer::AddViewportPasses(FRenderGraphBuilder& Graph, FRenderer* Re
 	{
 		// 디버그 보기에서 현재 뷰의 실제 타일 목록을 생성한다.
 		CoreOptions.RenderingPath = ERenderingPath::Forward;
-		CoreOptions.LightingModel = ELightingModel::Lambert;
+		CoreOptions.ReflectionModel = EReflectionModel::Lambert;
+		CoreOptions.ShadingModel = EShadingModel::Phong;
+		CoreOptions.bUnlit = false;
 	}
-	else if (Options.LightingModel == ELightingModel::Unlit)
+	else if (Options.bUnlit)
 	{
 		// Deferred 조명 패스는 Unlit 변형이 없다. 조명이 필요 없으므로 Uber Shader의 Unlit 변형으로 바로 그린다.
 		CoreOptions.RenderingPath = ERenderingPath::Forward;

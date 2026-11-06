@@ -12,7 +12,7 @@ ADecalActor::ADecalActor()
 		"DecalComponent"
 	);
 
-	DecalComponent->SetupAttachment(GetRootComponent());
+	SetRootComponent(DecalComponent);
 
 	BillboardComponent =
 		CreateDefaultSubobject<UBillboardComponent>(

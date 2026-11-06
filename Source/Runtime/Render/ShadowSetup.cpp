@@ -179,7 +179,7 @@ void FSceneRenderer::InitDynamicShadows(const FSceneRenderOptions& Options)
 	RenderData.VisibleLightInfos.SetNum(Scene.Lights.Num());
 
 	// Unlit은 조명을 계산하지 않으므로 그림자도 만들지 않는다 (언리얼 EngineShowFlags.Lighting).
-	if (Options.LightingModel == ELightingModel::Unlit) return;
+	if (Options.bUnlit) return;
 	// r.ShadowQuality 0: 그림자를 끈다
 	if (GShadowCVars.ShadowQuality == 0) return;
 
@@ -510,7 +510,7 @@ void FSceneRenderer::FinalizeShadowLights(const FSceneRenderOptions& Options)
 
 	const bool bForward = Options.RenderingPath != ERenderingPath::Deferred;
 	// Gouraud는 정점에서 조명을 끝내므로 화면 마스크를 광원별로 곱할 수 없다.
-	const bool bAllowChannels = !(bForward && Options.LightingModel == ELightingModel::Gouraud);
+	const bool bAllowChannels = !(bForward && Options.ShadingModel == EShadingModel::Gouraud);
 
 	// Forward 채널 배정 (언리얼 AssignAvailableShadowMapChannelForLight): 영향 범위가 겹치는 광원끼리만 다른 채널을 받는다.
 	struct FAssignedChannel { FSphere Bounds; bool bDirectional; uint32 Channel; };

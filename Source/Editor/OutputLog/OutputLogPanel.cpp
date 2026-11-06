@@ -52,14 +52,20 @@ void FOutputLogPanel::OnRender()
 {
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(520.0f), EditorUIScale::Px(600.0f)), ImGuiCond_FirstUseEver);
 
-	ImGui::Begin("Output Log");
+	if (!BeginPanel())
+	{
+		ImGui::End();
+		return;
+	}
 
 	//////////////////////////////////////////////////////////
 
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(EditorUIScale::Px(10.0f), EditorUIScale::Px(5.0f)));
+	ImGui::AlignTextToFramePadding();
 	ImGui::TextDisabled("Filter");
 	ImGui::SameLine();
 
-	Filter.Draw("##Filter", 180.0f);
+	Filter.Draw("##Filter", EditorUIScale::Px(180.0f));
 
 	ImGui::SameLine();
 	ImGui::TextDisabled("[?]");
@@ -74,15 +80,17 @@ void FOutputLogPanel::OnRender()
 		);
 	}
 
-	ImGui::SameLine();
+	EditorUIScale::SameLineIfFits(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize("Auto-scroll").x);
 	ImGui::Checkbox("Auto-scroll", &AutoScroll);
 
-	ImGui::SameLine();
-	if (ImGui::SmallButton("Clear"))
+	const float ButtonWidth = std::max(EditorUIScale::Px(72.0f), EditorUIScale::ButtonWidth("Clear"));
+	EditorUIScale::SameLineIfFits(ButtonWidth);
+	if (ImGui::Button("Clear", ImVec2(ButtonWidth, 0.0f)))
 		ClearLog();
 
-	ImGui::SameLine();
-	bool CopyToClipboard = ImGui::SmallButton("Copy");
+	EditorUIScale::SameLineIfFits(ButtonWidth);
+	bool CopyToClipboard = ImGui::Button("Copy", ImVec2(ButtonWidth, 0.0f));
+	ImGui::PopStyleVar();
 
 	ImGui::Separator();
 

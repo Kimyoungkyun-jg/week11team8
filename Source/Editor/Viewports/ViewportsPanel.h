@@ -20,6 +20,7 @@ public:
 	// 각 View Texture와 Splitter·Layout 조작 UI를 ImGui 패널에 그린다.
 	void OnRender() override;
 	const char *GetPanelName() const override { return "Viewports"; }
+	void OnHidden() override { bHovered = false; bFocused = false; bStatResetButtonVisible = false; }
 
 	// Core가 계산한 View Rect에 맞춰 해당 클라이언트의 활성 상태와 크기를 갱신한다.
 	void SetView(int32 ViewIndex, const FRect &Rect, bool bActive);
@@ -29,7 +30,7 @@ public:
 	FVector2 GetContentScreenOrigin() const { return {ContentOrigin.x, ContentOrigin.y}; }
 	FVector2 GetLocalMousePosition() const;
 	bool IsHovered() const;
-	bool IsFocused() const { return bFocused; }
+	bool IsFocused() const { return IsOpen() && bFocused; }
 
 	float ConsumeHorizontalDrag();
 	float ConsumeVerticalDrag();
@@ -86,6 +87,10 @@ private:
 	bool bHovered = false;
 	bool bFocused = false;
 	bool bStatResetButtonVisible = false;
+	bool bToolbarPopupOpen = false;
+	bool bToolbarVisible[4]{};
+	ImVec2 ToolbarMin[4]{};
+	ImVec2 ToolbarMax[4]{};
 	ImVec2 StatResetButtonMin{};
 	ImVec2 StatResetButtonMax{};
 	float PendingHorizontalDrag = 0.0f;

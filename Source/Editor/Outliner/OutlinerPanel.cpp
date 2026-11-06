@@ -1,4 +1,4 @@
-﻿#include "EnginePCH.h"
+#include "EnginePCH.h"
 #include "Editor/Outliner/OutlinerPanel.h"
 
 #include "Engine/Level.h"
@@ -32,7 +32,11 @@ void FOutlinerPanel::OnRender()
         return;
 
     // Level의 Actor 목록 Tree 출력
-    ImGui::Begin("Outliner");
+    if (!BeginPanel())
+    {
+        ImGui::End();
+        return;
+    }
 
     DrawActors(Level);
 
@@ -216,9 +220,9 @@ void FOutlinerPanel::DrawActorNode(const FOutlinerRow& Row)
             SelectActor(Actor);
     }
 
-    // 더블 클릭은 UE처럼 포커스다. 이름 변경은 F2와 우클릭 메뉴로 한다. 화살표를 빠르게 두 번 누른 것은 제외한다.
-    if (DoubleClickCallback && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
-        DoubleClickCallback(Actor);
+    // 더블 클릭으로 이름 편집을 시작한다. 계층 화살표를 빠르게 두 번 누른 것은 제외한다.
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
+        BeginActorRename(Actor);
 
     // 다른 액터 위에 끌어다 놓으면 그 액터에 붙인다 (TEAM5).
     if (ImGui::BeginDragDropSource())

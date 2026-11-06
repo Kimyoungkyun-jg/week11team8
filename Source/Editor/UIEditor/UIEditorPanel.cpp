@@ -13,7 +13,11 @@
 
 void FUIEditorPanel::OnRender()
 {
-	ImGui::Begin(GetPanelName(), nullptr, ImGuiWindowFlags_MenuBar);
+	if (!BeginPanel(ImGuiWindowFlags_MenuBar))
+	{
+		ImGui::End();
+		return;
+	}
 	DrawToolbar();
 
 	if (!Root)

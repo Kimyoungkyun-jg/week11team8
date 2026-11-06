@@ -54,7 +54,7 @@ FContentDrawerPanel::~FContentDrawerPanel()
 
 bool FContentDrawerPanel::Init()
 {
-	return false;
+	return true;
 }
 
 void FContentDrawerPanel::Tick(float DeltaTime)
@@ -64,7 +64,11 @@ void FContentDrawerPanel::Tick(float DeltaTime)
 
 void FContentDrawerPanel::OnRender()
 {
-	ImGui::Begin("Content Drawer");
+	if (!BeginPanel())
+	{
+		ImGui::End();
+		return;
+	}
 	std::error_code Error;
 
 	if (!fs::is_directory(CurrentPath, Error))
@@ -102,6 +106,18 @@ void FContentDrawerPanel::OnRender()
 
 	ImGui::BeginChild("AssetGridView");
 	{
+		ImGui::BeginDisabled(CurrentPath == AssetRootPath);
+		if (ImGui::Button(".."))
+		{
+			CurrentPath = CurrentPath.parent_path();
+			SelectedAssetPath.clear();
+		}
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("Go to parent folder");
+		ImGui::SameLine();
+		ImGui::TextUnformatted(FbxPath::ToString(CurrentPath).c_str());
+		ImGui::Separator();
+
 		// 빈 곳 우클릭 (항목 위 우클릭은 제외)
 		if (ImGui::BeginPopupContextWindow("##DrawerContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 		{

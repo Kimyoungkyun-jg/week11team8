@@ -390,6 +390,9 @@ void FImGuiRenderer::RestoreShadowPreview(const ImDrawList*, const ImDrawCmd* Co
 
 void FImGuiRenderer::Shutdown()
 {
+	// 자동 저장 대기 중에 종료해도 마지막 레이아웃과 패널 열림 상태를 남긴다.
+	if (ImGui::GetIO().IniFilename)
+		ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
 	PreviewTextures.clear();
 	PreviousPSConstants.Reset();
 	ShadowPreviewSampler.Reset();

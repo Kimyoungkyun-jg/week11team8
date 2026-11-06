@@ -16,6 +16,8 @@ public:
 	void Tick(float DeltaTime) override;
 	void OnRender() override;
 	const char* GetPanelName() const override { return "Pose Retarget"; }
+	bool IsRootPanel() const override { return true; }
+	const char* GetOpenStateSettingsName() const override { return "PoseRetarget"; }
 	void Release();
 	UWorld* GetWorld(int32 Index) const { return Index >= 0 && Index < 3 ? PreviewWorlds[Index] : nullptr; }
 	FEditorViewportClient& GetViewport(int32 Index) { return Viewports[Index]; }

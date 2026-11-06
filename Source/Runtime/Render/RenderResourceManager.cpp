@@ -75,10 +75,21 @@ void FRenderResourceManager::InitPipelineStates()
 	if (DepthProgram && DepthProgram->VertexShader)
 		ShaderProgramMap["ShadowDepth"] = MakeUnique<FShaderProgram>(DepthProgram->VertexShader, nullptr);
 
-	const char* Names[] = { "LIGHTING_MODEL_GOURAUD", "LIGHTING_MODEL_LAMBERT", "LIGHTING_MODEL_PHONG", "LIGHTING_MODEL_UNLIT", "VIEW_MODE_WORLD_NORMAL" };
-	for (const char* Name : Names)
+	struct FForwardVariant { const char* Name; const char* Shading; const char* Reflection; };
+	const FForwardVariant Variants[] = {
+		{ "GouraudPhong", "SHADING_MODEL_GOURAUD", "REFLECTION_MODEL_PHONG" },
+		{ "GouraudBlinnPhong", "SHADING_MODEL_GOURAUD", "REFLECTION_MODEL_BLINN_PHONG" },
+		{ "GouraudLambert", "SHADING_MODEL_GOURAUD", "REFLECTION_MODEL_LAMBERT" },
+		{ "PhongPhong", "SHADING_MODEL_PHONG", "REFLECTION_MODEL_PHONG" },
+		{ "PhongBlinnPhong", "SHADING_MODEL_PHONG", "REFLECTION_MODEL_BLINN_PHONG" },
+		{ "PhongLambert", "SHADING_MODEL_PHONG", "REFLECTION_MODEL_LAMBERT" },
+		{ "VIEW_MODE_UNLIT", "VIEW_MODE_UNLIT", "REFLECTION_MODEL_LAMBERT" },
+		{ "VIEW_MODE_WORLD_NORMAL", "VIEW_MODE_WORLD_NORMAL", "REFLECTION_MODEL_LAMBERT" }
+	};
+	for (const auto& Variant : Variants)
 	{
-		const D3D_SHADER_MACRO Defines[] = { { Name, "1" }, { nullptr, nullptr } };
+		const char* Name = Variant.Name;
+		const D3D_SHADER_MACRO Defines[] = { { Variant.Shading, "1" }, { Variant.Reflection, "1" }, { nullptr, nullptr } };
 		const FString Path = "Resources/Shader/UberLit.hlsl";
 		// 변형도 .cso 캐시를 쓴다(매크로 이름이 캐시 파일 이름에 들어간다). 매번 컴파일하면 Release에서 시작이 크게 늦어진다.
 		FString VSCSOPath;
@@ -105,7 +116,7 @@ void FRenderResourceManager::InitPipelineStates()
 		if (std::strcmp(Name, "VIEW_MODE_WORLD_NORMAL") == 0)
 			PipelineStateMap[EPSOType::StaticMesh_WorldNormal]->Shader = ShaderProgramMap[Key].get();
 
-		const D3D_SHADER_MACRO SkinningDefines[] = { { Name, "1" }, { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
+		const D3D_SHADER_MACRO SkinningDefines[] = { { Variant.Shading, "1" }, { Variant.Reflection, "1" }, { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
 		FString SkinningVSPath;
 		FShaderByteCode SkinningCode = RenderUtil::GetOrCompile(Path, "mainVS", EShaderType::Vertex, SkinningVSPath, SkinningDefines);
 		if (!SkinningCode.IsValid()) continue;
@@ -140,16 +151,12 @@ FShaderProgram* FRenderResourceManager::GetShadowDepthShaderProgram()
 	return nullptr;
 }
 
-FShaderProgram* FRenderResourceManager::GetForwardShaderProgram(ELightingModel Model, bool bGPUSkinning)
+FShaderProgram* FRenderResourceManager::GetForwardShaderProgram(EReflectionModel Reflection, EShadingModel Shading, bool bGPUSkinning, bool bUnlit)
 {
-	const char* Name = "LIGHTING_MODEL_LAMBERT";
-	switch (Model)
-	{
-	case ELightingModel::Gouraud: Name = "LIGHTING_MODEL_GOURAUD"; break;
-	case ELightingModel::Phong: Name = "LIGHTING_MODEL_PHONG"; break;
-	case ELightingModel::Unlit: Name = "LIGHTING_MODEL_UNLIT"; break;
-	default: break;
-	}
+	const char* ReflectionName = Reflection == EReflectionModel::Phong ? "Phong" :
+		Reflection == EReflectionModel::Lambert ? "Lambert" : "BlinnPhong";
+	const FString Name = bUnlit ? FString("VIEW_MODE_UNLIT") :
+		FString(Shading == EShadingModel::Gouraud ? "Gouraud" : "Phong") + ReflectionName;
 	const FString Key = FString("Resources/Shader/UberLit.hlsl#") + Name + (bGPUSkinning ? "#GPU" : "");
 	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
 	return nullptr;

@@ -444,6 +444,7 @@ imgui.ini
 editor.ini
 
 # 3D .obj 파일은 커밋 허용
+!/Assets/Models/OBJ/
 !Assets/**/*.obj
 
 # Bake 결과 (실행 시 자동 생성, 원본을 수정하면 지우고 다시 실행)

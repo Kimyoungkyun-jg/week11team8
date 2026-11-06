@@ -126,7 +126,7 @@ namespace
 		return ToGenericUtf8((ScriptRoot / Relative));
 	}
 
-	// Lua 스크립트 연결 UI (TEAM5 형식): 파일 이름 입력 | Apply | Browse..., 드래그앤드롭, 전체 폭 Edit Script
+	// 클래스별 접이식 헤더 안에 표시하는 Lua 스크립트 연결 UI.
 	void DrawScriptSection(UScriptComponent* Script)
 	{
 		static UScriptComponent* EditingScript = nullptr;
@@ -148,8 +148,6 @@ namespace
 			if (!Resolved.empty())
 				Script->SetScriptPath(Resolved);   // UPROPERTY라 씬 저장 때 같이 저장된다
 		};
-
-		ImGui::SeparatorText("Lua Script");
 
 		if (!Script->GetScriptPath().empty())
 			ImGui::TextWrapped("File: %s", Script->GetScriptPath().c_str());
@@ -1018,20 +1016,32 @@ namespace
 
 		const char* DisplayName = Property.Name.c_str();
 
-		// 패널이 넓으면 라벨 | 값을 한 줄에, 좁거나 라벨이 길면 라벨 아래 줄에 값을 놓는다.
+		// 라벨 | 값 배치를 유지하고 긴 라벨은 라벨 영역에서 잘라낸다.
 		const float StartX = ImGui::GetCursorPosX();
 		const float AvailableWidth = ImGui::GetContentRegionAvail().x;
-		const float LabelWidth = AvailableWidth * 0.45f;
+		// 체크박스는 오른쪽 끝에 맞추고 나머지 공간을 라벨에 배정한다.
+		const float LabelWidth = Property.Type == EPropertyType::Bool
+			? std::max(0.0f, AvailableWidth - ImGui::GetFrameHeight())
+			: AvailableWidth * 0.45f;
 
-		const bool bInline = Property.Type != EPropertyType::Transform && AvailableWidth >= EditorUIScale::Px(260.0f) && ImGui::CalcTextSize(DisplayName).x < LabelWidth;
+		const bool bInline = Property.Type != EPropertyType::Transform;
 
 		ImGui::AlignTextToFramePadding();
-		ImGui::TextWrapped("%s", DisplayName);
-
 		if (bInline)
 		{
+			const ImVec2 LabelStart = ImGui::GetCursorScreenPos();
+			const float ClipWidth = std::max(0.0f, LabelWidth - ImGui::GetStyle().ItemSpacing.x);
+			ImGui::PushClipRect(LabelStart, ImVec2(LabelStart.x + ClipWidth, LabelStart.y + ImGui::GetFrameHeight()), true);
+			ImGui::PushTextWrapPos(-1.0f);
+			ImGui::TextUnformatted(DisplayName);
+			ImGui::PopTextWrapPos();
+			ImGui::PopClipRect();
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(StartX + LabelWidth);
+		}
+		else
+		{
+			ImGui::TextWrapped("%s", DisplayName);
 		}
 
 		ImGui::SetNextItemWidth(-1.0f);
@@ -1188,7 +1198,11 @@ namespace
 		{
 			UClass* Class = *It;
 
-			// 노출할 프로퍼티가 하나도 없으면 헤더도 그리지 않는다
+			// 스크립트는 경로 검증을 위한 전용 UI를 같은 클래스 헤더 안에 표시한다.
+			UScriptComponent* ScriptComponent = Class == UScriptComponent::StaticClass()
+				? Cast<UScriptComponent>(Object) : nullptr;
+
+			// 노출할 프로퍼티나 전용 UI가 없으면 헤더도 그리지 않는다.
 			bool bHasVisibleProperty = false;
 			for (const FProperty& Property : Class->GetProperties())
 			{
@@ -1198,7 +1212,7 @@ namespace
 					break;
 				}
 			}
-			if (!bHasVisibleProperty)
+			if (!bHasVisibleProperty && !ScriptComponent)
 			{
 				continue;
 			}
@@ -1217,6 +1231,10 @@ namespace
 					if (bReadOnly) ImGui::BeginDisabled();
 					DrawProperty(Object, Property, CustomFont);
 					if (bReadOnly) ImGui::EndDisabled();
+				}
+				if (ScriptComponent)
+				{
+					DrawScriptSection(ScriptComponent);
 				}
 			}
 			ImGui::PopID();
@@ -1361,7 +1379,11 @@ void FDetailsPanel::OnRender()
 {
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(400.0f), EditorUIScale::Px(200.0f)), ImGuiCond_FirstUseEver);
 
-	ImGui::Begin("Details");
+	if (!BeginPanel())
+	{
+		ImGui::End();
+		return;
+	}
 
 	if (TargetActor)
 	{
@@ -1402,10 +1424,6 @@ void FDetailsPanel::OnRender()
 			if (UDecalComponent* DecalComponent = Cast<UDecalComponent>(TargetComponent))
 			{
 				DrawDecalMaterial(DecalComponent);
-			}
-			if (UScriptComponent* ScriptComponent = Cast<UScriptComponent>(TargetComponent))
-			{
-				DrawScriptSection(ScriptComponent);
 			}
 			ImGui::PopID();
 
@@ -1448,6 +1466,17 @@ void FDetailsPanel::DrawCompoenetList(AActor* SelectedActor, UActorComponent*& O
 {
 	if (!SelectedActor) { return; }
 
+	// 트리를 순회하는 도중에는 계층을 바꾸지 않는다.
+	if (PendingRootComponent)
+	{
+		if (SelectedActor->ReplaceRootComponent(PendingRootComponent))
+		{
+			OutSelectedComponent = PendingRootComponent;
+			SelectComponent(PendingRootComponent);
+		}
+		PendingRootComponent = nullptr;
+	}
+
 	if (PendingDragComponent && PendingDroppedComponent)
 	{
 		TryReparent(PendingDroppedComponent, PendingDragComponent);
@@ -1462,9 +1491,8 @@ void FDetailsPanel::DrawCompoenetList(AActor* SelectedActor, UActorComponent*& O
 		DrawSceneComponentNode(Root, Root, OutSelectedComponent);
 	}
 
-	ImGui::Separator();
-
 	// Draw ActorComponent
+	bool bHasDrawnActorComponent = false;
 	for (UActorComponent* ActorComp : SelectedActor->GetComponents())
 	{
 		if (!ActorComp || Cast<USceneComponent>(ActorComp))
@@ -1472,8 +1500,15 @@ void FDetailsPanel::DrawCompoenetList(AActor* SelectedActor, UActorComponent*& O
 			continue;
 		}
 
+		if (!bHasDrawnActorComponent)
+		{
+			ImGui::Separator();
+			bHasDrawnActorComponent = true;
+		}
+
 		ImGui::PushID(ActorComp);
-		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+			ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
 		if (ActorComp == OutSelectedComponent)
 		{
 			Flags |= ImGuiTreeNodeFlags_Selected;
@@ -1483,7 +1518,10 @@ void FDetailsPanel::DrawCompoenetList(AActor* SelectedActor, UActorComponent*& O
 		const ImVec2 RowStart = ImGui::GetCursorScreenPos();
 		const float RowWidth = ImGui::GetContentRegionAvail().x;
 
+		const float RowPadding = std::max(ImGui::GetStyle().FramePadding.y, EditorUIScale::Px(6.0f));
+		ImGui::PushStyleVarY(ImGuiStyleVar_FramePadding, RowPadding);
 		ImGui::TreeNodeEx("ActorComponentNode", Flags, "%s", Label.c_str());
+		ImGui::PopStyleVar();
 
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
 		{
@@ -1499,7 +1537,7 @@ void FDetailsPanel::DrawCompoenetList(AActor* SelectedActor, UActorComponent*& O
 
 		const FString ClassName = std::format("({})", ActorComp->GetClass()->Name);
 		const float TextX = RowStart.x + RowWidth - ImGui::CalcTextSize(ClassName.c_str()).x;
-		ImGui::GetWindowDrawList()->AddText(ImVec2(TextX, RowStart.y), IM_COL32(200, 200, 200, 255), ClassName.c_str());		
+		ImGui::GetWindowDrawList()->AddText(ImVec2(TextX, RowStart.y + RowPadding), IM_COL32(200, 200, 200, 255), ClassName.c_str());
 
 		ImGui::PopID();
 	}
@@ -1524,7 +1562,7 @@ void FDetailsPanel::DrawSceneComponentNode(USceneComponent* Component, USceneCom
 	const bool bIsLeaf = Children.IsEmpty();
 	bIsEditingName = (EditingNameComponent == Component);
 
-	ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
+	ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_FramePadding;
 	if (Component == OutSelectedComponent)
 	{
 		Flags |= ImGuiTreeNodeFlags_Selected;
@@ -1541,7 +1579,11 @@ void FDetailsPanel::DrawSceneComponentNode(USceneComponent* Component, USceneCom
 	ImGui::PushID(Component);
 	const ImVec2 RowStart = ImGui::GetCursorScreenPos();
 	const float RowWidth = ImGui::GetContentRegionAvail().x;
+	// 위아래 여백도 클릭/드롭 영역에 포함해 작은 컴포넌트 행을 고르기 쉽게 한다.
+	const float RowPadding = std::max(ImGui::GetStyle().FramePadding.y, EditorUIScale::Px(6.0f));
+	ImGui::PushStyleVarY(ImGuiStyleVar_FramePadding, RowPadding);
 	const bool bOpen = ImGui::TreeNodeEx("ComponentNode", Flags, "%s", bIsEditingName ? "" : Label.c_str());
+	ImGui::PopStyleVar();
 
 	USceneComponent* DragComponent = Component;
 
@@ -1588,6 +1630,8 @@ void FDetailsPanel::DrawSceneComponentNode(USceneComponent* Component, USceneCom
 				BeginRename();
 			if (!bCanRename && Component != Root && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 				ImGui::SetTooltip("Only components added in the editor can be renamed.\nNative components are matched by name when the scene loads.");
+			if (ImGui::MenuItem("Make Root", nullptr, false, Component != Root && Component->GetOwner() == TargetActor))
+				PendingRootComponent = Component;
 			if (ImGui::MenuItem("Delete", nullptr, false, Component != Root))
 				PendingDeleteComponent = Component;
 			ImGui::EndPopup();
@@ -1595,7 +1639,7 @@ void FDetailsPanel::DrawSceneComponentNode(USceneComponent* Component, USceneCom
 
 		const FString ClassName = std::format("({})", Component->GetClass()->Name);
 		const float TextX = RowStart.x + RowWidth - ImGui::CalcTextSize(ClassName.c_str()).x;
-		ImGui::GetWindowDrawList()->AddText(ImVec2(TextX, RowStart.y), IM_COL32(200, 200, 200, 255), ClassName.c_str());
+		ImGui::GetWindowDrawList()->AddText(ImVec2(TextX, RowStart.y + RowPadding), IM_COL32(200, 200, 200, 255), ClassName.c_str());
 	}
 	else
 	{

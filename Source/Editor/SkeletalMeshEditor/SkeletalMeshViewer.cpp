@@ -1,7 +1,6 @@
 #include "EnginePCH.h"
 #include "Components/SkeletalMeshDebugComponent.h"
 #include "Asset/FbxImporter/FbxDebugScene.h"
-#include "Editor/EditorUI/EditorUI.h"
 #include "Editor/HitoriEd/EditorResourcePaths.h"
 #include "SkeletalMeshViewer.h"
 #include "Asset/AssetManager.h"
@@ -289,19 +288,29 @@ void FSkeletalMeshViewerPanel::Release()
 void FSkeletalMeshViewerPanel::OnRender()
 {
 	bHasFocusedViewer = false;
+	if (Viewers.IsEmpty())
+	{
+		if (BeginPanel())
+			ImGui::TextWrapped("Double-click a skeletal mesh in the Content Drawer to open a viewer.");
+		ImGui::End();
+		return;
+	}
 
 	// x 버튼으로 닫은 뷰어는 다음 프레임 맨 앞에서 지운다
 	for (int32 i = Viewers.Num() - 1; i >= 0; --i)
 		if (!Viewers[i]->bOpen)
 			Viewers.RemoveAt(i);
+	if (Viewers.IsEmpty())
+	{
+		SetOpen(false);
+		return;
+	}
 
 	for (TUniquePtr<FSkeletalMeshViewer>& Viewer : Viewers)
 	{
 		const FString Title = Viewer->Path + "###SkeletalMeshViewer" + std::to_string(Viewer->Id);
 		ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(800.0f), EditorUIScale::Px(600.0f)), ImGuiCond_FirstUseEver);
-		// 에셋 에디터는 루트 창이다 (TEAM5 2단 도킹). 처음 열면 Level Editor 옆 탭으로 붙고, 레벨 패널과는 섞이지 않는다.
-		ImGui::SetNextWindowClass(&FEditorUI::GetRootWindowClass());
-		ImGui::SetNextWindowDockID(FEditorUI::GetRootDockId(), ImGuiCond_FirstUseEver);
+		PreparePanelWindow(Title.c_str());
 		Viewer->bVisible = ImGui::Begin(Title.c_str(), &Viewer->bOpen);
 		if (Viewer->bVisible)
 		{

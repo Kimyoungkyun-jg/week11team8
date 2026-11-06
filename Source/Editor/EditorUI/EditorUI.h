@@ -6,19 +6,14 @@
 #include <functional>
 #include "Asset/FbxImporter/FbxAssetData.h"
 
-struct ImGuiWindowClass;
-
 class FEditorUI
 {
 public:
-	// 2단 도킹 (TEAM5). 루트 창 클래스가 있는 창(Level Editor, 에셋 에디터)만 바깥 도킹 공간에 탭으로 붙는다.
-	static const ImGuiWindowClass& GetRootWindowClass();
-	static const ImGuiWindowClass& GetLevelWindowClass();
-	static unsigned int GetRootDockId();
-
 	bool Init(bool bInUseDockSpace = true, bool bInPassthruCentralNode = false);
 	void Tick(float DeltaTime);
 	void OnRender();
+	// 모든 패널과 기본 열림 상태를 만든 뒤, 첫 ImGui 프레임 전에 호출한다.
+	void RegisterPanelSettings();
 	void OpenFbxImportDialog(const FString& Source = {}, const FString& Output = {}, const FFbxImportOptions& Options = {});
 	void SetFbxImportedCallback(std::function<void()> Callback) { OnFbxImported = std::move(Callback); }
 
@@ -46,6 +41,8 @@ public:
 private:
 	bool bUseDockSpace = true;
 	bool bPassthruCentralNode = false;
+	bool bLevelEditorOpen = true;
+	bool bResetLevelLayout = false;
 
 	void DrawMainMenuBar();
 	void DrawFbxImportDialog();

@@ -405,6 +405,7 @@ bool UEditorEngine::Init()
 		[this]() { return !IsPlaying(); });
 
 	FLuaScriptManager::Get().GetState().script("print('hello', 1 + 2, nil)");
+	EditorUI->RegisterPanelSettings();
 
 	return true;
 }
@@ -1247,7 +1248,19 @@ void UEditorEngine::BuildSceneRenderOptions(FGameViewportClient* ViewClient, FSc
 	Options.bCacheShadows = SettingsPanel->GetSettings().bCacheShadows;
 	Options.PcfMode = SettingsPanel->GetSettings().PcfMode;
 	Options.RenderingPath = SettingsPanel->GetSettings().RenderingPath;
-	Options.LightingModel = SettingsPanel->GetSettings().LightingModel;
+	Options.ReflectionModel = SettingsPanel->GetSettings().ReflectionModel;
+	Options.ShadingModel = SettingsPanel->GetSettings().ShadingModel;
+	if (ViewportsPanel)
+		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(ViewportsPanel->GetActiveViewIndex());
+			ActiveView && ActiveView->UsesClassicLighting())
+		{
+			Options.ReflectionModel = ActiveView->GetReflectionModel();
+			Options.ShadingModel = ActiveView->GetShadingModel();
+			Options.RenderingPath = ERenderingPath::Forward;
+			Options.bOverrideMaterialLighting = true;
+		}
+	USkeletalMeshComponent::SetSkinningMode(Options.RenderingPath == ERenderingPath::Forward
+		? SettingsPanel->GetSettings().SkinningMode : ESkinningMode::CPU);
 	Options.LightCullingMode = SettingsPanel->GetSettings().LightCullingMode;
 	Options.DirectionalShadowMapSize = SettingsPanel->GetSettings().GetDirectionalShadowMapSize();
 	Options.PointShadowMapSize = SettingsPanel->GetSettings().GetPointShadowMapSize();
@@ -1276,7 +1289,17 @@ void UEditorEngine::BuildSceneRenderOptions(FEditorViewportClient* ViewClient, b
 	Options.bCacheShadows = SettingsPanel->GetSettings().bCacheShadows;
 	Options.PcfMode = SettingsPanel->GetSettings().PcfMode;
 	Options.RenderingPath = SettingsPanel->GetSettings().RenderingPath;
-	Options.LightingModel = SettingsPanel->GetSettings().LightingModel;
+	Options.ReflectionModel = SettingsPanel->GetSettings().ReflectionModel;
+	Options.ShadingModel = SettingsPanel->GetSettings().ShadingModel;
+	if (ViewClient->UsesClassicLighting())
+	{
+		Options.ReflectionModel = ViewClient->GetReflectionModel();
+		Options.ShadingModel = ViewClient->GetShadingModel();
+		Options.RenderingPath = ERenderingPath::Forward;
+		Options.bOverrideMaterialLighting = true;
+	}
+	USkeletalMeshComponent::SetSkinningMode(Options.RenderingPath == ERenderingPath::Forward
+		? SettingsPanel->GetSettings().SkinningMode : ESkinningMode::CPU);
 	Options.LightCullingMode = SettingsPanel->GetSettings().LightCullingMode;
 	Options.DirectionalShadowMapSize = SettingsPanel->GetSettings().GetDirectionalShadowMapSize();
 	Options.PointShadowMapSize = SettingsPanel->GetSettings().GetPointShadowMapSize();
@@ -1292,7 +1315,7 @@ void UEditorEngine::BuildSceneRenderOptions(FEditorViewportClient* ViewClient, b
 	const EViewportMode ViewMode = ViewClient->GetViewportMode();
 	Options.bEnableFog = (ViewMode == EViewportMode::Solid || ViewMode == EViewportMode::Unlit) && ShowFlags.bFog;
 	if (!IsPIE && ViewMode == EViewportMode::Unlit)
-		Options.LightingModel = ELightingModel::Unlit;
+		Options.bUnlit = true;
 	Options.bShowSceneDepth = !IsPIE && ViewClient->IsSceneDepth();
 	Options.bShowCascade = !IsPIE && ViewClient->IsCascade();
 	Options.bShowShadowMask = !IsPIE && ViewClient->IsShadowMask();

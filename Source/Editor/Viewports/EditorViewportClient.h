@@ -7,6 +7,7 @@
 #include "Math/Vector2.h"
 #include "Render/SceneViewTargets.h"
 #include "Render/SceneView.h"
+#include "Render/RenderEnums.h"
 #include "Render/SceneRenderData.h"
 #include "Render/Texture2D.h"
 #include "Editor/Viewports/ViewShowFlags.h"
@@ -146,6 +147,12 @@ public:
 	bool IsShadowMask() const { return ViewportMode == EViewportMode::ShadowMask; }
 	EViewportMode GetViewportMode() const { return ViewportMode; }
 	void SetViewportMode(const EViewportMode InViewportMode) { ViewportMode = InViewportMode; }
+	EReflectionModel GetReflectionModel() const { return ReflectionModel; }
+	void SetReflectionModel(EReflectionModel Model) { ReflectionModel = Model; }
+	EShadingModel GetShadingModel() const { return ShadingModel; }
+	void SetShadingModel(EShadingModel Model) { ShadingModel = Model; }
+	bool UsesClassicLighting() const { return bUseClassicLighting; }
+	void SetUseClassicLighting(bool bEnabled) { bUseClassicLighting = bEnabled; }
 	float GetMaxRange() const { return MaxRange; }
 	FViewShowFlags& GetShowFlags() { return ShowFlags; }
 	const FViewShowFlags& GetShowFlags() const { return ShowFlags; }
@@ -162,6 +169,9 @@ protected:
 	bool bIsRealtime = true;
 	bool bActive = false;
 	EViewportMode ViewportMode = EViewportMode::Solid;
+	EReflectionModel ReflectionModel = EReflectionModel::BlinnPhong;
+	EShadingModel ShadingModel = EShadingModel::Gouraud;
+	bool bUseClassicLighting = false;
 
 	FRect Rect{};
 	uint32 Width = 0;

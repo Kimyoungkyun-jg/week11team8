@@ -23,7 +23,8 @@ struct FEditorSettings
 	ELightCullingMode LightCullingMode = ELightCullingMode::Tiled;
 	ERenderingPath RenderingPath = ERenderingPath::Deferred;
 	ESkinningMode SkinningMode = ESkinningMode::CPU;
-	ELightingModel LightingModel = ELightingModel::Gouraud;
+	EReflectionModel ReflectionModel = EReflectionModel::BlinnPhong;
+	EShadingModel ShadingModel = EShadingModel::Gouraud;
 	EDecalRenderMethod DecalRenderMethod = EDecalRenderMethod::MeshRerendering;
 
 	// Values
@@ -42,6 +43,9 @@ struct FEditorSettings
     int32 ViewPreset[4]{-1,-1,-1,-1};
     int32 ViewWireframe[4]{-1,-1,-1,-1};
     int32 ViewMode[4]{-1,-1,-1,-1};
+    int32 ViewReflectionModel[4]{-1,-1,-1,-1};
+    int32 ViewShadingModel[4]{-1,-1,-1,-1};
+    bool ViewClassicLighting[4]{};
     // 뷰포트 Show 메뉴의 뷰별 표시 항목
     FViewShowFlags ViewShowFlags[4]{};
 

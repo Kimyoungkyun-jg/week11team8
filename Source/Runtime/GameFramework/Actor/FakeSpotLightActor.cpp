@@ -8,6 +8,8 @@
 
 AFakeSpotLightActor::AFakeSpotLightActor()
 {
+	// 데칼과 빛 줄기의 상대 위치/크기를 유지할 공통 기준이다.
+	SetRootComponent(CreateDefaultSubobject<USceneComponent>("DefaultSceneRoot"));
 	// 페이크 스포트라이트 데칼
 	{
 		DecalComponent = CreateDefaultSubobject<UDecalComponent>("DecalComponent");

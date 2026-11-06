@@ -37,7 +37,10 @@ public:
 
 	const TArray<UActorComponent*>& GetComponents() const { return Components; }
 	USceneComponent* GetRootComponent() const { return RootComponent; }
-	void SetRootComponent(USceneComponent* SceneComponent) { RootComponent = SceneComponent; }
+	// 루트는 이 액터가 소유한 씬 컴포넌트만 지정할 수 있다. nullptr도 허용한다.
+	bool SetRootComponent(USceneComponent* SceneComponent);
+	// 기존 계층과 월드 Transform을 유지하며 소유한 씬 컴포넌트를 새 루트로 승격한다.
+	bool ReplaceRootComponent(USceneComponent* NewRoot);
 
 	// 액터끼리 붙이기 (TEAM5). 이 액터의 루트를 부모 액터의 루트(또는 ParentComponent)에 붙인다. 순환이면 false
 	bool AttachToActor(AActor* ParentActor, EAttachmentRule Rule = EAttachmentRule::KeepWorld, USceneComponent* ParentComponent = nullptr);
@@ -64,7 +67,8 @@ public:
 	//xx삭제 예정
 	friend class UWorld;
 
-	UActorComponent* AddComponent(UClass* ComponentClass, FName Name);
+	// 자동 부착 시 첫 씬 컴포넌트가 루트가 된다. 로드는 저장된 계층을 직접 복원한다.
+	UActorComponent* AddComponent(UClass* ComponentClass, FName Name, bool bManualAttachment = false);
 	void DestroyComponent(UActorComponent* Component);
 
 	// bCanEverTick이 켜진 액터·컴포넌트의 Tick 함수만 World의 FTickTaskManager에 등록하거나 해제한다.

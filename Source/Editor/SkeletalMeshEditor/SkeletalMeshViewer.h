@@ -60,6 +60,8 @@ public:
 	void Tick(float DeltaTime) override;
 	void OnRender() override;
 	const char* GetPanelName() const override { return "Skeletal Mesh Viewer"; }
+	bool IsRootPanel() const override { return true; }
+	void OnHidden() override { bHasFocusedViewer = false; }
 	void OpenFBX(const FString& Path);
 	void Release();
 	const TArray<TUniquePtr<FSkeletalMeshViewer>>& GetViewers() const { return Viewers; }

@@ -4,7 +4,7 @@
 AFireBallActor::AFireBallActor()
 {
 	StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>("UStaticMeshComponent");
-	StaticMeshComponent->SetupAttachment(GetRootComponent());
+	SetRootComponent(StaticMeshComponent);
 
 	FireballComponent = CreateDefaultSubobject<UFireBallComponent>("UFireBallComponent");
 	FireballComponent->SetupAttachment(GetRootComponent());

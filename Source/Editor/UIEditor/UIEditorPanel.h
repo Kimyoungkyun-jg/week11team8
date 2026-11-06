@@ -15,6 +15,7 @@ public:
 	virtual void Tick(float DeltaTime) override {}
 	virtual void OnRender() override;
 	virtual const char* GetPanelName() const override { return "UI Editor"; }
+	bool IsRootPanel() const override { return true; }
 
 	void NewAsset(const FString& Path);
 	void OpenAsset(const FString& Path);

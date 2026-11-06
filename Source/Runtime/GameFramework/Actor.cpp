@@ -19,7 +19,6 @@ enum class EAttachmentRule;
 AActor::AActor()
 {
 	PrimaryActorTick.Target = this;
-	SetRootComponent(CreateDefaultSubobject<USceneComponent>("DefaultSceneRoot"));
 }
 
 AActor::~AActor()
@@ -161,6 +160,14 @@ void AActor::Serialize(FStructuredArchive::FRecord Record)
 		return;
 	}
 
+	FString RootName = RootComponent ? RootComponent->GetName() : FString();
+	bool bHasSavedRoot = false;
+	if (auto RootSlot = Record.TryEnterField("RootComponentName", true))
+	{
+		*RootSlot << RootName;
+		bHasSavedRoot = true;
+	}
+
 	TArray<UActorComponent*> SavedComponents;
 	if (Ar.IsSaving())
 	{
@@ -216,7 +223,7 @@ void AActor::Serialize(FStructuredArchive::FRecord Record)
 				continue;
 			}
 
-			Component = AddComponent(ComponentClass, FName(Name));
+			Component = AddComponent(ComponentClass, FName(Name), true);
 			// 생성자에 없던 컴포넌트는 사용자가 추가한 것이다 (이름 변경 허용)
 			if (Component)
 				Component->MarkUserCreated();
@@ -228,10 +235,10 @@ void AActor::Serialize(FStructuredArchive::FRecord Record)
 			continue;
 		}
 
-		// AddComponent는 SceneComponent를 기본 Root에 자동 부착한다. 저장 데이터에서
-		// Parent가 비어 있으면 이 자동 부착을 먼저 풀어 Transform을 독립 월드 Transform으로 읽는다.
+		// 생성자와 AddComponent의 임시 계층을 풀고 저장된 계층을 나중에 복원한다.
+		// 루트가 바뀐 경우 생성자의 연결이 남아 있으면 순환 검사에 걸릴 수 있다.
 		if (USceneComponent* SceneComponent = Cast<USceneComponent>(Component);
-			SceneComponent && ParentName.empty() && SceneComponent != RootComponent)
+			SceneComponent)
 		{
 			SceneComponent->DetachFromParent(EAttachmentRule::KeepRelative);
 		}
@@ -254,8 +261,57 @@ void AActor::Serialize(FStructuredArchive::FRecord Record)
 			Attachment.Child->SetupAttachment(ParentComponent);
 		}
 	}
+
+	if (Ar.IsLoading())
+	{
+		if (bHasSavedRoot)
+		{
+			// 빈 이름은 루트 없는 네이티브 액터를 뜻한다.
+			SetRootComponent(Cast<USceneComponent>(FindComponentByName(FName(RootName))));
+		}
+		else
+		{
+			// 이전 씬에는 루트 이름이 없다. 네이티브 루트의 저장된 부모를 따라가거나,
+			// 이전 AActor 생성자가 만들던 DefaultSceneRoot를 사용한다.
+			USceneComponent* SavedRoot = RootComponent;
+			if (!SavedRoot)
+				SavedRoot = Cast<USceneComponent>(FindComponentByName("DefaultSceneRoot"));
+			while (SavedRoot && SavedRoot->GetAttachParent() && SavedRoot->GetAttachParent()->GetOwner() == this)
+				SavedRoot = SavedRoot->GetAttachParent();
+			SetRootComponent(SavedRoot);
+		}
+	}
 }
 
+
+bool AActor::SetRootComponent(USceneComponent* SceneComponent)
+{
+	if (SceneComponent && SceneComponent->GetOwner() != this) return false;
+	RootComponent = SceneComponent;
+	return true;
+}
+
+bool AActor::ReplaceRootComponent(USceneComponent* NewRoot)
+{
+	if (!IsValid(NewRoot) || NewRoot->GetOwner() != this ||
+		Components.Find(NewRoot) == INDEX_NONE || NewRoot->IsHiddenInDetails() || bActorIsBeingDestroyed)
+		return false;
+	if (NewRoot == RootComponent) return true;
+
+	USceneComponent* OldRoot = RootComponent;
+	const bool bRemoveDefaultRoot = World && OldRoot && OldRoot->IsUserCreated() &&
+		OldRoot->GetClass() == USceneComponent::StaticClass() && OldRoot->GetFName() == FName("DefaultSceneRoot");
+	USceneComponent* ExternalParent = OldRoot ? OldRoot->GetAttachParent() : nullptr;
+	NewRoot->DetachFromParent(EAttachmentRule::KeepWorld);
+	if (OldRoot) OldRoot->DetachFromParent(EAttachmentRule::KeepWorld);
+	RootComponent = NewRoot;
+	NewRoot->SetupAttachment(ExternalParent, EAttachmentRule::KeepWorld);
+	if (OldRoot) OldRoot->SetupAttachment(NewRoot, EAttachmentRule::KeepWorld);
+	// 에디터가 만든 대체용 루트는 실제 컴포넌트로 교체하면 제거한다.
+	// 네이티브 액터가 직접 만든 루트는 일반 컴포넌트로 유지한다.
+	if (bRemoveDefaultRoot) DestroyComponent(OldRoot);
+	return true;
+}
 
 bool AActor::AttachToActor(AActor* ParentActor, EAttachmentRule Rule, USceneComponent* ParentComponent)
 {
@@ -376,7 +432,7 @@ bool AActor::Destroy()
 	return World->DestroyActor(this);
 }
 
-UActorComponent* AActor::AddComponent(UClass* ComponentClass, FName Name)
+UActorComponent* AActor::AddComponent(UClass* ComponentClass, FName Name, bool bManualAttachment)
 {
 	if (bActorIsBeingDestroyed || !ComponentClass || !ComponentClass->IsChildOf(UActorComponent::StaticClass()))
 	{
@@ -392,13 +448,16 @@ UActorComponent* AActor::AddComponent(UClass* ComponentClass, FName Name)
 	UActorComponent* NewComponent = NewObject<UActorComponent>(this, ComponentClass, Name);
 	if (!NewComponent) { return nullptr; }
 
-	if (USceneComponent* SceneComponent = Cast<USceneComponent>(NewComponent))
-	{
-		SceneComponent->SetupAttachment(RootComponent, EAttachmentRule::KeepRelative);
-	}
-
 	NewComponent->SetOwner(this);
 	Components.Add(NewComponent);
+	if (USceneComponent* SceneComponent = Cast<USceneComponent>(NewComponent); SceneComponent && !bManualAttachment)
+	{
+		if (!RootComponent)
+			SetRootComponent(SceneComponent);
+		else
+			SceneComponent->SetupAttachment(RootComponent, EAttachmentRule::KeepRelative);
+	}
+
 	NewComponent->RegisterComponent();
 
 	return NewComponent;
@@ -411,7 +470,7 @@ void AActor::DestroyComponent(UActorComponent* Component)
 
 	if (Component == RootComponent)
 	{
-		HTR_LOG(Warning, "DefaultSceneRoot cannot be deleted.");
+		HTR_LOG(Warning, "The root component cannot be deleted. Replace it first.");
 		return;
 	}
 

@@ -1,7 +1,6 @@
 #include "EnginePCH.h"
 #include "Editor/AssetEditor/AssetEditorPanel.h"
 #include "Editor/EditorUI/EditorUIScale.h"
-#include "Editor/EditorUI/EditorUI.h"
 #include "Editor/HitoriEd/EditorEngine.h"
 #include "Editor/HitoriEd/EditorResourcePaths.h"
 #include "Asset/FbxImporter/FbxAssetLoader.h"
@@ -85,7 +84,13 @@ void FAssetEditorPanel::OpenAsset(const FString& InPath)
 
 void FAssetEditorPanel::Tick(float DeltaTime)
 {
-	if (Asset && Asset->IsRetired()) { const auto Reopen = Path; OpenAsset(Reopen); }
+	if (Asset && Asset->IsRetired())
+	{
+		const bool bWasOpen = IsOpen();
+		const auto Reopen = Path;
+		OpenAsset(Reopen);
+		SetOpen(bWasOpen);
+	}
 	if (PreviewWorld) Client.TickInput(DeltaTime, false, false, 0, 4, 1);
 }
 
@@ -115,13 +120,15 @@ void FAssetEditorPanel::SaveMaterial()
 
 void FAssetEditorPanel::OnRender()
 {
-	if (!Asset) return;
-	ImGui::SetNextWindowClass(&FEditorUI::GetRootWindowClass());
-	ImGui::SetNextWindowDockID(FEditorUI::GetRootDockId(), ImGuiCond_FirstUseEver);
-	bool Open = IsOpen();
-	const auto Title = FbxPath::ToString(FbxPath::FromString(Path).filename()) + "###ImportedAssetEditor";
-	bVisible = ImGui::Begin(Title.c_str(), &Open);
-	SetOpen(Open);
+	const FString Title = (Asset ? FbxPath::ToString(FbxPath::FromString(Path).filename()) : FString(GetPanelName())) + "###ImportedAssetEditor";
+	bVisible = BeginPanel(Title.c_str());
+	if (bVisible && !Asset)
+	{
+		ImGui::TextUnformatted("No asset is open.");
+		ImGui::TextWrapped("Double-click a static mesh, texture, material, or skeleton in the Content Drawer to open it here.");
+		ImGui::End();
+		return;
+	}
 	if (bVisible)
 	{
 		ImGui::TextWrapped("%s", Path.c_str());

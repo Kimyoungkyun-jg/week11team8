@@ -70,9 +70,15 @@ void AccumulateLight(inout FLightResult Result, float3 N, float3 V, float3 L,
     Result.Diffuse += Radiance * NoL;
     if (bIncludeSpecular && NoL > 0.0f)
     {
+#if REFLECTION_MODEL_PHONG
+        float3 R = reflect(-L, N);
+        float SpecularTerm = saturate(dot(R, V));
+#else
         float3 H = L + V;
         H *= rsqrt(max(dot(H, H), 1.0e-8f));
-        Result.Specular += Radiance * SpecularColor * pow(saturate(dot(N, H)), max(Shininess, 1.0f));
+        float SpecularTerm = saturate(dot(N, H));
+#endif
+        Result.Specular += Radiance * SpecularColor * pow(SpecularTerm, max(Shininess, 1.0f));
     }
 }
 

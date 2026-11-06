@@ -61,7 +61,11 @@ void FSettingsPanel::Tick(float DeltaTime)
 void FSettingsPanel::OnRender()
 {
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(400.0f), EditorUIScale::Px(300.0f)), ImGuiCond_FirstUseEver);
-	ImGui::Begin("Settings");
+	if (!BeginPanel())
+	{
+		ImGui::End();
+		return;
+	}
 	// 안내 문구가 패널 폭을 넘으면 잘리지 않고 다음 줄로 내려간다.
 	ImGui::PushTextWrapPos(0.0f);
 
@@ -86,12 +90,17 @@ void FSettingsPanel::OnRender()
 	if (Settings.RenderingPath != ERenderingPath::Forward && Settings.SkinningMode == ESkinningMode::GPU)
 		ImGui::TextDisabled("GPU skinning applies to Forward rendering only.");
 
-	// Unlit은 뷰포트 뷰 모드에서 고른다. 여기서는 조명 셰이딩 방식만 정한다.
-	const char* LightingModels[] = { "Gouraud", "Lambert", "Phong" };
-	int LightingModelIndex = static_cast<int>(Settings.LightingModel);
+	const char* ReflectionModels[] = { "Phong", "Blinn-Phong", "Lambert" };
+	int ReflectionIndex = static_cast<int>(Settings.ReflectionModel);
 	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
-	if (ImGui::Combo("Lighting Model", &LightingModelIndex, LightingModels, IM_ARRAYSIZE(LightingModels)))
-		Settings.LightingModel = static_cast<ELightingModel>(LightingModelIndex);
+	if (ImGui::Combo("Default Reflection Model", &ReflectionIndex, ReflectionModels, IM_ARRAYSIZE(ReflectionModels)))
+		Settings.ReflectionModel = static_cast<EReflectionModel>(ReflectionIndex);
+	const char* ShadingModels[] = { "Gouraud", "Phong" };
+	int ShadingIndex = static_cast<int>(Settings.ShadingModel);
+	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
+	if (ImGui::Combo("Default Shading Model", &ShadingIndex, ShadingModels, IM_ARRAYSIZE(ShadingModels)))
+		Settings.ShadingModel = static_cast<EShadingModel>(ShadingIndex);
+	ImGui::TextDisabled("Classic models apply to Forward rendering. Each viewport can select its own pair.");
 
 	const char* DecalMethods[] = { "Mesh Re-rendering", "Depth Reconstruction" };
 	int DecalMethodIndex = static_cast<int>(Settings.DecalRenderMethod);
@@ -107,7 +116,12 @@ void FSettingsPanel::OnRender()
 	{
 		Settings.LightCullingMode = static_cast<ELightCullingMode>(LightCullingModeIndex);
 	}
-	ImGui::TextDisabled("Forward Lambert/Phong only; Off evaluates all visible local lights.");
+	ImGui::TextDisabled("Forward Phong shading only; Off evaluates all visible local lights.");
+
+	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
+	if (ImGui::DragFloat("Scene Depth Range", &Settings.SceneDepthMaxRange, 0.5f, 0.1f, 10000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp))
+		ApplySceneDepthRange();
+	ImGui::SetItemTooltip("Scene Depth view: white represents this distance from the camera. Applies to all viewports.");
 
 	//////////////////////////////////////////////////////////
 
@@ -249,9 +263,9 @@ bool FSettingsPanel::SaveSettings() const
 	File << "LightCullingMode=" << (Settings.LightCullingMode == ELightCullingMode::Off ? "Off" : Settings.LightCullingMode == ELightCullingMode::Tiled ? "Tiled" : "Clustered") << "\n";
 	File << "RenderingPath=" << (Settings.RenderingPath == ERenderingPath::Forward ? "Forward" : "Deferred") << "\n";
 	File << "SkinningMode=" << (Settings.SkinningMode == ESkinningMode::GPU ? "GPU" : "CPU") << "\n";
-	File << "LightingModel=" << (Settings.LightingModel == ELightingModel::Gouraud ? "Gouraud" :
-		Settings.LightingModel == ELightingModel::Lambert ? "Lambert" :
-		Settings.LightingModel == ELightingModel::Unlit ? "Unlit" : "Phong") << "\n";
+	File << "ReflectionModel=" << (Settings.ReflectionModel == EReflectionModel::Phong ? "Phong" :
+		Settings.ReflectionModel == EReflectionModel::Lambert ? "Lambert" : "BlinnPhong") << "\n";
+	File << "ShadingModel=" << (Settings.ShadingModel == EShadingModel::Gouraud ? "Gouraud" : "Phong") << "\n";
 	File << "DecalRenderMethod=" << (Settings.DecalRenderMethod == EDecalRenderMethod::MeshRerendering ? "MeshRerendering" : "DepthReconstruction") << "\n";
 	File << "\n";
 
@@ -274,6 +288,9 @@ bool FSettingsPanel::SaveSettings() const
         File << "View" << Index << "Preset=" << Snapshot.ViewPreset[Index] << "\n";
         File << "View" << Index << "Wireframe=" << Snapshot.ViewWireframe[Index] << "\n";
         File << "View" << Index << "Mode=" << Snapshot.ViewMode[Index] << "\n";
+        File << "View" << Index << "ReflectionModel=" << Snapshot.ViewReflectionModel[Index] << "\n";
+        File << "View" << Index << "ShadingModel=" << Snapshot.ViewShadingModel[Index] << "\n";
+        File << "View" << Index << "ClassicLighting=" << Snapshot.ViewClassicLighting[Index] << "\n";
         for (const FViewShowFlagInfo& Info : ViewShowFlagInfos)
             File << "View" << Index << "Show" << Info.Key << "=" << (Snapshot.ViewShowFlags[Index].*Info.Member ? 1 : 0) << "\n";
         File << "View" << Index << "LocationX=" << Snapshot.ViewLocation[Index].X << "\n";
@@ -342,6 +359,12 @@ bool FSettingsPanel::LoadSettings()
 					else if (Key == Prefix + "Mode" && Value >= 0 &&
 						Value <= static_cast<int32>(EViewportMode::Unlit) && Value == static_cast<int32>(Value))
 						Settings.ViewMode[Index] = static_cast<int32>(Value);
+                    else if (Key == Prefix + "ReflectionModel" && Value >= 0 && Value <= 2 && Value == static_cast<int32>(Value))
+                        Settings.ViewReflectionModel[Index] = static_cast<int32>(Value);
+                    else if (Key == Prefix + "ShadingModel" && Value >= 0 && Value <= 1 && Value == static_cast<int32>(Value))
+                        Settings.ViewShadingModel[Index] = static_cast<int32>(Value);
+                    else if (Key == Prefix + "ClassicLighting" && (Value == 0 || Value == 1))
+                        Settings.ViewClassicLighting[Index] = Value != 0;
 					else if (Key.rfind(Prefix + "Show", 0) == 0 && (Value == 0 || Value == 1))
 					{
 						for (const FViewShowFlagInfo& Info : ViewShowFlagInfos)
@@ -423,12 +446,21 @@ bool FSettingsPanel::LoadSettings()
 					if (ValueStr == "GPU") Settings.SkinningMode = ESkinningMode::GPU;
 					else if (ValueStr == "CPU") Settings.SkinningMode = ESkinningMode::CPU;
 				}
-				else if (Key == "LightingModel")
+				else if (Key == "LightingModel") // Legacy editor.ini migration.
 				{
-					if (ValueStr == "Gouraud") Settings.LightingModel = ELightingModel::Gouraud;
-					else if (ValueStr == "Lambert") Settings.LightingModel = ELightingModel::Lambert;
-					else if (ValueStr == "Phong") Settings.LightingModel = ELightingModel::Phong;
-					else if (ValueStr == "Unlit") Settings.LightingModel = ELightingModel::Gouraud; // 이제 뷰 모드에서 고른다
+					Settings.ReflectionModel = ValueStr == "Lambert" ? EReflectionModel::Lambert : EReflectionModel::BlinnPhong;
+					Settings.ShadingModel = ValueStr == "Gouraud" || ValueStr == "Unlit" ? EShadingModel::Gouraud : EShadingModel::Phong;
+				}
+				else if (Key == "ReflectionModel")
+				{
+					if (ValueStr == "Phong") Settings.ReflectionModel = EReflectionModel::Phong;
+					else if (ValueStr == "Lambert") Settings.ReflectionModel = EReflectionModel::Lambert;
+					else if (ValueStr == "BlinnPhong" || ValueStr == "Blinn-Phong") Settings.ReflectionModel = EReflectionModel::BlinnPhong;
+				}
+				else if (Key == "ShadingModel")
+				{
+					if (ValueStr == "Gouraud") Settings.ShadingModel = EShadingModel::Gouraud;
+					else if (ValueStr == "Phong") Settings.ShadingModel = EShadingModel::Phong;
 				}
 				else if (Key == "DecalRenderMethod")
 				{
@@ -505,6 +537,9 @@ void FSettingsPanel::ReadViewportSettings(FEditorSettings& Out) const
 		Out.ViewOrthoWidth[Index] = Client->GetOrthoWidth();
 		Out.ViewWireframe[Index] = Client->IsWireframe() ? 1 : 0;
 		Out.ViewMode[Index] = static_cast<int32>(Client->GetViewportMode());
+		Out.ViewReflectionModel[Index] = static_cast<int32>(Client->GetReflectionModel());
+		Out.ViewShadingModel[Index] = static_cast<int32>(Client->GetShadingModel());
+		Out.ViewClassicLighting[Index] = Client->UsesClassicLighting();
 		Out.ViewShowFlags[Index] = Client->GetShowFlags();
 		if (Index == 0)
 			Out.SceneDepthMaxRange = Client->GetMaxRange();
@@ -535,6 +570,11 @@ void FSettingsPanel::ApplyViewportSettings()
 			Client->SetViewportMode(Settings.ViewWireframe[Index] == 1 ? EViewportMode::Wireframe : EViewportMode::Solid);
 		if (Settings.ViewMode[Index] >= 0)
 			Client->SetViewportMode(static_cast<EViewportMode>(Settings.ViewMode[Index]));
+		Client->SetReflectionModel(Settings.ViewReflectionModel[Index] >= 0
+			? static_cast<EReflectionModel>(Settings.ViewReflectionModel[Index]) : Settings.ReflectionModel);
+		Client->SetShadingModel(Settings.ViewShadingModel[Index] >= 0
+			? static_cast<EShadingModel>(Settings.ViewShadingModel[Index]) : Settings.ShadingModel);
+		Client->SetUseClassicLighting(Settings.ViewClassicLighting[Index]);
 		Client->GetShowFlags() = Settings.ViewShowFlags[Index];
 	}
 }

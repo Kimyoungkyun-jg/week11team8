@@ -67,8 +67,16 @@ namespace
 			| (static_cast<uint64>(Group.LODIndex & 0x3) << 29);
 	}
 
+	FShaderProgram* GetMaterialForwardShader(const UMaterial& Material, const FSceneRenderOptions& Options, bool bGPUSkinning = false)
+	{
+		FSceneRenderOptions Effective = Options;
+		if (!Options.bUnlit && !Options.bOverrideMaterialLighting && Material.bOverrideShadingModel)
+			Effective.SetLegacyLightingModel(Material.ShadingModel);
+		return FRenderResourceManager::GetForwardShaderProgram(Effective.ReflectionModel, Effective.ShadingModel, bGPUSkinning, Effective.bUnlit);
+	}
+
 	bool BuildBatch(FMeshDrawBatch& Batch, UStaticMesh* Mesh, uint8 LOD,
-		UMaterial* Material, EMeshPassType Pass, const FSceneView& View, ELightingModel LightingModel,
+		UMaterial* Material, EMeshPassType Pass, const FSceneView& View, const FSceneRenderOptions& Options,
 		const void* OverrideParams = nullptr, uint32 OverrideSize = 0)
 	{
 		if (!Mesh || !Material) return false;
@@ -82,7 +90,7 @@ namespace
 			FPipelineState* Base = FRenderResourceManager::GetPSO(bWorldNormal
 				? EPSOType::StaticMesh_WorldNormal : EPSOType::StaticMesh_Forward);
 			FShaderProgram* Shader = bWorldNormal ? (Base ? Base->Shader : nullptr)
-				: FRenderResourceManager::GetForwardShaderProgram(Material->bOverrideShadingModel ? Material->ShadingModel : LightingModel);
+				: GetMaterialForwardShader(*Material, Options);
 			if (!Base || !Shader || !Shader->VertexShader || !Shader->PixelShader) return false;
 			Batch.Pipeline = *Base;
 			Batch.Pipeline.Shader = Shader;
@@ -146,7 +154,7 @@ namespace
 	}
 
 	bool BuildBatch(FMeshDrawBatch& Batch, USkeletalMesh* Mesh,
-		UMaterial* Material, EMeshPassType Pass, const FSceneView& View, ELightingModel LightingModel, bool bGPUSkinning, uint8 LOD,
+		UMaterial* Material, EMeshPassType Pass, const FSceneView& View, const FSceneRenderOptions& Options, bool bGPUSkinning, uint8 LOD,
 		const void* OverrideParams = nullptr, uint32 OverrideSize = 0)
 	{
 		if (!Mesh || !Material) return false;
@@ -161,7 +169,7 @@ namespace
 			FPipelineState* Base = FRenderResourceManager::GetPSO(bWorldNormal
 				? EPSOType::StaticMesh_WorldNormal : EPSOType::StaticMesh_Forward);
 			FShaderProgram* Shader = bWorldNormal ? FRenderResourceManager::GetWorldNormalShaderProgram(bGPUSkinning)
-				: FRenderResourceManager::GetForwardShaderProgram(Material->bOverrideShadingModel ? Material->ShadingModel : LightingModel, bGPUSkinning);
+				: GetMaterialForwardShader(*Material, Options, bGPUSkinning);
 			if (!Base || !Shader || !Shader->VertexShader || !Shader->PixelShader) return false;
 			Batch.Pipeline = *Base;
 			Batch.Pipeline.Shader = Shader;
@@ -292,7 +300,7 @@ namespace
 
 bool FMeshPassProcessor::Build(const FSceneView& View, const FRenderQueue& Queue,
 	const FSceneRenderData* SceneData, EMeshPassType Pass,
-	TArray<FMeshDrawBatch>& Out, ELightingModel LightingModel) const
+	TArray<FMeshDrawBatch>& Out, const FSceneRenderOptions& Options) const
 {
 	Out.Reset();
 	if (Pass != EMeshPassType::Translucent && SceneData)
@@ -308,7 +316,7 @@ bool FMeshPassProcessor::Build(const FSceneView& View, const FRenderQueue& Queue
 		for (const FStaticDrawGroup* Group : Groups)
 		{
 			FMeshDrawBatch Batch; // Render에게 전달하는 최종 구조체
-			if (!BuildBatch(Batch, Group->Mesh, Group->LODIndex, Group->Material, Pass, View, LightingModel))
+			if (!BuildBatch(Batch, Group->Mesh, Group->LODIndex, Group->Material, Pass, View, Options))
 				return false;
 
 			Batch.Items.Reserve(static_cast<uint32>(Group->Items.size()));
@@ -332,13 +340,13 @@ bool FMeshPassProcessor::Build(const FSceneView& View, const FRenderQueue& Queue
 		if (Packet.Mesh)
 		{
 			bBatchBuilt = BuildBatch(Batch, Packet.Mesh, Packet.LODIndex, Packet.Material, Pass, View,
-				LightingModel, Packet.MaterialParamData, Packet.MaterialParamDataSize);
+				Options, Packet.MaterialParamData, Packet.MaterialParamDataSize);
 		}
 		else if (Packet.SkeletalMesh)
 		{
 			const bool bGPUSkinning = Packet.SkinningMatricesBuffer != nullptr;
 			bBatchBuilt = BuildBatch(Batch, Packet.SkeletalMesh, Packet.Material, Pass, View,
-				LightingModel, bGPUSkinning, Packet.LODIndex, Packet.MaterialParamData, Packet.MaterialParamDataSize);
+				Options, bGPUSkinning, Packet.LODIndex, Packet.MaterialParamData, Packet.MaterialParamDataSize);
 			if (bBatchBuilt && Packet.SkeletalVertexBuffer)
 				Batch.VertexBuffer = Packet.SkeletalVertexBuffer;
 			if (bBatchBuilt) Batch.SkinningMatricesBuffer = Packet.SkinningMatricesBuffer;
