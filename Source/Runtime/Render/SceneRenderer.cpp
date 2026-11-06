@@ -37,9 +37,6 @@ DECLARE_CYCLE_STAT("Gather Elements", STAT_GatherElements);
 
 namespace
 {
-	std::atomic<uint32> GCascadeCount{ 4 };
-	std::atomic<float> GCascadeLogRatio{ 0.8f };
-
 	FRenderGraphRasterPassDesc MakeViewportPass(const std::string& Name, FRenderGraphTextureRef Color,
 		FRenderGraphTextureRef DepthTarget = {},
 		ERenderGraphLoadAction DepthLoad = ERenderGraphLoadAction::Load)
@@ -61,32 +58,6 @@ namespace
 	{
 		return !Draw || Graph.AddRasterPass(MakeViewportPass(Name, Color, Depth, DepthLoad), Draw);
 	}
-}
-
-bool FSceneRenderer::SetCascadeCount(uint32 Count)
-{
-	if (Count < 1 || Count > FSceneRenderData::MaxCascadeShadowCount)
-		return false;
-	GCascadeCount.store(Count, std::memory_order_relaxed);
-	return true;
-}
-
-uint32 FSceneRenderer::GetCascadeCount()
-{
-	return GCascadeCount.load(std::memory_order_relaxed);
-}
-
-bool FSceneRenderer::SetCascadeLogRatio(float Ratio)
-{
-	if (!std::isfinite(Ratio) || Ratio < 0.0f || Ratio > 1.0f)
-		return false;
-	GCascadeLogRatio.store(Ratio, std::memory_order_relaxed);
-	return true;
-}
-
-float FSceneRenderer::GetCascadeLogRatio()
-{
-	return GCascadeLogRatio.load(std::memory_order_relaxed);
 }
 
 // 생성자

@@ -2,10 +2,11 @@
 #include "Editor/OutputLog/OutputLogPanel.h"
 
 #include "Core/StatOverlay.h"
-#include "Render/SceneRenderer.h"
+#include "Render/ShadowRendering.h"
 
 #include "Editor/Settings/SettingsPanel.h"
 
+#include <algorithm>
 #include <charconv>
 #include <sstream>
 #include "Editor/EditorUI/EditorUIScale.h"
@@ -24,16 +25,107 @@ static bool EqualsIgnoreCase(const FString& A, const char* B)
 	return Strnicmp(A.c_str(), B, static_cast<int>(A.size()) + 1) == 0;
 }
 
+namespace
+{
+	// 렌더러가 매 프레임 읽는 그림자 콘솔 변수 (ShadowRendering.h GShadowCVars). 이름은 언리얼과 같다.
+	// MaxResolution·MaxCSMResolution은 Settings 패널의 ShadowMap 크기가 정하므로 여기 두지 않는다.
+	struct FConsoleVariable
+	{
+		const char* Name;
+		const char* Help;
+		float* FloatValue;
+		uint32* UIntValue;
+		float Min;
+		float Max;
+	};
+
+	const TArray<FConsoleVariable>& GetConsoleVariables()
+	{
+		FShadowConsoleVariables& V = GShadowCVars;
+		static const TArray<FConsoleVariable> Variables = {
+			{ "r.ShadowQuality", "0 = shadows off, 1~5 = max PCF level (1 tap, 3x3, 5x5, 7x7)", nullptr, &V.ShadowQuality, 0.0f, 5.0f },
+			{ "r.Shadow.FilterMethod", "0 = PCF, 1 = PCSS (Directional/Spot)", nullptr, &V.FilterMethod, 0.0f, 1.0f },
+			{ "r.Shadow.MaxSoftKernelSize", "PCSS max kernel radius in texels", nullptr, &V.MaxSoftKernelSize, 1.0f, 128.0f },
+			{ "r.Shadow.CSM.MaxCascades", "Max cascades for directional lights", nullptr, &V.CSMMaxCascades, 1.0f, 4.0f },
+			{ "r.Shadow.TexelsPerPixel", "Spot/Point shadow texels per screen pixel", &V.TexelsPerPixel, nullptr, 0.1f, 8.0f },
+			{ "r.Shadow.MinResolution", "Spot/Point shadows below this size are not drawn", nullptr, &V.MinResolution, 8.0f, 4096.0f },
+			{ "r.Shadow.FadeResolution", "Spot/Point shadows fade out below this size", nullptr, &V.FadeResolution, 8.0f, 4096.0f },
+			{ "r.Shadow.FadeExponent", "Fade curve exponent", &V.FadeExponent, nullptr, 0.01f, 4.0f },
+			{ "r.Shadow.RadiusThreshold", "Cull casters smaller than this screen radius", &V.RadiusThreshold, nullptr, 0.0f, 1.0f },
+			{ "r.Shadow.CSMDepthBias", "Directional constant depth bias", &V.CSMDepthBias, nullptr, 0.0f, 100.0f },
+			{ "r.Shadow.CSMSlopeScaleDepthBias", "Directional slope depth bias scale", &V.CSMSlopeScaleDepthBias, nullptr, 0.0f, 100.0f },
+			{ "r.Shadow.SpotLightDepthBias", "Spot constant depth bias", &V.SpotLightDepthBias, nullptr, 0.0f, 100.0f },
+			{ "r.Shadow.SpotLightSlopeDepthBias", "Spot slope depth bias scale", &V.SpotLightSlopeDepthBias, nullptr, 0.0f, 100.0f },
+			{ "r.Shadow.PointLightDepthBias", "Point constant depth bias", &V.PointLightDepthBias, nullptr, 0.0f, 100.0f },
+			{ "r.Shadow.PointLightSlopeScaleDepthBias", "Point slope depth bias scale", &V.PointLightSlopeScaleDepthBias, nullptr, 0.0f, 100.0f },
+			{ "r.Shadow.ShadowMaxSlopeScaleDepthBias", "Max slope used by slope depth bias", &V.ShadowMaxSlopeScaleDepthBias, nullptr, 0.0f, 10.0f },
+		};
+		return Variables;
+	}
+
+	const FConsoleVariable* FindConsoleVariable(const FString& Name)
+	{
+		for (const FConsoleVariable& Variable : GetConsoleVariables())
+			if (EqualsIgnoreCase(Name, Variable.Name))
+				return &Variable;
+		return nullptr;
+	}
+
+	FString FormatConsoleVariable(const FConsoleVariable& Variable)
+	{
+		return Variable.FloatValue ? std::format("{} = {}", Variable.Name, *Variable.FloatValue)
+			: std::format("{} = {}", Variable.Name, *Variable.UIntValue);
+	}
+
+	// "r.X" 만 입력하면 현재 값, "r.X <값>"이면 범위로 자른 뒤 바꾼다.
+	void ExecConsoleVariable(const FConsoleVariable& Variable, const TArray<FString>& Tokens)
+	{
+		if (Tokens.Num() == 1)
+		{
+			FLog::Log(ELogVerbosity::Info, "{}  ({}, range {} ~ {})", FormatConsoleVariable(Variable), Variable.Help, Variable.Min, Variable.Max);
+			return;
+		}
+
+		const FString& ValueStr = Tokens[1];
+		float Value = 0.0f;
+		const auto [End, Error] = std::from_chars(ValueStr.data(), ValueStr.data() + ValueStr.size(), Value);
+		if (Tokens.Num() > 2 || Error != std::errc{} || End != ValueStr.data() + ValueStr.size() || !std::isfinite(Value))
+		{
+			FLog::Log(ELogVerbosity::Warning, "Usage: {} <{} ~ {}>", Variable.Name, Variable.Min, Variable.Max);
+			return;
+		}
+
+		Value = std::clamp(Value, Variable.Min, Variable.Max);
+		if (Variable.FloatValue)
+			*Variable.FloatValue = Value;
+		else
+			*Variable.UIntValue = static_cast<uint32>(Value + 0.5f);
+		FLog::Log(ELogVerbosity::Info, "{}", FormatConsoleVariable(Variable));
+	}
+
+	void Tokenize(const FString& Line, TArray<FString>& OutTokens)
+	{
+		OutTokens.Reset();
+		std::istringstream Stream(Line);
+		FString Token;
+		while (Stream >> Token)
+			OutTokens.Add(Token);
+	}
+}
+
 bool FOutputLogPanel::Init()
 {
 	ClearLog();
 
+	// Tab 자동 완성 후보. HELP가 이 목록과 사용법을 함께 보여 준다.
 	Commands.Add("HELP");
 	Commands.Add("HISTORY");
 	Commands.Add("CLEAR");
 	Commands.Add("STAT");
 	Commands.Add("CSM");
 	Commands.Add("r.shadow.CacheWholeSceneShadows");
+	for (const FConsoleVariable& Variable : GetConsoleVariables())
+		Commands.Add(Variable.Name);
 
 	HistoryPos = -1;
 	InputBuf[0] = '\0';
@@ -182,46 +274,67 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 		}
 	History.Add(CommandLine);
 
+	// On command input, we scroll to bottom even if AutoScroll==false
+	ScrollToBottom = true;
+
 	// Process command
 	// 인자를 받는 명령은 문자열 전체 비교로는 걸러지지 않으므로 먼저 위임한다.
 	FString StatMessage;
 	if (FStatOverlay::ExecCommand(CommandLine, StatMessage))
 	{
 		FLog::Log(ELogVerbosity::Info, "{}", StatMessage);
-		ScrollToBottom = true;
 		return;
 	}
 
-	std::istringstream CsmInput(CommandLine);
-	FString Command, Argument, Value, Extra;
-	CsmInput >> Command;
+	TArray<FString> Tokens;
+	Tokenize(CommandLine, Tokens);
+	if (Tokens.IsEmpty())
+		return;
+	const FString& Command = Tokens[0];
+
+	if (EqualsIgnoreCase(Command, "CLEAR"))
+	{
+		ClearLog();
+		return;
+	}
+
+	if (EqualsIgnoreCase(Command, "HELP"))
+	{
+		FLog::Log(ELogVerbosity::Info, "Commands:");
+		FLog::Log(ELogVerbosity::Info, "- HELP | HISTORY | CLEAR");
+		FLog::Log(ELogVerbosity::Info, "- STAT <fps|memory|profile|light|decal|all|none> [on|off]");
+		FLog::Log(ELogVerbosity::Info, "- CSM Count <1-4>   (= r.Shadow.CSM.MaxCascades)");
+		FLog::Log(ELogVerbosity::Info, "- r.shadow.CacheWholeSceneShadows [0|1]   (not implemented yet)");
+		FLog::Log(ELogVerbosity::Info, "Console variables (type the name alone to see the value):");
+		for (const FConsoleVariable& Variable : GetConsoleVariables())
+			FLog::Log(ELogVerbosity::Info, "- {}  {}", FormatConsoleVariable(Variable), Variable.Help);
+		return;
+	}
+
+	if (EqualsIgnoreCase(Command, "HISTORY"))
+	{
+		const int32 First = std::max(History.Num() - 10, 0);
+		for (int32 i = First; i < History.Num(); i++)
+			FLog::Log(ELogVerbosity::Info, "{:03d}: {}", i, History[i]);
+		return;
+	}
+
+	// 예전 명령. 캐스케이드 수는 라이트마다 정하고, 이 값은 그 상한이다.
 	if (EqualsIgnoreCase(Command, "CSM"))
 	{
-		if ((CsmInput >> Argument >> Value) && !(CsmInput >> Extra))
+		if (Tokens.Num() == 3 && EqualsIgnoreCase(Tokens[1], "COUNT"))
 		{
-			if (EqualsIgnoreCase(Argument, "COUNT"))
-			{
-				uint32 Count = 0;
-				const auto [End, Error] = std::from_chars(Value.data(), Value.data() + Value.size(), Count);
-				if (Error == std::errc{} && End == Value.data() + Value.size() && FSceneRenderer::SetCascadeCount(Count))
-				{
-					FLog::Log(ELogVerbosity::Info, "CSM Count: {}", Count);
-					ScrollToBottom = true;
-					return;
-				}
-			}
-			else if (EqualsIgnoreCase(Argument, "LOGRATIO"))
-			{
-				float Ratio = 0.0f;
-				const auto [End, Error] = std::from_chars(Value.data(), Value.data() + Value.size(), Ratio);
-				if (Error == std::errc{} && End == Value.data() + Value.size() && FSceneRenderer::SetCascadeLogRatio(Ratio))
-				{
-					FLog::Log(ELogVerbosity::Info, "CSM LogRatio: {}", Ratio);
-					ScrollToBottom = true;
-					return;
-				}
-			}
+			if (const FConsoleVariable* MaxCascades = FindConsoleVariable("r.Shadow.CSM.MaxCascades"))
+				ExecConsoleVariable(*MaxCascades, { MaxCascades->Name, Tokens[2] });
+			return;
 		}
+		if (Tokens.Num() >= 2 && EqualsIgnoreCase(Tokens[1], "LOGRATIO"))
+		{
+			FLog::Log(ELogVerbosity::Warning, "CSM LogRatio was removed. Set CascadeDistributionExponent on the Directional Light instead.");
+			return;
+		}
+		FLog::Log(ELogVerbosity::Info, "Usage: CSM Count <1-4>");
+		return;
 	}
 
 	if (EqualsIgnoreCase(Command, "r.shadow.CacheWholeSceneShadows"))
@@ -229,51 +342,25 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 		if (!EditorSettings)
 		{
 			FLog::Log(ELogVerbosity::Info, "Settings not available");
+			return;
 		}
-		else
-		{
-			std::istringstream Args(CommandLine);
-			FString Name, ValueStr;
-			Args >> Name >> ValueStr;
-			if (ValueStr.empty())                 EditorSettings->bCacheShadows = !EditorSettings->bCacheShadows;
-			else if (ValueStr == "0" || ValueStr == "1") EditorSettings->bCacheShadows = (ValueStr == "1");
-			else FLog::Log(ELogVerbosity::Info, "Usage: r.shadow.CacheWholeSceneShadows [0|1]");
-			FLog::Log(ELogVerbosity::Info, "r.shadow.CacheWholeSceneShadows = {}", EditorSettings->bCacheShadows ? 1 : 0);
-		}
-		ScrollToBottom = true;
+		const FString ValueStr = Tokens.Num() > 1 ? Tokens[1] : FString();
+		if (ValueStr.empty())                        EditorSettings->bCacheShadows = !EditorSettings->bCacheShadows;
+		else if (ValueStr == "0" || ValueStr == "1") EditorSettings->bCacheShadows = (ValueStr == "1");
+		else FLog::Log(ELogVerbosity::Info, "Usage: r.shadow.CacheWholeSceneShadows [0|1]");
+		FLog::Log(ELogVerbosity::Info, "r.shadow.CacheWholeSceneShadows = {}", EditorSettings->bCacheShadows ? 1 : 0);
+		// 그림자 맵은 지금 매 프레임 다시 그린다. 설정 값만 저장되고 렌더링에는 아직 영향이 없다.
+		FLog::Log(ELogVerbosity::Warning, "Shadow caching is not implemented yet; this setting has no effect.");
 		return;
 	}
-	FLog::Log(ELogVerbosity::Info, "Usage: CSM Count <1-4> | CSM LogRatio <0.0-1.0>");
-	ScrollToBottom = true;
-	return;
 
-	if (EqualsIgnoreCase(CommandLine, "CLEAR"))
+	if (const FConsoleVariable* Variable = FindConsoleVariable(Command))
 	{
-		ClearLog();
-	}
-	else if (EqualsIgnoreCase(CommandLine, "HELP"))
-	{
-		FLog::Log(ELogVerbosity::Info, "Commands:");
-		for (const FString& Command : Commands)
-			FLog::Log(ELogVerbosity::Info, "- {}", Command);
-		OnLog(ELogVerbosity::Info, "- STAT <fps|memory|all|none>");
-		OnLog(ELogVerbosity::Info, "- CSM Count <1-4>");
-		OnLog(ELogVerbosity::Info, "- CSM LogRatio <0.0-1.0>");
-		OnLog(ELogVerbosity::Info, "- r.shadow.CacheWholeSceneShadows");
-	}
-	else if (EqualsIgnoreCase(CommandLine, "HISTORY"))
-	{
-		int first = History.Num() - 10;
-		for (int i = first > 0 ? first : 0; i < History.Num(); i++)
-			FLog::Log(ELogVerbosity::Info, "{:03d}: {}\n", i, History[i]);
-	}
-	else
-	{
-		FLog::Log(ELogVerbosity::Info, "Unknown command: '{}'\n", CommandLine);
+		ExecConsoleVariable(*Variable, Tokens);
+		return;
 	}
 
-	// On command input, we scroll to bottom even if AutoScroll==false
-	ScrollToBottom = true;
+	FLog::Log(ELogVerbosity::Warning, "Unknown command: '{}'. Type HELP for commands.", CommandLine);
 }
 
 int FOutputLogPanel::TextEditCallback(ImGuiInputTextCallbackData* data)

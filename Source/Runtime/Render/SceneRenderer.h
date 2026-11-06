@@ -59,10 +59,6 @@ public:
 
 	// 가시성 검사 및 렌더 큐 수집
 	void InitViews(FRenderer* Renderer, const FSceneRenderOptions& Options);
-	static bool SetCascadeCount(uint32 Count);
-	static uint32 GetCascadeCount();
-	static bool SetCascadeLogRatio(float Ratio);
-	static float GetCascadeLogRatio();
 
 	// 뷰 결과를 하나 유지하는 벤치마크에서도 사용한다.
 	static void GatherRenderPackets(FScene& Scene, FSceneRenderData& Data, const FViewContext& View,

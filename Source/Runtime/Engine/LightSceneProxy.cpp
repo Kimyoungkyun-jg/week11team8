@@ -1,5 +1,6 @@
 #include "EnginePCH.h"
 #include "LightSceneProxy.h"
+#include "Render/ShadowRendering.h"
 
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PointLightComponent.h"
@@ -135,7 +136,9 @@ uint32 FDirectionalLightSceneProxy::GetNumViewDependentWholeSceneShadows(const F
 	const UDirectionalLightComponent* Dir = static_cast<const UDirectionalLightComponent*>(LightComponent);
 	// 거리 0이면 동적 그림자 끔 (언리얼 주석: "A value of 0 disables the dynamic shadow")
 	if (Dir->GetDynamicShadowDistanceMovableLight() <= 0.0f) return 0;
-	return std::clamp(Dir->GetDynamicShadowCascades(), 1u, UDirectionalLightComponent::MaxDynamicShadowCascades);
+	// 콘솔 r.Shadow.CSM.MaxCascades(CSM Count)가 라이트 설정의 상한이 된다 (언리얼과 같음).
+	const uint32 MaxCascades = std::clamp(GShadowCVars.CSMMaxCascades, 1u, UDirectionalLightComponent::MaxDynamicShadowCascades);
+	return std::clamp(Dir->GetDynamicShadowCascades(), 1u, MaxCascades);
 }
 
 bool FDirectionalLightSceneProxy::GetViewDependentWholeSceneProjectedShadowInitializer(const FSceneView& View, int32 InCascadeIndex,

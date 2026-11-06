@@ -28,6 +28,8 @@ struct FShadowConsoleVariables
 	float FadeExponent = 0.25f;
 	// 캐스케이드 한 장의 해상도
 	uint32 MaxCSMResolution = 2048;
+	// r.Shadow.CSM.MaxCascades: Directional 라이트의 DynamicShadowCascades를 이 개수로 제한한다 (1 ~ 4).
+	uint32 CSMMaxCascades = 4;
 	// 카메라에서 본 겉보기 크기(반지름 / 거리)가 이보다 작은 Caster는 그림자를 그리지 않는다.
 	float RadiusThreshold = 0.01f;
 
