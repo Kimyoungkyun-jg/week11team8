@@ -303,8 +303,6 @@ void FContentDrawerPanel::OnRender()
 					ImGui::EndDragDropSource();
 				}
 				// 파일 이름 표시
-				ImGui::TextWrapped("%s", FilenameString.c_str());
-				if (UnimportedFbxFiles.contains(Path.filename())) ImGui::TextDisabled("Not imported");
 
 				// 이름 영역은 두 줄로 고정하고, 남은 이름은 두 번째 줄에서 말줄임한다.
 				const ImVec2 NamePos = ImGui::GetCursorScreenPos();
