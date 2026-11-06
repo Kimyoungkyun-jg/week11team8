@@ -23,7 +23,6 @@
 
 #include "Components/RotatingMovementComponent.h"
 #include "Components/ProjectileMovementComponent.h"
-#include "Components/FireBallComponent.h"
 #include "Components/DecalComponent.h"
 #include "Components/ScriptComponent.h"
 #include "Asset/AssetManager.h"

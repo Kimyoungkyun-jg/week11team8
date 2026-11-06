@@ -8,6 +8,56 @@
 
 #include "Input/InputSystem.h"
 #include "Editor/EditorUI/EditorUIScale.h"
+#include "Editor/LevelEditor/LevelEditorToolbar.h"
+
+#include <algorithm>
+#include <cstring>
+
+#include "GameFramework/Actor/ParticleActor.h"
+#include "GameFramework/Actor/StaticMeshActor.h"
+#include "GameFramework/Actor/DirectionalLightActor.h"
+#include "GameFramework/Actor/PointLightActor.h"
+#include "GameFramework/Actor/SpotLightActor.h"
+#include "GameFramework/Actor/RectLightActor.h"
+#include "GameFramework/Actor/SkyLightActor.h"
+#include "GameFramework/Actor/TextRenderActor.h"
+#include "LevelSequence/LevelSequenceActor.h"
+#include "GameFramework/Actor/ExponentialHeightFogActor.h"
+#include "GameFramework/Actor/ProjectileActor.h"
+#include "GameFramework/Actor/SkeletalMeshActor.h"
+#include "GameFramework/Actor/DecalActor.h"
+#include "GameFramework/Actor/FakeSpotLightActor.h"
+
+namespace
+{
+	// Add 메뉴 항목. 같은 Category가 이어지는 동안 한 구획으로 묶어 그린다.
+	struct FSpawnEntry
+	{
+		const char* Category;
+		const char* Label;
+		UClass* (*GetClass)();
+	};
+
+	const FSpawnEntry SpawnEntries[] = {
+		{ "Basic",    "Empty Actor",       &AActor::StaticClass },
+		{ "Basic",    "Static Mesh",       &AStaticMeshActor::StaticClass },
+		{ "Basic",    "Skeletal Mesh",     &ASkeletalMeshActor::StaticClass },
+		{ "Basic",    "Text",              &ATextRenderActor::StaticClass },
+		{ "Lights",   "Directional Light", &ADirectionalLightActor::StaticClass },
+		{ "Lights",   "Point Light",       &APointLightActor::StaticClass },
+		{ "Lights",   "Spot Light",        &ASpotLightActor::StaticClass },
+		{ "Lights",   "Rect Light",        &ARectLightActor::StaticClass },
+		{ "Lights",   "Sky Light",         &ASkyLightActor::StaticClass },
+		{ "Lights",   "Fake Spot Light",   &AFakeSpotLightActor::StaticClass },
+		{ "Effects",  "Decal",             &ADecalActor::StaticClass },
+		{ "Effects",  "Particle",          &AParticleActor::StaticClass },
+		{ "Effects",  "Height Fog",        &AExponentialHeightFogActor::StaticClass },
+		{ "Gameplay", "Projectile",        &AProjectileActor::StaticClass },
+		{ "Gameplay", "Level Sequence",    &ALevelSequenceActor::StaticClass },
+	};
+
+	constexpr const char* GizmoModeLabels[] = { "Move", "Rotate", "Scale" };
+}
 
 
 // 패널 초기화 성공을 반환한다.
@@ -35,13 +85,6 @@ void FEditorControlsPanel::Tick(float DeltaTime)
 	}
 }
 
-// 선택한 클래스의 액터를 월드에 생성한다.
-void FEditorControlsPanel::AddActor(uint32 Index)
-{
-	if (Index >= static_cast<uint32>(Classes.Num())) return;
-	SpawnInFrontOfCamera(Classes[Index]);
-}
-
 AActor* FEditorControlsPanel::SpawnInFrontOfCamera(UClass* Class)
 {
 	if (!World || !Class || (IsPlayingQuery && IsPlayingQuery())) return nullptr;
@@ -63,157 +106,105 @@ AActor* FEditorControlsPanel::SpawnInFrontOfCamera(UClass* Class)
 			Root->SetTransform(SpawnTransform);
 		}
 	}
+	if (Actor && OnActorSpawned)
+		OnActorSpawned(Actor);
 	return Actor;
 }
 
+// 툴바의 글자 버튼은 모두 같은 폭이다. 가장 긴 라벨에 맞춰서 라벨이 바뀌어도(Local/World) 크기가 변하지 않는다.
+float FEditorControlsPanel::GetToolbarButtonWidth()
+{
+	float Width = EditorUIScale::ButtonWidth("+ Add");
+	for (const char* Label : GizmoModeLabels)
+		Width = std::max(Width, EditorUIScale::ButtonWidth(Label));
+	Width = std::max(Width, EditorUIScale::ButtonWidth("Local"));
+	Width = std::max(Width, EditorUIScale::ButtonWidth("World"));
+	return Width;
+}
+
+// Play 그룹과 같은 규칙(배경 상자, 4px 간격, 그룹 사이 구분선)으로 그린다.
 void FEditorControlsPanel::DrawToolbar()
 {
+	const ImVec2 ButtonSize{ GetToolbarButtonWidth(), ImGui::GetFrameHeight() };
+	LevelEditorToolbarUI::BeginGroup();
+	DrawAddActorMenu(ButtonSize);
+	LevelEditorToolbarUI::EndGroup();
+	if (Gizmo)
+	{
+		LevelEditorToolbarUI::Separator();
+		LevelEditorToolbarUI::BeginGroup();
+		DrawGizmoControls(ButtonSize);
+		LevelEditorToolbarUI::EndGroup();
+	}
+}
+
+void FEditorControlsPanel::DrawAddActorMenu(const ImVec2& ButtonSize)
+{
 	ImGui::BeginDisabled(IsPlayingQuery && IsPlayingQuery());
-	if (ImGui::Button("Add Actor")) ImGui::OpenPopup("AddActorMenu");
+	if (ImGui::Button("+ Add", ButtonSize)) ImGui::OpenPopup("AddActorMenu");
+	ImGui::SetItemTooltip("Add an actor in front of the active viewport camera.");
+	// 버튼의 어느 지점을 눌러도 목록은 버튼 바로 아래 왼쪽 끝에서 열린다.
+	LevelEditorToolbarUI::PlaceNextPopupBelowLastItem();
 	if (ImGui::BeginPopup("AddActorMenu"))
 	{
-		for (int32 Index = 0; Index < Classes.Num(); ++Index)
-			if (ImGui::MenuItem(Items[Index])) AddActor(Index);
-		ImGui::Separator();
-		if (ImGui::MenuItem("Directional Light")) SpawnInFrontOfCamera(ADirectionalLightActor::StaticClass());
-		if (ImGui::MenuItem("Point Light")) SpawnInFrontOfCamera(APointLightActor::StaticClass());
-		if (ImGui::MenuItem("Spot Light")) SpawnInFrontOfCamera(ASpotLightActor::StaticClass());
-		if (ImGui::MenuItem("Rect Light")) SpawnInFrontOfCamera(ARectLightActor::StaticClass());
-		if (ImGui::MenuItem("Sky Light")) SpawnInFrontOfCamera(ASkyLightActor::StaticClass());
+		const char* CurrentCategory = nullptr;
+		for (const FSpawnEntry& Entry : SpawnEntries)
+		{
+			if (!CurrentCategory || std::strcmp(CurrentCategory, Entry.Category) != 0)
+			{
+				CurrentCategory = Entry.Category;
+				ImGui::SeparatorText(CurrentCategory);
+			}
+			if (ImGui::MenuItem(Entry.Label))
+				SpawnInFrontOfCamera(Entry.GetClass());
+		}
 		ImGui::EndPopup();
 	}
 	ImGui::EndDisabled();
-	if (Gizmo)
-	{
-		ImGui::SameLine();
-		int Mode = static_cast<int>(Gizmo->GetMode());
-		ImGui::SetNextItemWidth(EditorUIScale::Px(100.0f));
-		if (ImGui::Combo("##GizmoMode", &Mode, GizmoItems, IM_ARRAYSIZE(GizmoItems)))
-			Gizmo->SetMode(static_cast<EGizmoMode>(Mode));
-		ImGui::SameLine();
-		int Space = static_cast<int>(Gizmo->GetSpace());
-		ImGui::SetNextItemWidth(EditorUIScale::Px(85.0f));
-		if (ImGui::Combo("##GizmoSpace", &Space, SpaceItems, IM_ARRAYSIZE(SpaceItems)))
-			Gizmo->SetSpace(static_cast<EGizmoSpace>(Space));
-	}
-
 }
 
-// 액터 생성·카메라 속성·기즈모·경로 추적 UI를 그린다.
+// 모드는 토글 버튼 세 개, 좌표계는 누를 때마다 바뀌는 버튼 하나로 그린다.
+void FEditorControlsPanel::DrawGizmoControls(const ImVec2& ButtonSize)
+{
+	const int CurrentMode = static_cast<int>(Gizmo->GetMode());
+	// 선택된 모드만 강조색을 쓰고 나머지는 입력 칸과 같은 중립색으로 둬서 현재 모드가 한눈에 보이게 한다.
+	const ImVec4 UnselectedColor = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+	const ImVec4 UnselectedHoverColor = ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered);
+	for (int Mode = 0; Mode < IM_ARRAYSIZE(GizmoModeLabels); ++Mode)
+	{
+		if (Mode > 0) ImGui::SameLine();
+		const bool bSelected = Mode == CurrentMode;
+		if (!bSelected)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, UnselectedColor);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UnselectedHoverColor);
+		}
+		if (ImGui::Button(GizmoModeLabels[Mode], ButtonSize))
+			Gizmo->SetMode(static_cast<EGizmoMode>(Mode));
+		if (!bSelected) ImGui::PopStyleColor(2);
+		ImGui::SetItemTooltip("%s gizmo. Space cycles modes in the viewport.", GizmoModeLabels[Mode]);
+	}
+
+	ImGui::SameLine();
+	const bool bWorld = Gizmo->GetSpace() == EGizmoSpace::World;
+	if (ImGui::Button(bWorld ? "World" : "Local", ButtonSize))
+		Gizmo->SetSpace(bWorld ? EGizmoSpace::Local : EGizmoSpace::World);
+	ImGui::SetItemTooltip("Gizmo space. Click to switch to %s.", bWorld ? "Local" : "World");
+}
+
+// 프레임 시간과 월드의 액터 수를 보여 준다. 액터 추가와 기즈모는 상단 툴바에 있다.
 void FEditorControlsPanel::OnRender()
 {
-	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(400.0f), EditorUIScale::Px(300.0f)), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(400.0f), EditorUIScale::Px(120.0f)), ImGuiCond_FirstUseEver);
 	if (!BeginPanel())
 	{
 		ImGui::End();
 		return;
 	}
 	ImGui::Spacing();
-
-	char FpsText[64];
-	std::snprintf(FpsText, sizeof(FpsText), "FPS %.1f   %.1f ms", 1.0f / DeltaTime, DeltaTime * 1000.0f);
-	float TextWidth = ImGui::CalcTextSize(FpsText).x;
-	float CursorX = ImGui::GetCursorPosX();
-	float AvailableWidth = ImGui::GetContentRegionAvail().x;
-
-	ImGui::SetCursorPosX(CursorX + AvailableWidth - TextWidth);
-	ImGui::TextDisabled("%s", FpsText);
-
-	//////////////////////////////////////////////////////
-
-	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SectionGap)));
-	ImGui::SeparatorText("Actor Spawn");
-
-	const float SpawnButtonWidth = EditorUIScale::ButtonWidth("Spawn");
-
-	char CountText[32];
-	std::snprintf(
-		CountText,
-		sizeof(CountText),
-		"%d Actors",
-		World->GetActorNum()
-	);
-
-	const float CountWidth = ImGui::CalcTextSize(CountText).x;
-	const float Available = ImGui::GetContentRegionAvail().x;
-	const float Spacing = ImGui::GetStyle().ItemSpacing.x;
-
-	const float ComboWidth =
-		Available - SpawnButtonWidth - CountWidth - Spacing * 2.0f;
-
-	ImGui::SetNextItemWidth(ComboWidth);
-	ImGui::Combo("##ActorType", &SelectedIndex, Items, IM_ARRAYSIZE(Items));
-
+	ImGui::Text("FPS %.1f", 1.0f / DeltaTime);
 	ImGui::SameLine();
-
-	if (ImGui::Button("Spawn", ImVec2(SpawnButtonWidth, 0)))
-	{
-		AddActor(SelectedIndex);
-	}
-
-	ImGui::SameLine();
-	ImGui::TextDisabled("%s", CountText);
-
-	ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SubsectionGap)));
-	ImGui::SeparatorText("Light Spawn");
-	if (ImGui::Button("Directional Light"))
-		SpawnInFrontOfCamera(ADirectionalLightActor::StaticClass());
-	ImGui::SameLine();
-	if (ImGui::Button("Spot Light"))
-		SpawnInFrontOfCamera(ASpotLightActor::StaticClass());
-	ImGui::SameLine();
-	if (ImGui::Button("Point Light"))
-		SpawnInFrontOfCamera(APointLightActor::StaticClass());
-	ImGui::SameLine();
-	if (ImGui::Button("Rect Light"))
-		SpawnInFrontOfCamera(ARectLightActor::StaticClass());
-	ImGui::SameLine();
-	if (ImGui::Button("Sky Light"))
-		SpawnInFrontOfCamera(ASkyLightActor::StaticClass());
-
-	//////////////////////////////////////////////////////
-
-	// Gizmo가 없으면 이 섹션을 통째로 건너뛴다.
-	if (Gizmo)
-	{
-		ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SectionGap)));
-		ImGui::SeparatorText("Gizmo");
-	}
-
-	if (Gizmo && ImGui::BeginTable("GizmoControls", 2))
-	{
-		ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Space").x);
-		ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("Mode");
-
-		ImGui::TableSetColumnIndex(1);
-		ImGui::SetNextItemWidth(-1.0f);
-
-		GizmoSelectedIndex = static_cast<int32>(Gizmo->GetMode());
-		if (ImGui::Combo("##GizmoMode", &GizmoSelectedIndex, GizmoItems, IM_ARRAYSIZE(GizmoItems)))
-		{
-			Gizmo->SetMode(static_cast<EGizmoMode>(GizmoSelectedIndex));
-		}
-
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		ImGui::Text("Space");
-
-		ImGui::TableSetColumnIndex(1);
-		ImGui::SetNextItemWidth(-1.0f);
-
-		if (ImGui::Combo("##GizmoSpace", &SpaceSelectedIndex, SpaceItems, IM_ARRAYSIZE(SpaceItems)))
-		{
-			Gizmo->SetSpace(static_cast<EGizmoSpace>(SpaceSelectedIndex));
-		}
-
-		ImGui::EndTable();
-	}
-
-	//////////////////////////////////////////////////////
-
+	ImGui::TextDisabled("%.1f ms", DeltaTime * 1000.0f);
+	ImGui::TextDisabled("%d actors", World ? World->GetActorNum() : 0);
 	ImGui::End();
 }

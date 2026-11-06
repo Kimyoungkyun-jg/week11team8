@@ -32,6 +32,7 @@
 #include "GameFramework/Actor/PointLightActor.h"
 #include "GameFramework/Actor/SpotLightActor.h"
 #include "GameFramework/Actor/RectLightActor.h"
+#include "Components/DecalComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -119,7 +120,7 @@ bool UEditorEngine::Init()
 	EditorUI->SetOpenSceneCallback([this]() { OpenScene(); });
 	EditorUI->SetSaveSceneCallback([this]() { SaveCurrentScene(); });
 	EditorUI->SetSaveSceneAsCallback([this]() { SaveSceneAs(); });
-	EditorUI->SetPackageGameCallback([this]() { Packager.Start("Release"); });
+	EditorUI->SetPackageGameCallback([this]() { Packager.Start("Shipping"); });
 	EditorUI->SetIsPackagingQuery([this]() { return Packager.IsRunning(); });
 
 	OutputLogPanel = EditorUI->AddEditorPanel<FOutputLogPanel>();
@@ -332,6 +333,8 @@ bool UEditorEngine::Init()
 	EditorControlsPanel->SetSkipGizmoHotkeyQuery([this]() { return SkeletalMeshViewerPanel->HasFocuesdViewer(); });
 	EditorControlsPanel->SetGizmo(Gizmo.get());
 	EditorControlsPanel->SetViewportsPanel(ViewportsPanel);
+	// 새로 만든 액터를 선택해 디테일 패널과 기즈모가 바로 그 액터를 가리키게 한다.
+	EditorControlsPanel->SetOnActorSpawned([this](AActor* Actor) { OutlinerPanel->SelectActor(Actor); });
 
 	SettingsPanel->SetWorld(EditorWorld);
 	SettingsPanel->SetViewportsPanel(ViewportsPanel);

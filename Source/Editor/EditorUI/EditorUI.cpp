@@ -234,7 +234,7 @@ void FEditorUI::DrawMainMenuBar()
 		if (ImGui::BeginMenu("Build"))
 		{
 			const bool bCanPackage = !IsPackaging || !IsPackaging();
-			if (ImGui::MenuItem("Package Game (Release)", nullptr, false, bCanPackage)) { if (OnPackageGame) OnPackageGame(); }
+			if (ImGui::MenuItem("Package Game (Shipping)", nullptr, false, bCanPackage)) { if (OnPackageGame) OnPackageGame(); }
 			ImGui::EndMenu();
 		}
 

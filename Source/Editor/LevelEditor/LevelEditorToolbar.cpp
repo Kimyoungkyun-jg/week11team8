@@ -7,9 +7,9 @@
 #include <imgui_internal.h>   // ArrowButtonEx
 #include <cmath>
 
-namespace
+namespace LevelEditorToolbarUI
 {
-	void BeginToolbarGroup()
+	void BeginGroup()
 	{
 		ImDrawList* DL = ImGui::GetWindowDrawList();
 		DL->ChannelsSplit(2);
@@ -17,7 +17,7 @@ namespace
 		ImGui::BeginGroup();
 	}
 
-	void EndToolbarGroup()
+	void EndGroup()
 	{
 		ImGui::EndGroup();
 		const ImVec2 Min = ImGui::GetItemRectMin();
@@ -31,7 +31,7 @@ namespace
 		DL->ChannelsMerge();
 	}
 
-	void ToolbarSeparator()
+	void Separator()
 	{
 		const float Gap = EditorUIScale::Px(12.0f);
 		ImGui::SameLine(0, Gap);
@@ -41,7 +41,16 @@ namespace
 		ImGui::Dummy({ EditorUIScale::Px(1.0f), H });
 		ImGui::SameLine(0, Gap);
 	}
+
+	void PlaceNextPopupBelowLastItem()
+	{
+		const ImVec2 Min = ImGui::GetItemRectMin();
+		const ImVec2 Max = ImGui::GetItemRectMax();
+		ImGui::SetNextWindowPos({ Min.x, Max.y + EditorUIScale::Px(4.0f) }, ImGuiCond_Always);
+	}
 }
+
+using namespace LevelEditorToolbarUI;
 
 void FLevelEditorToolbar::Draw()
 {
@@ -57,11 +66,11 @@ void FLevelEditorToolbar::Draw()
 	if (bOpen)
 	{
 		DrawFileGroup();
-		ToolbarSeparator();
+		Separator();
 		DrawPlayGroup();
 		if (DrawEditingControls)
 		{
-			ToolbarSeparator();
+			Separator();
 			DrawEditingControls();
 		}
 	}
@@ -76,7 +85,7 @@ void FLevelEditorToolbar::DrawFileGroup()
 
 void FLevelEditorToolbar::DrawPlayGroup()
 {
-	BeginToolbarGroup();
+	BeginGroup();
 
 	// 같은 자리에 Play/Pause/Resume을 모두 넘긴다. IsVisible이 참인 하나만 그려진다.
 	// SameLine은 "그려졌을 때만" 붙여야 빈 간격이 생기지 않는다.
@@ -102,7 +111,7 @@ void FLevelEditorToolbar::DrawPlayGroup()
 	//Button("##Step", StepFrame);
 	//Button("##Stop", Stop);
 
-	EndToolbarGroup();
+	EndGroup();
 }
 
 void FLevelEditorToolbar::DrawPlayModeMenu()
@@ -124,6 +133,7 @@ void FLevelEditorToolbar::DrawPlayModeMenu()
 		ImGui::SetTooltip("Play Mode: %s",
 			GetPlayMode() == EPlayModeType::InViewport ? "Selected Viewport" : "New Editor Window (PIE)");
 
+	PlaceNextPopupBelowLastItem();
 	if (ImGui::BeginPopup("PlayModePopup"))
 	{
 		const EPlayModeType Current = GetPlayMode();

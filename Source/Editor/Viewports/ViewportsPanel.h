@@ -22,7 +22,7 @@ public:
 	// 각 View Texture와 Splitter·Layout 조작 UI를 ImGui 패널에 그린다.
 	void OnRender() override;
 	const char *GetPanelName() const override { return "Viewports"; }
-	void OnHidden() override { bHovered = false; bFocused = false; bStatResetButtonVisible = false; }
+	void OnHidden() override { bHovered = false; bFocused = false; bStatResetButtonVisible = false; bDepthDragActive = false; }
 
 	// Core가 계산한 View Rect에 맞춰 해당 클라이언트의 활성 상태와 크기를 갱신한다.
 	void SetView(int32 ViewIndex, const FRect &Rect, bool bActive);
@@ -75,7 +75,8 @@ private:
 	bool bShowNoCamera = false;
 
 	// 통계 정보 출력
-	void DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, FEditorViewportClient* Client) const;
+	// 그린 배경 사각형을 OutMin/OutMax로 돌려준다. 보여 줄 통계가 없으면 false다.
+	bool DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, FEditorViewportClient* Client, ImVec2& OutMin, ImVec2& OutMax) const;
 	void DrawCameraSpeedNotice(ImDrawList* DrawList) const;
 	void DrawCameraSettings(FEditorViewportClient& Client);
 	int32 CameraSpeedViewIndex = -1;
@@ -95,6 +96,15 @@ private:
 	bool bToolbarVisible[4]{};
 	ImVec2 ToolbarMin[4]{};
 	ImVec2 ToolbarMax[4]{};
+	// 뷰 툴바 오른쪽 묶음(카메라·Show·최대화). 왼쪽 묶음과 따로 입력을 막는다.
+	ImVec2 ToolbarRightMin[4]{};
+	ImVec2 ToolbarRightMax[4]{};
+	// Scene Depth 범례. 해당 모드인 뷰에서만 보인다.
+	bool bDepthLegendVisible[4]{};
+	ImVec2 DepthLegendMin[4]{};
+	ImVec2 DepthLegendMax[4]{};
+	// 범례 값을 끄는 동안 커서가 범례 밖으로 나가도 뷰 입력을 막는다.
+	bool bDepthDragActive = false;
 	ImVec2 StatResetButtonMin{};
 	ImVec2 StatResetButtonMax{};
 	float PendingHorizontalDrag = 0.0f;
