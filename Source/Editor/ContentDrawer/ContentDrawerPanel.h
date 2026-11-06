@@ -1,0 +1,62 @@
+#pragma once
+#include "Editor/HitoriEd/EditorResourcePaths.h"
+
+#include "Editor/EditorUI/EditorPanel.h"
+#include "Editor/Viewports/EditorViewportClient.h"
+#include "GameFramework/Actor/SkeletalMeshActor.h"
+
+#include <filesystem>
+#include <functional>
+#include <unordered_map>
+
+namespace fs = std::filesystem;
+
+class FContentDrawerPanel : public IEditorPanel
+{
+public:
+	FContentDrawerPanel();
+	virtual ~FContentDrawerPanel() override;
+	bool Init() override;
+	void Tick(float DeltaTime) override;
+	void OnRender() override;
+	const char* GetPanelName() const override { return "Content Drawer"; }
+	void RenderFolderTree(const fs::path& Path, fs::path& SelectedPath);
+	void Release();
+	void RequestThumbnailRefresh() { bRefreshThumbnails = true; }
+
+	// .widget 파일을 더블클릭하면 불린다 (UI 에디터가 연다).
+	void SetOpenWidgetCallback(std::function<void(const FString&)> InCallback) { OnOpenWidget = std::move(InCallback); }
+	void SetCreateWidgetCallback(std::function<void(const FString&)> InCallback) { OnCreateWidget = std::move(InCallback); }
+
+	// .fbx 파일을 더블클릭 시
+	void SetOpenSkeletalMeshCallback(std::function<void(const FString&)> InCallback) { OnOpenSkeletalMesh = std::move(InCallback); }
+	void SetOpenAssetCallback(std::function<void(const FString&)> InCallback) { OnOpenAsset = std::move(InCallback); }
+	void SetImportFbxCallback(std::function<void(const FString&, bool)> InCallback) { OnImportFbx = std::move(InCallback); }
+
+private:
+	void OpenItem(const fs::path& Path);
+	std::function<void(const FString&)> OnOpenAsset;
+	std::function<void(const FString&, bool)> OnImportFbx;
+	std::function<void(const FString&)> OnOpenWidget;
+	std::function<void(const FString&)> OnCreateWidget;
+	std::function<void(const FString&)> OnOpenSkeletalMesh;
+	char NewAssetName[64] = "NewWidget";
+	bool bOpenCreateWidget = false;
+
+	fs::path AssetRootPath = "Assets";
+	fs::path CurrentPath = "Assets";
+	fs::path SelectedAssetPath;
+
+	const FString FolderIconPath = EditorResourcePaths::FolderIcon;
+	const FString FileIconPath = EditorResourcePaths::FileIcon;
+	
+	std::unordered_map<FString, TUniquePtr<FTexture2D>> ThumbnailCache;
+	UWorld* ThumbnailWorld = nullptr;
+	ASkeletalMeshActor* ThumbnailActor = nullptr;
+	TUniquePtr<class FSkyboxRenderer> ThumbnailSkybox;
+	FEditorViewportClient ThumbnailClient;
+	bool bStudioInitialized = false;
+	bool bRefreshThumbnails = false;
+	void InitThumbnailStudio();
+	FTexture2D* GetOrCreateSkeletalMeshThumbnail(const FString& FbxPath);
+};

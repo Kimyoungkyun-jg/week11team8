@@ -1,0 +1,26 @@
+#pragma once
+
+#include "GameFramework/Actor.h"
+#include "Pawn.generated.h"
+
+class APlayerController;
+
+UCLASS()
+class APawn : public AActor
+{
+	GENERATED_BODY()
+public:
+	APawn();
+	virtual void AddMovementInput(const FVector& WorldDirection, float ScaleValue);
+	FVector ConsumeMovementInputVector();
+	virtual void AddControllerYawInput(float Value) {}
+	virtual void AddControllerPitchInput(float Value) {}
+	virtual void Jump() {}
+	virtual void StopJumping() {}
+	void PossessedBy(APlayerController* NewController) { Controller = NewController; }
+	void UnPossessed() { Controller = nullptr; }
+	APlayerController* GetController() const { return Controller; }
+private:
+	APlayerController* Controller = nullptr;
+	FVector PendingMovementInput = FVector::ZeroVector;
+};
