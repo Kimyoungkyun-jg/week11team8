@@ -4,7 +4,7 @@
 #include "ProjectileActor.generated.h"
 
 class UStaticMeshComponent;
-class UFireBallComponent;
+class UPointLightComponent;
 class UProjectileMovementComponent;
 
 // Reusable PIE projectile launched by the default pawn.
@@ -20,12 +20,12 @@ public:
     bool IsInFlight() const { return bInFlight; }
     UStaticMeshComponent* GetStaticMeshComponent() const { return StaticMeshComponent; }
     UStaticMeshComponent* GetFireBallMeshComponent() const { return FireBallMeshComponent; }
-    UFireBallComponent* GetFireBallComponent() const { return FireBallComponent; }
+    UPointLightComponent* GetFireBallLightComponent() const { return FireBallLightComponent; }
     UProjectileMovementComponent* GetProjectileMovementComponent() const { return ProjectileMovementComponent; }
 private:
     UStaticMeshComponent* StaticMeshComponent = nullptr;
     UStaticMeshComponent* FireBallMeshComponent = nullptr;
-    UFireBallComponent* FireBallComponent = nullptr;
+    UPointLightComponent* FireBallLightComponent = nullptr;
     UProjectileMovementComponent* ProjectileMovementComponent = nullptr;
     bool bInFlight = false;
     float RemainingLife = 0.0f;

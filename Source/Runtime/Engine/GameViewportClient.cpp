@@ -357,14 +357,6 @@ void FGameViewportClient::GetAxisInputBySIEMode(EGameInputAxis Key, float Delta)
 	}
 }
 
-float FGameViewportClient::ConsumeSIECameraSpeedSteps()
-{
-	if (!bSIEMode || !bSIEKeyDown[static_cast<int32>(EKeyCode::RButton)]) return 0.0f;
-	const float Steps = SIEWheelDelta / 120.0f;
-	SIEWheelDelta = 0.0f;
-	return Steps;
-}
-
 void FGameViewportClient::TickSIEInput(float DeltaTime, float MoveSpeed, float MouseSensitivity)
 {
 	if (!bSIEMode || !CameraComponent)

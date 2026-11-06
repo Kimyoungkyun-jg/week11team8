@@ -119,4 +119,8 @@ protected:
 	bool bAbsoluteRotation = false;
 	bool bAbsoluteScale = false;
 	float CollisionRadiusOverride = -1.0f;
+
+private:
+	// GetWorldMatrix의 TRS 합성과 같은 규칙으로 부모 기준 상대 값을 역산한다.
+	void ApplyWorldTRS(const FVector& Location, const FQuat& Rotation, const FVector& Scale);
 };

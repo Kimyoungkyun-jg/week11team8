@@ -32,6 +32,7 @@
 #include "GameFramework/Actor/PointLightActor.h"
 #include "GameFramework/Actor/SpotLightActor.h"
 #include "GameFramework/Actor/RectLightActor.h"
+#include "Components/DecalComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -119,7 +120,7 @@ bool UEditorEngine::Init()
 	EditorUI->SetOpenSceneCallback([this]() { OpenScene(); });
 	EditorUI->SetSaveSceneCallback([this]() { SaveCurrentScene(); });
 	EditorUI->SetSaveSceneAsCallback([this]() { SaveSceneAs(); });
-	EditorUI->SetPackageGameCallback([this]() { Packager.Start("Release"); });
+	EditorUI->SetPackageGameCallback([this]() { Packager.Start("Shipping"); });
 	EditorUI->SetIsPackagingQuery([this]() { return Packager.IsRunning(); });
 
 	OutputLogPanel = EditorUI->AddEditorPanel<FOutputLogPanel>();
@@ -350,6 +351,8 @@ bool UEditorEngine::Init()
 	EditorControlsPanel->SetSkipGizmoHotkeyQuery([this]() { return SkeletalMeshViewerPanel->HasFocuesdViewer(); });
 	EditorControlsPanel->SetGizmo(Gizmo.get());
 	EditorControlsPanel->SetViewportsPanel(ViewportsPanel);
+	// 새로 만든 액터를 선택해 디테일 패널과 기즈모가 바로 그 액터를 가리키게 한다.
+	EditorControlsPanel->SetOnActorSpawned([this](AActor* Actor) { OutlinerPanel->SelectActor(Actor); });
 
 	SettingsPanel->SetWorld(EditorWorld);
 	SettingsPanel->SetViewportsPanel(ViewportsPanel);
@@ -1213,12 +1216,6 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		GameViewport.GetAxisInputBySIEMode(EGameInputAxis::MouseX, MouseX);
 		GameViewport.GetAxisInputBySIEMode(EGameInputAxis::MouseY, MouseY);
 		FEditorViewportClient* Source = ViewportsPanel ? ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex) : nullptr;
-		const float SpeedSteps = GameViewport.ConsumeSIECameraSpeedSteps();
-		if (Source && SpeedSteps != 0.0f)
-		{
-			Source->SetCameraSpeed(Source->GetCameraSpeed() * std::pow(1.25f, SpeedSteps));
-			ViewportsPanel->ShowCameraSpeed(PIEStartEditorViewIndex, Source->GetCameraSpeed());
-		}
 		GameViewport.TickSIEInput(DeltaTime, 10.0f * (Source ? Source->GetCameraSpeed() : 1.0f),
 			0.2f * (Source ? Source->GetMouseSensitivity() : 1.0f));
 	}
@@ -1300,24 +1297,13 @@ void UEditorEngine::BuildSceneRenderOptions(FGameViewportClient* ViewClient, FSc
 		return;
 	}
 
-	// 게임 뷰포트에는 Show 메뉴가 없으므로 실행을 시작한 에디터 뷰의 설정을 따른다. 다른 뷰를 클릭해도 바뀌지 않는다.
-	FViewShowFlags ShowFlags;
-	if (ViewportsPanel)
-		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex))
-			ShowFlags = ActiveView->GetShowFlags();
-	Options.bEnableFXAA = ShowFlags.bFXAA;
+	// Keep PIE bound to the view that started this play session.
+	const FEditorViewportClient* Source = ViewportsPanel ? ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex) : nullptr;
 	Options.bCacheShadows = SettingsPanel->GetSettings().bCacheShadows;
 	Options.PcfMode = SettingsPanel->GetSettings().PcfMode;
 	Options.RenderingPath = SettingsPanel->GetSettings().RenderingPath;
 	Options.ReflectionModel = SettingsPanel->GetSettings().ReflectionModel;
 	Options.ShadingModel = SettingsPanel->GetSettings().ShadingModel;
-	if (ViewportsPanel)
-		if (const FEditorViewportClient* ActiveView = ViewportsPanel->GetViewportClient(PIEStartEditorViewIndex))
-		{
-			Options.ReflectionModel = ActiveView->GetReflectionModel();
-			Options.ShadingModel = ActiveView->GetShadingModel();
-			Options.bOverrideMaterialLighting = true;
-		}
 	Options.LightCullingMode = SettingsPanel->GetSettings().LightCullingMode;
 	Options.DirectionalShadowMapSize = SettingsPanel->GetSettings().GetDirectionalShadowMapSize();
 	Options.PointShadowMapSize = SettingsPanel->GetSettings().GetPointShadowMapSize();
@@ -1326,8 +1312,7 @@ void UEditorEngine::BuildSceneRenderOptions(FGameViewportClient* ViewClient, FSc
 	const FEditorSettings& S = SettingsPanel->GetSettings();
 	Options.bGammaCorrection = S.bGammaCorrection;
 	Options.DisplayGamma = S.DisplayGamma;
-	Options.bShowVignette = ShowFlags.bVignette;
-	Options.bShowCameraOverlay = ShowFlags.bCameraOverlay;
+	if (Source) Source->ApplyRenderSettings(Options);
 
 	Options.DecalRenderMethod = S.DecalRenderMethod;
 }
@@ -1340,13 +1325,9 @@ void UEditorEngine::BuildSceneRenderOptions(FEditorViewportClient* ViewClient, b
 	}
 
 	const FViewShowFlags& ShowFlags = ViewClient->GetShowFlags();
-	Options.bEnableFXAA = ShowFlags.bFXAA;
 	Options.bCacheShadows = SettingsPanel->GetSettings().bCacheShadows;
 	Options.PcfMode = SettingsPanel->GetSettings().PcfMode;
 	Options.RenderingPath = SettingsPanel->GetSettings().RenderingPath;
-	Options.ReflectionModel = ViewClient->GetReflectionModel();
-	Options.ShadingModel = ViewClient->GetShadingModel();
-	Options.bOverrideMaterialLighting = true;
 	Options.LightCullingMode = SettingsPanel->GetSettings().LightCullingMode;
 	Options.DirectionalShadowMapSize = SettingsPanel->GetSettings().GetDirectionalShadowMapSize();
 	Options.PointShadowMapSize = SettingsPanel->GetSettings().GetPointShadowMapSize();
@@ -1355,8 +1336,6 @@ void UEditorEngine::BuildSceneRenderOptions(FEditorViewportClient* ViewClient, b
 	const FEditorSettings& S = SettingsPanel->GetSettings();
 	Options.bGammaCorrection = S.bGammaCorrection;
 	Options.DisplayGamma = S.DisplayGamma;
-	Options.bShowVignette = ShowFlags.bVignette;
-	Options.bShowCameraOverlay = ShowFlags.bCameraOverlay;
 
 	Options.bDrawPrimitives = IsPIE || ShowFlags.bPrimitives;
 	const EViewportMode ViewMode = ViewClient->GetViewportMode();
@@ -1368,9 +1347,9 @@ void UEditorEngine::BuildSceneRenderOptions(FEditorViewportClient* ViewClient, b
 	Options.bShowShadowMask = !IsPIE && ViewClient->IsShadowMask();
 	Options.bShowWorldNormal = !IsPIE && ViewClient->IsWorldNormal();
 	Options.bShowLightCulling = !IsPIE && ViewClient->IsLightCulling();
-	Options.SceneDepthRange = ViewClient->GetMaxRange();
 
 	Options.DecalRenderMethod = S.DecalRenderMethod;
+	ViewClient->ApplyRenderSettings(Options);
 }
 
 // 게임 뷰포트 화면을 렌더링한다

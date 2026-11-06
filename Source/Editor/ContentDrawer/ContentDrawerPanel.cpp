@@ -305,6 +305,29 @@ void FContentDrawerPanel::OnRender()
 				// 파일 이름 표시
 				ImGui::TextWrapped("%s", FilenameString.c_str());
 				if (UnimportedFbxFiles.contains(Path.filename())) ImGui::TextDisabled("Not imported");
+
+				// 이름 영역은 두 줄로 고정하고, 남은 이름은 두 번째 줄에서 말줄임한다.
+				const ImVec2 NamePos = ImGui::GetCursorScreenPos();
+				const float NameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+				const float LineHeight = ImGui::GetTextLineHeight();
+				const char* NameBegin = FilenameString.c_str();
+				const char* NameEnd = NameBegin + FilenameString.size();
+				const char* FirstLineEnd = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), NameBegin, NameEnd, NameWidth);
+				ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), NamePos,
+					ImVec2(NamePos.x + NameWidth, NamePos.y + LineHeight), NamePos.x + NameWidth,
+					NameBegin, FirstLineEnd, nullptr);
+				const char* SecondLineBegin = FirstLineEnd;
+				while (SecondLineBegin < NameEnd && (*SecondLineBegin == ' ' || *SecondLineBegin == '\t'))
+					++SecondLineBegin;
+				if (SecondLineBegin < NameEnd)
+				{
+					ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), ImVec2(NamePos.x, NamePos.y + LineHeight),
+						ImVec2(NamePos.x + NameWidth, NamePos.y + LineHeight * 2.0f), NamePos.x + NameWidth,
+						SecondLineBegin, NameEnd, nullptr);
+				}
+				ImGui::Dummy(ImVec2(NameWidth, LineHeight * 2.0f));
+				ImGui::SetItemTooltip("%s", FilenameString.c_str());
+
 				bOpenRequested |= OpenOnClick();
 				if (bOpenRequested) PendingOpen = Path;
 

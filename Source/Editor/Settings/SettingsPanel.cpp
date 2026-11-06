@@ -295,6 +295,15 @@ bool FSettingsPanel::LoadSettings()
 		return false;
 	}
 
+	Settings.LegacyCameraSpeed = 1.0f;
+	Settings.LegacyMouseSensitivity = 1.0f;
+	Settings.LegacySceneDepthMaxRange = 50.0f;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		Settings.ViewCameraSpeed[Index] = 0.0f;
+		Settings.ViewMouseSensitivity[Index] = 0.0f;
+		Settings.ViewSceneDepthRange[Index] = 0.0f;
+	}
 	bool bHasViewportLightingDefaults = false;
 	uint8 LocationComponentMasks[4]{};
 	uint8 RotationComponentMasks[4]{};

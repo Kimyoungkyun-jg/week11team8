@@ -1,7 +1,7 @@
 #include "EnginePCH.h"
 #include "GameFramework/Actor/ProjectileActor.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/FireBallComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/ProjectileMovementComponent.h"
 #include "Asset/AssetManager.h"
 #include "Engine/World.h"
@@ -20,16 +20,20 @@ AProjectileActor::AProjectileActor()
     StaticMeshComponent->SetVisible(false);
     StaticMeshComponent->SetHiddenInGame(true);
     StaticMeshComponent->SetAutoActivate(false);
-    FireBallComponent = CreateDefaultSubobject<UFireBallComponent>("FireBallComponent");
-    FireBallComponent->SetupAttachment(GetRootComponent());
-    FireBallComponent->SetVisibility(false);
-    FireBallComponent->SetHiddenInGame(true);
-    FireBallComponent->SetAutoActivate(false);
-    // FireBall은 깊이 버퍼의 표면에만 색을 입히므로 전용 구체를 함께 움직인다.
+    FireBallLightComponent = CreateDefaultSubobject<UPointLightComponent>("FireBallLightComponent");
+    FireBallLightComponent->SetIntensity(1.8f);
+    FireBallLightComponent->SetLightColor(FColor(255, 0, 204, 255));
+    FireBallLightComponent->SetAttenuationRadius(6.5f);
+    FireBallLightComponent->SetFalloff(3.0f);
+    FireBallLightComponent->SetupAttachment(GetRootComponent());
+    FireBallLightComponent->SetVisibility(false);
+    FireBallLightComponent->SetHiddenInGame(true);
+    FireBallLightComponent->SetAutoActivate(false);
+    // 라이트는 눈에 보이지 않으므로 발광체 역할의 구체를 함께 움직인다.
     FireBallMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>("FireBallMeshComponent");
     FireBallMeshComponent->SetupAttachment(GetRootComponent());
     FireBallMeshComponent->SetStaticMesh(UAssetManager::GetAssetByPath<UStaticMesh>("Sphere"));
-    FireBallMeshComponent->SetRelativeScale3D(FVector(FireBallComponent->GetRadius() * 0.5f));
+    FireBallMeshComponent->SetRelativeScale3D(FVector(FireBallLightComponent->GetAttenuationRadius() * 0.5f));
     FireBallMeshComponent->SetVisible(false);
     FireBallMeshComponent->SetHiddenInGame(true);
     FireBallMeshComponent->SetAutoActivate(false);
@@ -61,13 +65,13 @@ void AProjectileActor::Launch(const FVector& Position, const FVector& Direction,
     }
     else
     {
-        FireBallMeshComponent->SetRelativeScale3D(FVector(FireBallComponent->GetRadius() * 0.5f));
+        FireBallMeshComponent->SetRelativeScale3D(FVector(FireBallLightComponent->GetAttenuationRadius() * 0.5f));
         FireBallMeshComponent->SetVisible(true);
         FireBallMeshComponent->Activate();
         FireBallMeshComponent->SetHiddenInGame(false);
-        FireBallComponent->SetVisibility(true);
-        FireBallComponent->Activate();
-        FireBallComponent->SetHiddenInGame(false);
+        FireBallLightComponent->SetVisibility(true);
+        FireBallLightComponent->Activate();
+        FireBallLightComponent->SetHiddenInGame(false);
     }
     ProjectileMovementComponent->SetUpdatedComponent(GetRootComponent());
     ProjectileMovementComponent->Velocity = Forward * ProjectileMovementComponent->InintialSpeed;
@@ -94,11 +98,11 @@ void AProjectileActor::ReturnToPool()
         StaticMeshComponent->SetHiddenInGame(true);
         StaticMeshComponent->SetVisible(false);
     }
-    if (FireBallComponent)
+    if (FireBallLightComponent)
     {
-        FireBallComponent->Deactivate();
-        FireBallComponent->SetHiddenInGame(true);
-        FireBallComponent->SetVisibility(false);
+        FireBallLightComponent->Deactivate();
+        FireBallLightComponent->SetHiddenInGame(true);
+        FireBallLightComponent->SetVisibility(false);
     }
     if (FireBallMeshComponent)
     {

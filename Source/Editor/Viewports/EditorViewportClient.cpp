@@ -8,10 +8,22 @@
 #include "Camera/ViewportCameraMovement.h"
 #include "Math/EngineMath.h"
 #include "Render/RenderCommand.h"
+#include "Render/SceneRenderOptions.h"
 #include <algorithm>
 #include <cmath>
 
 FEditorViewportClient::FEditorViewportClient() {}
+
+void FEditorViewportClient::ApplyRenderSettings(FSceneRenderOptions& Options) const
+{
+    Options.ReflectionModel = ReflectionModel;
+    Options.ShadingModel = Options.RenderingPath == ERenderingPath::Deferred ? EShadingModel::Phong : ShadingModel;
+    Options.bOverrideMaterialLighting = true;
+    Options.bEnableFXAA = ShowFlags.bFXAA;
+    Options.bShowVignette = ShowFlags.bVignette;
+    Options.bShowCameraOverlay = ShowFlags.bCameraOverlay;
+    Options.SceneDepthRange = MaxRange;
+}
 
 void FEditorViewportClient::SetCameraSpeed(float Value)
 {

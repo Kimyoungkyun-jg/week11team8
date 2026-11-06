@@ -65,7 +65,7 @@ void AccumulateLocalLight(inout float3 Diffuse, inout float3 Specular,
         H *= rsqrt(HLengthSquared);
         SpecularTerm = saturate(dot(N, H));
     }
-    Specular += SpecularData.rgb * Radiance * pow(SpecularTerm, max(1.0f, SpecularData.a));
+    Specular += SpecularData.rgb * Radiance * pow(saturate(SpecularTerm), max(1.0f, SpecularData.a));
 }
 
 // 광원 하나의 기여 (그림자 제외). Directional은 확산광만 쓴다.
