@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <set>
 #include <unordered_map>
 
 namespace fs = std::filesystem;
@@ -32,9 +33,23 @@ public:
 	void SetOpenSkeletalMeshCallback(std::function<void(const FString&)> InCallback) { OnOpenSkeletalMesh = std::move(InCallback); }
 	void SetOpenAssetCallback(std::function<void(const FString&)> InCallback) { OnOpenAsset = std::move(InCallback); }
 	void SetImportFbxCallback(std::function<void(const FString&, bool)> InCallback) { OnImportFbx = std::move(InCallback); }
+	void SetReimportFromFileCallback(std::function<void(const FString&)> InCallback) { OnReimportFromFile = std::move(InCallback); }
+	// Import 버튼. 인자는 지금 보고 있는 폴더이며 바이너리가 여기에 만들어진다.
+	void SetImportFbxFilesCallback(std::function<void(const FString&)> InCallback) { OnImportFbxFiles = std::move(InCallback); }
 
 private:
 	void OpenItem(const fs::path& Path);
+	void RefreshFbxFolderCache();
+	void DrawFbxBinaryMenu(const FString& Path);
+	std::function<void(const FString&)> OnReimportFromFile;
+	std::function<void(const FString&)> OnImportFbxFiles;
+	// 매 프레임 파일을 열지 않도록 현재 폴더의 FBX 상태를 잠시 들고 있는다.
+	fs::path FbxCachePath;
+	double FbxCacheTime = 0.0;
+	std::set<fs::path> HiddenFbxFiles;      // 같은 폴더에 바이너리가 있다
+	std::set<fs::path> UnimportedFbxFiles;  // 어느 폴더에도 바이너리가 없다
+	FString FbxMenuStatus;
+	bool bFbxMenuHasSource = false;
 	std::function<void(const FString&)> OnOpenAsset;
 	std::function<void(const FString&, bool)> OnImportFbx;
 	std::function<void(const FString&)> OnOpenWidget;

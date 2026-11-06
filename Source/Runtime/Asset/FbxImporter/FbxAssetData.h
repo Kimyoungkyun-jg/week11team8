@@ -30,6 +30,11 @@ struct FFbxImportOptions
 	bool bCombineStaticMeshes = false;
 	bool bBakeSkeletalMeshes = true;
 	bool bCombineSkeletalMeshes = true;
+	// 둘 다 켜면 스킨 유무로 나눈다. Static만 켜면 스킨을 무시하고, Skeletal만 켜면 스킨 없는 메시를 건너뛴다.
+	bool bImportStaticMeshes = true;
+	bool bImportSkeletalMeshes = true;
+	bool bForceFrontX = true;
+	float UniformScale = 1.f; // 정점과 본 이동에 곱한다.
 };
 
 struct FFbxMaterialData
@@ -58,9 +63,12 @@ struct FFbxAssetData
 {
 	EFbxAssetType Type = EFbxAssetType::StaticMesh;
 	FString Key;
-	FString SourcePath; // 출처 식별용: Assets 상대 경로 또는 외부 원본의 절대 경로. 로딩 의존성이 아니다.
+	FString SourcePath; // 소유 FBX: Assets 상대 경로 또는 외부 원본의 절대 경로. 로딩 의존성이 아니다.
 	FString SourceObject;
 	FFbxImportOptions Options;
+	// 실제로 읽은 파일. Reimport From File을 쓰면 소유 FBX와 달라질 수 있다.
+	FString ActualSourcePath;
+	uint64 SourceHash = 0; // 임포트 시점 ActualSourcePath의 내용 해시
 	TArray<FFbxMeshLODData> LODs;
 	TArray<FString> MaterialKeys;
 	std::array<float, 3> ScreenThresholds{ .30f, .10f, .03f };

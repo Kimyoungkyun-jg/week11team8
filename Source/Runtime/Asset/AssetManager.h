@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <set>
 
 #include "AssetManager.generated.h"
 
@@ -92,6 +93,11 @@ public:
 	static const TArray<FAnimationClip>* LoadFbxAnimations(const FString& Path);
 	static const TArray<FAnimationClip>* GetFbxAnimations(const FString& AssetKey);
 
+	// 시작 스캔에서 바이너리를 찾지 못한 FBX 경로. 에디터가 임포트 창으로 넘긴다.
+	const TArray<FString>& GetFbxImportCandidates() const { return FbxImportCandidates; }
+	void MarkFbxImported(const FString& SourceIdentity);
+	bool IsFbxImported(const FString& SourceIdentity) const;
+
 	FLODGenerateResult GenerateStaticMeshLODs(UStaticMesh& Mesh,const FLODGenerateRequest& Request);
 
 	// 원본 좌표축이 엔진과 다른 메시를 로드 후 돌린다 (정점·법선·AABB·삼각형 BVH·GPU 정점 버퍼를 다시 만든다).
@@ -106,6 +112,8 @@ private:
 	TMap<FString, URenderAsset*> AssetMap;
 	TMap<FString, USoundWave*> SoundMap;
 	TMap<FString, TArray<FAnimationClip>> AnimationMap;
+	TArray<FString> FbxImportCandidates;
+	std::set<FString> ImportedFbxSources; // 소유 FBX 식별자, 대소문자 무시
 
 	//TMap<FString, UStaticMesh*> MeshMap;	// KEY: FILE NAME OR 쉐입 첫글자 대문자
 	TMap<FString, TUniquePtr<FShader>> ShaderMap;	// KEY: FILE NAME

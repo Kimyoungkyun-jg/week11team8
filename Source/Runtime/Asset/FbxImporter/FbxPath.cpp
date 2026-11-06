@@ -3,6 +3,7 @@
 #include <cwchar>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 
 FString FbxPath::ToString(const fs::path& Path)
 {
@@ -60,7 +61,11 @@ bool FbxPath::GetSourcePath(const FString& Input, fs::path& Path, FString& Ident
 FString FbxPath::DefaultOutputDirectory(const FString& Source)
 {
 	const fs::path Root = fs::path("Assets") / "Imported";
-	return ToString(Source.empty() ? Root : Root / FromString(FileName(ToString(FromString(Source).stem()))));
+	if (Source.empty()) return ToString(Root);
+	// Assets 안의 FBX는 바로 옆에 바이너리를 만든다. 밖의 FBX는 Assets로 모은다.
+	FString Key, Ignored;
+	if (GetAssetKey(Source, Key, Ignored)) return ToString((fs::path("Assets") / FromString(Key)).parent_path());
+	return ToString(Root / FromString(FileName(ToString(FromString(Source).stem()))));
 }
 
 bool FbxPath::GetOutputDirectory(const FString& Input, fs::path& Path, FString& Error)
@@ -88,6 +93,27 @@ uint64 FbxPath::StableHash(const FString& Value)
 	uint64 Hash = 14695981039346656037ull;
 	for (unsigned char Ch : Value) { Hash ^= Ch; Hash *= 1099511628211ull; }
 	return Hash;
+}
+
+uint64 FbxPath::FileHash(const fs::path& Path)
+{
+	std::ifstream In(Path, std::ios::binary);
+	if (!In) return 0;
+	uint64 Hash = 14695981039346656037ull;
+	char Buffer[65536];
+	while (In.read(Buffer, sizeof(Buffer)) || In.gcount() > 0)
+	{
+		const std::streamsize Count = In.gcount();
+		for (std::streamsize I = 0; I < Count; ++I) { Hash ^= static_cast<unsigned char>(Buffer[I]); Hash *= 1099511628211ull; }
+		if (Count < static_cast<std::streamsize>(sizeof(Buffer))) break;
+	}
+	return Hash;
+}
+
+fs::path FbxPath::SourceFile(const FString& Identity)
+{
+	const fs::path Path = FromString(Identity);
+	return Path.is_absolute() ? Path : fs::path("Assets") / Path;
 }
 
 bool FbxPath::ResolveKey(const FString& Key, fs::path& Path, FString& Error)

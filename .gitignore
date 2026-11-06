@@ -452,6 +452,9 @@ editor.ini
 *.obj.bin
 *.fbx.bin
 *.fbx.anim.bin
+# FBX 임포트 결과는 각자 만든다. 원본 .fbx만 커밋한다.
+*.fbxbin
+.fbx-import-*/
 /Assets/.fbx-test-fixtures*/
 
 # 셰이더 컴파일 캐시 (실행 시 자동 생성)

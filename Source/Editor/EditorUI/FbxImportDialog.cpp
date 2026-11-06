@@ -5,8 +5,10 @@
 #include "Asset/FbxImporter/FbxAssetLoader.h"
 #include "Asset/FbxImporter/FbxPath.h"
 #include <commdlg.h>
+#include <cwchar>
 #include <shobjidl.h>
 #include <thread>
+#include <vector>
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "uuid.lib")
@@ -75,47 +77,141 @@ HRESULT ChooseFbxOutputFolder(HWND Owner, const fs::path& InitialDirectory, FStr
 	return Result;
 }
 }
-void FEditorUI::OpenFbxImportDialog(const FString& Source, const FString& Output, const FFbxImportOptions& Options)
+namespace {
+// 선택한 파일을 UTF-8 경로로 돌려준다. 취소하면 빈 배열이다.
+TArray<FString> PickFbxFiles(HWND Owner, bool bMultiSelect, FString& Error)
 {
-	if (Source.size() >= sizeof(FbxSourcePath) || Output.size() >= sizeof(FbxOutputDirectory))
-	{ FbxResult.Error = "The selected path is too long."; return; }
-	strcpy_s(FbxSourcePath, Source.c_str());
-	strcpy_s(FbxOutputDirectory, Output.c_str());
-	bFbxOutputDirectoryEdited = !Output.empty();
-	FbxOptions = Options;
-	bRequestFbxImportDialog = true;
-}
-
-void FEditorUI::BrowseFbxSource()
-{
-	wchar_t Path[32768]{};
-	MultiByteToWideChar(CP_UTF8, 0, FbxSourcePath, -1, Path, static_cast<int>(std::size(Path)));
+	TArray<FString> Result;
+	std::vector<wchar_t> Buffer(bMultiSelect ? 262144 : 32768, L'\0');
 	const std::wstring InitialDirectory = fs::absolute("Assets").wstring();
 	OPENFILENAMEW Dialog{};
 	Dialog.lStructSize = sizeof(Dialog);
-	Dialog.hwndOwner = static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw);
+	Dialog.hwndOwner = Owner;
 	Dialog.lpstrFilter = L"FBX files (*.fbx)\0*.fbx\0\0";
 	Dialog.lpstrDefExt = L"fbx";
-	Dialog.lpstrFile = Path;
-	Dialog.nMaxFile = static_cast<DWORD>(std::size(Path));
+	Dialog.lpstrFile = Buffer.data();
+	Dialog.nMaxFile = static_cast<DWORD>(Buffer.size());
 	Dialog.lpstrInitialDir = InitialDirectory.c_str();
-	Dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-	if (GetOpenFileNameW(&Dialog))
+	Dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | (bMultiSelect ? OFN_ALLOWMULTISELECT : 0);
+	if (!GetOpenFileNameW(&Dialog))
 	{
-		char SelectedPath[sizeof(FbxSourcePath)]{};
-		if (WideCharToMultiByte(CP_UTF8, 0, Path, -1, SelectedPath, sizeof(SelectedPath), nullptr, nullptr))
+		if (const DWORD Code = CommDlgExtendedError())
 		{
-			std::memcpy(FbxSourcePath, SelectedPath, sizeof(FbxSourcePath));
-			UpdateFbxOutputDirectory();
-			FbxResult = {};
+			Error = "Could not open the file browser.";
+			HTR_LOG(Error, "FBX file dialog failed: {}", Code);
 		}
-		else FbxResult.Error = "The selected file path is too long.";
+		return Result;
 	}
-	else if (const DWORD Error = CommDlgExtendedError())
+	// 한 개면 전체 경로, 여러 개면 폴더 다음에 파일 이름이 널 문자로 이어진다.
+	const fs::path First(Buffer.data());
+	const wchar_t* Next = Buffer.data() + std::wcslen(Buffer.data()) + 1;
+	if (!bMultiSelect || *Next == L'\0') { Result.Add(FbxPath::ToString(First)); return Result; }
+	for (; *Next != L'\0'; Next += std::wcslen(Next) + 1) Result.Add(FbxPath::ToString(First / Next));
+	return Result;
+}
+}
+
+void FEditorUI::EnqueueFbxRequest(FFbxImportRequest Request)
+{
+	for (const FFbxImportRequest& Queued : FbxQueue)
+		if (Queued.Source == Request.Source && Queued.Output == Request.Output) return;
+	FbxQueue.Add(std::move(Request));
+}
+
+void FEditorUI::OpenFbxImportDialog()
+{
+	EnqueueFbxRequest({});
+}
+
+void FEditorUI::QueueFbxImports(const TArray<FString>& Sources, const FString& LockedOutput)
+{
+	for (const FString& Source : Sources)
 	{
-		FbxResult.Error = "Could not open the file browser.";
-		HTR_LOG(Error, "FBX file dialog failed: {}", Error);
+		FFbxImportRequest Request;
+		Request.Source = Source;
+		Request.Output = LockedOutput;
+		Request.bLockOutput = !LockedOutput.empty();
+		EnqueueFbxRequest(std::move(Request));
 	}
+}
+
+void FEditorUI::QueueFbxReimport(const FString& Source, const FString& Output, const FFbxImportOptions& Options, const FString& Owner)
+{
+	FFbxImportRequest Request;
+	Request.Source = Source;
+	Request.Output = Output;
+	Request.Owner = Owner;
+	Request.Options = Options;
+	Request.bLockOutput = true;
+	Request.bReimport = true;
+	EnqueueFbxRequest(std::move(Request));
+}
+
+void FEditorUI::BrowseFbxImportFiles(const FString& Output)
+{
+	FString Error;
+	const TArray<FString> Files = PickFbxFiles(static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw), true, Error);
+	if (!Error.empty()) HTR_LOG(Error, "[FBX] {}", Error);
+	QueueFbxImports(Files, Output);
+}
+
+void FEditorUI::BrowseFbxReimportFile(const FString& Output, const FFbxImportOptions& Options, const FString& Owner)
+{
+	FString Error;
+	const TArray<FString> Files = PickFbxFiles(static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw), false, Error);
+	if (!Error.empty()) HTR_LOG(Error, "[FBX] {}", Error);
+	if (!Files.IsEmpty()) QueueFbxReimport(Files[0], Output, Options, Owner);
+}
+
+void FEditorUI::ApplyFbxRequest(const FFbxImportRequest& Request, bool bKeepOptions)
+{
+	FbxResult = {};
+	if (Request.Source.size() >= sizeof(FbxSourcePath) || Request.Output.size() >= sizeof(FbxOutputDirectory))
+	{
+		FbxSourcePath[0] = FbxOutputDirectory[0] = '\0';
+		FbxResult.Error = "The selected path is too long.";
+		return;
+	}
+	strcpy_s(FbxSourcePath, Request.Source.c_str());
+	strcpy_s(FbxOutputDirectory, Request.Output.c_str());
+	bFbxOutputDirectoryEdited = !Request.Output.empty();
+	if (!bKeepOptions) FbxOptions = Request.Options;
+	UpdateFbxOutputDirectory();
+}
+
+void FEditorUI::AdvanceFbxQueue(bool bKeepOptions)
+{
+	FbxQueue.RemoveAt(0);
+	++FbxProcessedCount;
+	if (FbxQueue.IsEmpty())
+	{
+		bFbxDialogActive = bFbxImporting = bFbxImportAll = false;
+		FbxProcessedCount = 0;
+		return;
+	}
+	ApplyFbxRequest(FbxQueue[0], bKeepOptions);
+	if (!bKeepOptions) bFbxImporting = false;
+}
+
+void FEditorUI::RunFbxImport()
+{
+	bFbxImportTextDrawn = false;
+	const FString Source = FbxSourcePath;
+	FbxResult = FFbxAssetLoader::Import(FbxSourcePath, FbxOptions, FbxOutputDirectory, FbxQueue[0].Owner);
+	for (const auto& Warning : FbxResult.Warnings) HTR_LOG(Warning, "FBX: {}", Warning);
+	if (FbxResult.bSuccess)
+	{
+		HTR_LOG(Info, "FBX import completed: {} ({} assets)", Source, FbxResult.AssetKeys.Num());
+		if (OnFbxImported) OnFbxImported();
+	}
+	else
+	{
+		HTR_LOG(Error, "FBX import failed: {}: {}", Source, FbxResult.Error);
+		// 한 개씩 임포트할 때는 창에 남겨 옵션을 바꿔 다시 시도할 수 있게 한다.
+		if (!bFbxImportAll) { bFbxImporting = false; return; }
+		FbxFailures.Add(Source + ": " + FbxResult.Error);
+	}
+	AdvanceFbxQueue(bFbxImportAll);
 }
 
 void FEditorUI::UpdateFbxOutputDirectory()
@@ -125,6 +221,18 @@ void FEditorUI::UpdateFbxOutputDirectory()
 		const FString Default = FbxPath::DefaultOutputDirectory(FbxSourcePath);
 		strcpy_s(FbxOutputDirectory, Default.c_str());
 	}
+}
+
+void FEditorUI::BrowseFbxSource()
+{
+	FString Error;
+	const TArray<FString> Files = PickFbxFiles(static_cast<HWND>(ImGui::GetMainViewport()->PlatformHandleRaw), false, Error);
+	if (!Error.empty()) { FbxResult.Error = Error; return; }
+	if (Files.IsEmpty()) return;
+	if (Files[0].size() >= sizeof(FbxSourcePath)) { FbxResult.Error = "The selected file path is too long."; return; }
+	strcpy_s(FbxSourcePath, Files[0].c_str());
+	UpdateFbxOutputDirectory();
+	FbxResult = {};
 }
 
 void FEditorUI::BrowseFbxOutputDirectory()
@@ -151,85 +259,174 @@ void FEditorUI::BrowseFbxOutputDirectory()
 	FbxResult = {};
 }
 
-void FEditorUI::DrawFbxImportDialog()
+void FEditorUI::DrawFbxImportBody()
 {
-	// File 메뉴의 ID 스택을 벗어난 뒤 같은 위치에서 팝업을 열고 그린다.
-	if (bRequestFbxImportDialog)
+	const FFbxImportRequest& Request = FbxQueue[0];
+	const int32 Total = FbxProcessedCount + FbxQueue.Num();
+
+	if (bFbxImporting)
 	{
-		bRequestFbxImportDialog = false;
-		bFbxImportDialogOpen = true;
-		FbxResult = {};
-		UpdateFbxOutputDirectory();
-		ImGui::OpenPopup("Import FBX");
+		ImGui::Text("Importing %s  (%d / %d)", FbxPath::ToString(FbxPath::FromString(FbxSourcePath).filename()).c_str(), FbxProcessedCount + 1, Total);
+		ImGui::ProgressBar(static_cast<float>(FbxProcessedCount) / static_cast<float>(Total), ImVec2(EditorUIScale::Px(580.0f), 0));
+		bFbxImportTextDrawn = true;
+		return;
 	}
-	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(.5f, .5f));
-	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(600.0f), 0), ImGuiCond_Appearing);
-	if (ImGui::BeginPopupModal("Import FBX", &bFbxImportDialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+
+	if (Total > 1) ImGui::Text("File %d / %d", FbxProcessedCount + 1, Total);
+
+	ImGui::TextUnformatted(Request.bReimport ? "Reimport from" : "Source FBX");
+	const float PathWidth = ImGui::GetContentRegionAvail().x - EditorUIScale::ButtonWidth("Browse...") - ImGui::GetStyle().ItemSpacing.x;
+	ImGui::SetNextItemWidth(PathWidth);
+	// 대기열로 들어온 파일은 정해져 있다. 비어 있을 때만 (File 메뉴) 직접 고른다.
+	ImGui::BeginDisabled(!Request.Source.empty());
+	if (ImGui::InputText("##FbxSource", FbxSourcePath, sizeof(FbxSourcePath)))
 	{
-		ImGui::TextUnformatted("Source FBX");
-		const float PathWidth = ImGui::GetContentRegionAvail().x - EditorUIScale::ButtonWidth("Browse...") - ImGui::GetStyle().ItemSpacing.x;
-		ImGui::SetNextItemWidth(PathWidth);
-		if (ImGui::InputText("##FbxSource", FbxSourcePath, sizeof(FbxSourcePath)))
-		{
-			UpdateFbxOutputDirectory();
-			FbxResult = {};
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Browse...")) BrowseFbxSource();
-		ImGui::TextUnformatted("Output folder");
-		ImGui::SetNextItemWidth(PathWidth);
-		if (ImGui::InputText("##FbxOutput", FbxOutputDirectory, sizeof(FbxOutputDirectory)))
-		{
-			bFbxOutputDirectoryEdited = FbxOutputDirectory[0] != '\0';
-			FbxResult = {};
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Browse...##FbxOutput")) BrowseFbxOutputDirectory();
+		UpdateFbxOutputDirectory();
+		FbxResult = {};
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Browse...")) BrowseFbxSource();
+	ImGui::EndDisabled();
 
-		ImGui::SeparatorText("Static Meshes");
-		ImGui::PushID("StaticFbx");
-		ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeStaticMeshes);
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: bake the mesh node and all parent transforms into geometry.\nOff: import local geometry without the mesh node transform.\nCombine does not restore relative placement when Bake is off.");
-		ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineStaticMeshes);
-		ImGui::PopID();
+	ImGui::TextUnformatted("Output folder");
+	ImGui::SetNextItemWidth(PathWidth);
+	ImGui::BeginDisabled(Request.bLockOutput);
+	if (ImGui::InputText("##FbxOutput", FbxOutputDirectory, sizeof(FbxOutputDirectory)))
+	{
+		bFbxOutputDirectoryEdited = FbxOutputDirectory[0] != '\0';
+		FbxResult = {};
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Browse...##FbxOutput")) BrowseFbxOutputDirectory();
+	ImGui::EndDisabled();
 
-		ImGui::SeparatorText("Skeletal Meshes");
-		ImGui::PushID("SkeletalFbx");
-		ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeSkeletalMeshes);
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: include placement outside the rig in geometry and bind transforms.\nOff: remove the root bone parent's global bind transform; retain the root bone's own transform.");
-		ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineSkeletalMeshes);
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Combine meshes using the same source rig root. An LOD group remains one asset when disabled.");
-		ImGui::PopID();
+	ImGui::SeparatorText("Transform");
+	ImGui::SetNextItemWidth(EditorUIScale::Px(160.0f));
+	ImGui::DragFloat("Uniform Scale", &FbxOptions.UniformScale, 0.01f, 0.0001f, 100000.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SetItemTooltip("Multiplies vertices and bone translations.");
+	ImGui::Checkbox("Force Front X Axis", &FbxOptions.bForceFrontX);
+	ImGui::SetItemTooltip("On: the model faces +X (actor forward).\nOff: the model keeps the Unreal default front.");
 
-		if (!FFbxAssetImporter::IsAvailable()) ImGui::TextWrapped("Run Setup/SlnGenerator.bat and rebuild the editor to enable FBX import.");
-		if (!FbxResult.Error.empty())
-		{
-			ImGui::Separator();
-			ImGui::TextWrapped("Import failed: %s", FbxResult.Error.c_str());
-		}
+	ImGui::SeparatorText("Static Meshes");
+	ImGui::PushID("StaticFbx");
+	// 메시 종류를 바꾸면 파일 이름이 달라져 기존 바이너리를 덮어쓸 수 없다.
+	ImGui::BeginDisabled(Request.bReimport);
+	ImGui::Checkbox("Import Static Meshes", &FbxOptions.bImportStaticMeshes);
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("On with Skeletal: meshes without a skin become static meshes.\nOn alone: skins are ignored and every mesh becomes static.");
+	ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeStaticMeshes);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: bake the mesh node and all parent transforms into geometry.\nOff: import local geometry without the mesh node transform.\nCombine does not restore relative placement when Bake is off.");
+	ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineStaticMeshes);
+	ImGui::PopID();
 
+	ImGui::SeparatorText("Skeletal Meshes");
+	ImGui::PushID("SkeletalFbx");
+	ImGui::BeginDisabled(Request.bReimport);
+	ImGui::Checkbox("Import Skeletal Meshes", &FbxOptions.bImportSkeletalMeshes);
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("On alone: meshes without a skin are skipped.");
+	ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeSkeletalMeshes);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: include placement outside the rig in geometry and bind transforms.\nOff: remove the root bone parent's global bind transform; retain the root bone's own transform.");
+	ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineSkeletalMeshes);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Combine meshes using the same source rig root. An LOD group remains one asset when disabled.");
+	ImGui::PopID();
+
+	if (!FFbxAssetImporter::IsAvailable()) ImGui::TextWrapped("Run Setup/SlnGenerator.bat and rebuild the editor to enable FBX import.");
+	if (!FbxResult.Error.empty())
+	{
 		ImGui::Separator();
-		ImGui::BeginDisabled(!FFbxAssetImporter::IsAvailable() || FbxSourcePath[0] == '\0' || FbxOutputDirectory[0] == '\0');
-		if (ImGui::Button("Import", ImVec2(EditorUIScale::Px(100.0f), 0)))
+		ImGui::TextWrapped("Import failed: %s", FbxResult.Error.c_str());
+	}
+
+	ImGui::Separator();
+	const ImVec2 ButtonSize(EditorUIScale::Px(100.0f), 0);
+	const bool bBlocked = IsFbxImportBlocked && IsFbxImportBlocked();
+	const bool bHasOthers = FbxQueue.Num() > 1;
+	ImGui::BeginDisabled(bBlocked || !FFbxAssetImporter::IsAvailable() || FbxSourcePath[0] == '\0' || FbxOutputDirectory[0] == '\0' ||
+		(!FbxOptions.bImportStaticMeshes && !FbxOptions.bImportSkeletalMeshes));
+	if (ImGui::Button(Request.bReimport ? "Reimport" : "Import", ButtonSize))
+	{
+		bFbxImporting = true;
+		bFbxImportAll = false;
+	}
+	ImGui::SameLine();
+	ImGui::BeginDisabled(!bHasOthers || Request.bReimport);
+	if (ImGui::Button("Import All", ButtonSize))
+	{
+		bFbxImporting = true;
+		bFbxImportAll = true;
+	}
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("Imports this and the remaining files with these options.");
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	bool bAdvance = false;
+	if (ImGui::Button("Cancel", ButtonSize)) bAdvance = true;
+	ImGui::SetItemTooltip("Skips this file and moves to the next one.\nFiles without a binary are asked again on the next start.");
+	ImGui::SameLine();
+	bool bCancelAll = false;
+	ImGui::BeginDisabled(!bHasOthers);
+	if (ImGui::Button("Cancel All", ButtonSize)) bCancelAll = true;
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("Stops asking for now.\nFiles without a binary are asked again on the next start.");
+
+	// Request가 가리키는 대기열을 바꾸므로 그리기가 끝난 뒤에 처리한다.
+	if (bCancelAll)
+	{
+		FbxQueue.Reset();
+		FbxProcessedCount = 0;
+		bFbxDialogActive = false;
+	}
+	else if (bAdvance) AdvanceFbxQueue(false);
+}
+
+void FEditorUI::DrawFbxFailures()
+{
+	const char* PopupName = "FBX Import Failures";
+	if (FbxFailures.IsEmpty() || bFbxDialogActive) return;
+	if (!ImGui::IsPopupOpen(PopupName)) ImGui::OpenPopup(PopupName);
+	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(.5f, .5f));
+	if (ImGui::BeginPopupModal(PopupName, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+	{
+		ImGui::TextUnformatted("These files could not be imported:");
+		for (const FString& Failure : FbxFailures) ImGui::BulletText("%s", Failure.c_str());
+		ImGui::TextDisabled("See the Output Log for details.");
+		ImGui::Separator();
+		if (ImGui::Button("OK", ImVec2(EditorUIScale::Px(100.0f), 0)))
 		{
-			FbxResult = FFbxAssetLoader::Import(FbxSourcePath, FbxOptions, FbxOutputDirectory);
-			if (FbxResult.bSuccess)
-			{
-				if (OnFbxImported) OnFbxImported();
-				HTR_LOG(Info, "FBX import completed: {} assets", FbxResult.AssetKeys.Num());
-				bFbxImportDialogOpen = false;
-				ImGui::CloseCurrentPopup();
-			}
-			else HTR_LOG(Error, "FBX import failed: {}", FbxResult.Error);
-			for (const auto& Warning : FbxResult.Warnings) HTR_LOG(Warning, "FBX: {}", Warning);
-		}
-		ImGui::EndDisabled();
-		ImGui::SameLine();
-		if (ImGui::Button("Cancel", ImVec2(EditorUIScale::Px(100.0f), 0)))
-		{
-			bFbxImportDialogOpen = false;
+			FbxFailures.Reset();
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
 	}
+}
+
+void FEditorUI::DrawFbxImportDialog()
+{
+	// 앞 프레임에 진행 표시를 그렸으므로 이번 프레임에 실행한다. 임포트 동안 화면은 그 표시로 멈춰 있다.
+	if (bFbxImporting && bFbxImportTextDrawn) RunFbxImport();
+
+	const char* PopupName = "Import FBX";
+	if (!bFbxDialogActive && !FbxQueue.IsEmpty() && !(IsFbxImportBlocked && IsFbxImportBlocked()))
+	{
+		bFbxDialogActive = true;
+		ApplyFbxRequest(FbxQueue[0], false);
+	}
+	const bool bPopupOpen = ImGui::IsPopupOpen(PopupName);
+	if (bFbxDialogActive && !bPopupOpen) ImGui::OpenPopup(PopupName);
+	if (bFbxDialogActive || bPopupOpen)
+	{
+		ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(.5f, .5f));
+		ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(600.0f), 0), ImGuiCond_Appearing);
+		bFbxPopupOpen = true;
+		if (ImGui::BeginPopupModal(PopupName, bFbxImporting ? nullptr : &bFbxPopupOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+		{
+			if (bFbxDialogActive) DrawFbxImportBody();
+			if (!bFbxDialogActive) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		// X 버튼은 Cancel과 같다.
+		if (!bFbxPopupOpen && bFbxDialogActive) AdvanceFbxQueue(false);
+	}
+	DrawFbxFailures();
 }

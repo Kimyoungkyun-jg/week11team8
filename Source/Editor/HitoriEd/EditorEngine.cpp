@@ -176,18 +176,36 @@ bool UEditorEngine::Init()
 	EditorUI->GetToolbar()->SetEditingControls([this]() { EditorControlsPanel->DrawToolbar(); });
 	ViewportsPanel = EditorUI->AddEditorPanel<FViewportsPanel>();
 	ContentDrawerPanel = EditorUI->AddEditorPanel<FContentDrawerPanel>();
-	EditorUI->SetFbxImportedCallback([this]() { ContentDrawerPanel->RequestThumbnailRefresh(); });
+	EditorUI->SetFbxImportedCallback([this]()
+	{
+		RefreshImportedAssets();
+		ContentDrawerPanel->RequestThumbnailRefresh();
+	});
+	EditorUI->SetFbxImportBlockedQuery([this]() { return IsPlaying(); });
 	AssetEditorPanel = EditorUI->AddEditorPanel<FAssetEditorPanel>();
 	ContentDrawerPanel->SetImportFbxCallback([this](const FString& Path, bool Reimport)
 	{
 		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
-		if (!Reimport) { EditorUI->OpenFbxImportDialog(Path); return; }
+		if (!Reimport) { EditorUI->QueueFbxImports({ Path }); return; }
 		FFbxAssetData Data; FString Error;
-		if (!FFbxAssetBake::ReadBaked(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
-		fs::path Source = FbxPath::FromString(Data.SourcePath);
-		if (!Source.is_absolute()) Source = fs::path("Assets") / Source;
-		EditorUI->OpenFbxImportDialog(FbxPath::ToString(Source), FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options);
+		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
+		EditorUI->QueueFbxReimport(FbxPath::ToString(FbxPath::SourceFile(Data.ActualSourcePath)),
+			FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options, Data.SourcePath);
 	});
+	ContentDrawerPanel->SetReimportFromFileCallback([this](const FString& Path)
+	{
+		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
+		FFbxAssetData Data; FString Error;
+		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
+		EditorUI->BrowseFbxReimportFile(FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options, Data.SourcePath);
+	});
+	ContentDrawerPanel->SetImportFbxFilesCallback([this](const FString& OutputDirectory)
+	{
+		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
+		EditorUI->BrowseFbxImportFiles(OutputDirectory);
+	});
+	// 바이너리가 없는 FBX는 시작할 때 차례로 묻는다. 다음 실행에서도 바이너리가 없으면 다시 묻는다.
+	EditorUI->QueueFbxImports(UAssetManager::Get().GetFbxImportCandidates());
 	ContentDrawerPanel->SetOpenAssetCallback([this](const FString& Path)
 	{
 		FString Extension = std::filesystem::path(Path).extension().string();
@@ -463,6 +481,31 @@ void UEditorEngine::PreLoadMap(FWorldContext& Context)
 {
 	if (Context.WorldType == EWorldType::PIE)
 		ResetSceneSelection();
+}
+
+void UEditorEngine::RefreshImportedAssets()
+{
+	// 리임포트는 옛 객체를 Retired로 남긴다. 레벨의 컴포넌트를 같은 키의 새 객체로 옮긴다.
+	// 뷰어와 리타겟 패널은 자기 월드의 포즈 상태를 함께 관리하므로 여기서 건드리지 않는다.
+	const auto Current = []<typename T>(T* Asset) -> T*
+	{
+		if (!Asset || !Asset->IsRetired()) return Asset;
+		T* Updated = UAssetManager::GetAssetByPath<T>(Asset->GetPath());
+		return Updated ? Updated : Asset;
+	};
+	for (TObjectIterator<UMeshComponent> It; It; ++It)
+	{
+		UMeshComponent* Component = *It;
+		if (!Component || !Component->GetOwner() || Component->GetOwner()->GetWorld() != EditorWorld) continue;
+
+		// 메시를 바꾸면 슬롯 덮어쓰기가 지워지므로 먼저 보관한다.
+		TArray<UMaterial*> Overrides;
+		for (int32 Slot = 0; Slot < Component->GetNumMaterials(); ++Slot) Overrides.Add(Current(Component->GetOverrideMaterial(Slot)));
+		if (auto* Skinned = Cast<USkinnedMeshComponent>(Component)) Skinned->SetSkeletalMesh(Current(Skinned->GetSkeletalMesh()));
+		else if (auto* Static = Cast<UStaticMeshComponent>(Component)) Static->SetStaticMesh(Current(Static->GetStaticMesh()));
+		for (int32 Slot = 0; Slot < Overrides.Num() && Slot < Component->GetNumMaterials(); ++Slot)
+			if (Overrides[Slot] != Component->GetOverrideMaterial(Slot)) Component->SetMaterial(Slot, Overrides[Slot]);
+	}
 }
 
 void UEditorEngine::PostLoadMap(FWorldContext& Context)

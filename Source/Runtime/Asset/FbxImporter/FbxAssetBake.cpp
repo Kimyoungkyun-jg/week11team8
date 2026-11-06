@@ -11,7 +11,7 @@
 namespace
 {
 // 헤더나 직렬화 필드를 변경하면 올린다. 구버전은 에디터에서 명시적으로 재임포트한다.
-constexpr uint32 FbxBakeVersion = 4;
+constexpr uint32 FbxBakeVersion = 5;
 constexpr uint32 MaxElements = 1000000;
 constexpr uint32 MaxImageBytes = 512u * 1024u * 1024u;
 struct FFbxBakeHeader
@@ -76,20 +76,31 @@ void Skeleton(FBinary& Ar, FReferenceSkeleton& Ref)
 		Ar.String(Ref.RefBoneInfo[I].Name);
 		Ar.Pod(Ref.RefBoneInfo[I].ParentIndex);
 		auto& T = Ref.RefBonePose[I];
-		// Preserve TEAM5 payload v4 while using TEAM8 quaternion poses at runtime.
-		FRotator Rotation = T.Rotation.ToFRotator();
-		Ar.Pod(T.Translation); Ar.Pod(Rotation.Pitch); Ar.Pod(Rotation.Yaw); Ar.Pod(Rotation.Roll); Ar.Pod(T.Scale);
-		if (Ar.In) T.Rotation = Rotation.Quaternion();
+		// 오일러로 바꾸면 값이 달라지므로 런타임 형식인 쿼터니언 그대로 저장한다.
+		Ar.Pod(T.Translation); Ar.Pod(T.Rotation); Ar.Pod(T.Scale);
 	}
+}
+
+// 모든 애셋 종류의 앞부분. ReadHeader는 여기까지만 읽는다.
+void SerializeCommon(FBinary& Ar, FFbxAssetData& Data)
+{
+	Ar.String(Data.SourcePath); Ar.String(Data.SourceObject);
+	auto& O = Data.Options;
+	uint8 Flags = (O.bBakeStaticMeshes ? 1 : 0) | (O.bCombineStaticMeshes ? 2 : 0) | (O.bBakeSkeletalMeshes ? 4 : 0) |
+		(O.bCombineSkeletalMeshes ? 8 : 0) | (O.bImportStaticMeshes ? 16 : 0) | (O.bImportSkeletalMeshes ? 32 : 0) | (O.bForceFrontX ? 64 : 0);
+	Ar.Pod(Flags);
+	if (Ar.In)
+	{
+		O.bBakeStaticMeshes = Flags & 1; O.bCombineStaticMeshes = Flags & 2; O.bBakeSkeletalMeshes = Flags & 4;
+		O.bCombineSkeletalMeshes = Flags & 8; O.bImportStaticMeshes = Flags & 16; O.bImportSkeletalMeshes = Flags & 32; O.bForceFrontX = Flags & 64;
+	}
+	Ar.Pod(O.UniformScale);
+	Ar.String(Data.ActualSourcePath); Ar.Pod(Data.SourceHash);
 }
 
 void Serialize(FBinary& Ar, FFbxAssetData& Data)
 {
-	Ar.String(Data.SourcePath); Ar.String(Data.SourceObject);
-	uint8 Flags = (Data.Options.bBakeStaticMeshes ? 1 : 0) | (Data.Options.bCombineStaticMeshes ? 2 : 0) |
-		(Data.Options.bBakeSkeletalMeshes ? 4 : 0) | (Data.Options.bCombineSkeletalMeshes ? 8 : 0);
-	Ar.Pod(Flags);
-	if (Ar.In) Data.Options = { (Flags & 1) != 0, (Flags & 2) != 0, (Flags & 4) != 0, (Flags & 8) != 0 };
+	SerializeCommon(Ar, Data);
 	if (Data.Type == EFbxAssetType::StaticMesh || Data.Type == EFbxAssetType::SkeletalMesh)
 	{
 		Ar.Pod(Data.ScreenThresholds);
@@ -267,6 +278,21 @@ bool FFbxAssetBake::ReadSourceIdentity(const FString& Path, FString& Source, FSt
 		Header.Type < 1 || Header.Type > 5) return false;
 	FBinary Ar; Ar.In = &In; Ar.String(Source); Ar.String(Object);
 	return Ar.bGood;
+}
+
+bool FFbxAssetBake::ReadHeader(const FString& Path, FFbxAssetData& Out, FString& Error)
+{
+	std::ifstream In(FbxPath::FromString(Path), std::ios::binary);
+	if (!In) { Error = "Cannot open FBX binary: " + Path; return false; }
+	FFbxBakeHeader Header, Expected;
+	if (!In.read(reinterpret_cast<char*>(&Header), sizeof(Header)) || std::memcmp(Header.Magic, Expected.Magic, 4) ||
+		Header.Version != FbxBakeVersion || Header.Type < 1 || Header.Type > 5)
+	{ Error = "Invalid .fbxbin header/version; import the FBX again: " + Path; return false; }
+	FFbxAssetData Data; Data.Type = static_cast<EFbxAssetType>(Header.Type);
+	FBinary Ar; Ar.In = &In; SerializeCommon(Ar, Data);
+	if (!Ar.bGood) { Error = "Truncated FBX binary data: " + Path; return false; }
+	Out = std::move(Data);
+	return true;
 }
 
 bool FFbxAssetBake::WriteBaked(const FString& Path, const FFbxAssetData& Input, FString& Error)

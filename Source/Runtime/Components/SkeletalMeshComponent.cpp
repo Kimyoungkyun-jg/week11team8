@@ -59,8 +59,14 @@ void USkeletalMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkeletalMesh)
 	InitBoneTransforms();
 }
 
+void USkeletalMeshComponent::EnsureBoneState()
+{
+	if (BoneStateMesh != SkeletalMesh) InitBoneTransforms();
+}
+
 void USkeletalMeshComponent::InitBoneTransforms()
 {
+	BoneStateMesh = SkeletalMesh;
 	SkinnedVertexBuffer.reset();
 	SkinnedLODs.Reset();
 	++PoseRevision;
@@ -279,6 +285,7 @@ void USkeletalMeshComponent::PerformCPUSkinning()
 
 FBox USkeletalMeshComponent::CalcLocalBounds() const
 {
+	const_cast<USkeletalMeshComponent*>(this)->EnsureBoneState();
 	if (SkeletalMesh && !SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode))
 		const_cast<USkeletalMeshComponent*>(this)->UpdateSkinning();
 	return SkeletalMesh ? SkinnedBounds : Super::CalcLocalBounds();
@@ -322,6 +329,7 @@ FVertexBuffer* USkeletalMeshComponent::GetSkinnedVertexBuffer(uint32 LOD)
 
 void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, const FViewContext& ViewContext)
 {
+	EnsureBoneState();
 	if (!SkeletalMesh) return;
 	if (!SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode)) UpdateSkinning();
 	if (!SkinnedVertexBuffer && AppliedMode == ESkinningMode::CPU) return;
@@ -350,38 +358,71 @@ void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, cons
 	}
 }
 
+void USkeletalMeshComponent::UpdatePickPositions()
+{
+	EnsureBoneState();
+	if (!SkeletalMesh) return;
+	if (!SkinningMatrices.IsEmpty() && bSkinningMatricesDirty) UpdateSkinning();
+	if (PickRevision == PoseRevision && !PickPositions.IsEmpty()) return;
+
+	const TArray<FSkeletalVertex>& Vertices = SkeletalMesh->MeshData.SkinnedVertices;
+	PickPositions.SetNum(Vertices.Num());
+	FVector Min(FLT_MAX, FLT_MAX, FLT_MAX), Max(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+	for (int32 V = 0; V < Vertices.Num(); ++V)
+	{
+		const FSkeletalVertex& Src = Vertices[V];
+		FBlendMatrix Blend{};
+		float Total = 0.0f;
+		for (int32 I = 0; I < 4; ++I)
+		{
+			const int32 Bone = Src.BoneIndices[I];
+			const float Weight = Src.BoneWeights[I];
+			if (Bone < 0 || Bone >= SkinningMatrices.Num() || Weight <= 0.0f) continue;
+			for (int32 R = 0; R < 4; ++R) for (int32 C = 0; C < 3; ++C) Blend[R][C] += SkinningMatrices[Bone].M[R][C] * Weight;
+			Total += Weight;
+		}
+		if (Total <= 0.0f) Blend[0][0] = Blend[1][1] = Blend[2][2] = 1.0f;
+		FVector& P = PickPositions[V];
+		TransformPoint(Blend, Src.Position, P);
+		Min = FVector(std::min(Min.X, P.X), std::min(Min.Y, P.Y), std::min(Min.Z, P.Z));
+		Max = FVector(std::max(Max.X, P.X), std::max(Max.Y, P.Y), std::max(Max.Z, P.Z));
+	}
+	PickBounds = FBox{ Min, Max };
+	PickRevision = PoseRevision;
+}
+
 bool USkeletalMeshComponent::LineTraceComponent(const FRay& WorldRay, FHitResult& OutHit)
 {
-	if (!SkeletalMesh) return false;
-	FBox WorldBox = CalcBounds();
-	float BoxT = 0.0f;
-	if (!RayIntersectsAABB(WorldRay, WorldBox.Min, WorldBox.Max, BoxT))
-	{
-		return false;
-	}
+	const FMatrix WorldToLocal = GetWorldMatrix().Inverse();
+	const FRay LocalRay{ .Origin = WorldToLocal.TransformPosition(WorldRay.Origin), .Direction = WorldToLocal.TransformVector(WorldRay.Direction) };
+	float T = FLT_MAX;
+	if (!LineTraceComponentLocal(LocalRay, T)) return false;
 	OutHit.bBlockingHit = true;
-	OutHit.Distance = BoxT;
-	OutHit.ImpactPoint = WorldRay.Origin + WorldRay.Direction * BoxT;
+	OutHit.Distance = T;
+	OutHit.ImpactPoint = WorldRay.Origin + WorldRay.Direction * T;
 	OutHit.HitComponent = this;
 	return true;
 }
 
 bool USkeletalMeshComponent::LineTraceComponentLocal(const FRay& LocalRay, float& OutT)
 {
-	if (!SkeletalMesh) return false;
+	UpdatePickPositions();
+	if (!SkeletalMesh || PickPositions.IsEmpty()) return false;
 
-	FBox LocalBox = CalcLocalBounds();
+	// 포즈를 반영한 박스로 먼저 거른다. 빈 공간을 클릭해도 메시가 선택되지 않는다.
 	float BoxT = 0.0f;
-	if (!RayIntersectsAABB(LocalRay, LocalBox.Min, LocalBox.Max, BoxT))
-	{
-		return false;
-	}
+	if (!RayIntersectsAABB(LocalRay, PickBounds.Min, PickBounds.Max, BoxT) || BoxT >= OutT) return false;
 
-	if (BoxT >= OutT)
+	const TArray<uint32>& Indices = SkeletalMesh->MeshData.Indices;
+	bool bHit = false;
+	for (int32 I = 0; I + 2 < Indices.Num(); I += 3)
 	{
-		return false;
+		float T = 0.0f;
+		if (RayIntersectsTriangle(LocalRay, PickPositions[Indices[I]], PickPositions[Indices[I + 1]], PickPositions[Indices[I + 2]], T) && T < OutT)
+		{
+			OutT = T;
+			bHit = true;
+		}
 	}
-
-	OutT = BoxT;
-	return true;
+	return bHit;
 }

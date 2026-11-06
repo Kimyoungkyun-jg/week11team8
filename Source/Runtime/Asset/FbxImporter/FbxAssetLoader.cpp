@@ -263,7 +263,7 @@ URenderAsset* FFbxAssetLoader::LoadAsset(const FString& Path, FString& Error)
 	catch (const std::exception& E) { Error = E.what(); return nullptr; }
 }
 
-FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxImportOptions& Options, const FString& OutputDirectory)
+FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxImportOptions& Options, const FString& OutputDirectory, const FString& OwnerSource)
 {
 	FFbxImportResult Result;
 	try
@@ -283,7 +283,7 @@ FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxIm
 		if (Folder.Path.empty()) { Result.Error = "Cannot create FBX staging directory"; return Result; }
 		TArray<FFbxAssetData> Cooked;
 		if (!FFbxAssetImporter::Cook(FbxPath::ToString(Source), Options, FbxPath::ToString(Folder.Path), Cooked, Result.Warnings, Result.Error,
-			FbxPath::ToString(Destination))) return Result;
+			FbxPath::ToString(Destination), OwnerSource)) return Result;
 		FLoadBatch Batch; Batch.TextureFactory = CreateTexture; Batch.bAllowDiskDependencies = false;
 		struct FReplacement { fs::path Target, Staged, Backup; bool bBackedUp = false, bInstalled = false; };
 		std::vector<FReplacement> Files;
@@ -330,6 +330,7 @@ FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxIm
 			return Result;
 		}
 		Batch.Publish(); Result.AssetKeys = std::move(OutputKeys); Result.bSuccess = true;
+		UAssetManager::Get().MarkFbxImported(OwnerSource.empty() ? SourceKey : OwnerSource);
 	}
 	catch (const std::exception& E) { Result.Error = E.what(); }
 	return Result;

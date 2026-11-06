@@ -11,7 +11,7 @@
 #include "Render/RenderResourceManager.h"
 
 #include "Asset/ObjImporter/ObjImporter.h"
-#include "Asset/FbxImporter/FbxImporter.h"
+#include "Asset/FbxImporter/FbxAssetImporter.h"
 #include "Asset/FbxImporter/FbxAssetLoader.h"
 #include "Asset/FbxImporter/FbxAssetBake.h"
 #include "Asset/FbxImporter/FbxPath.h"
@@ -122,74 +122,15 @@ namespace
 		return Mesh;
 	}
 
-	USkeletalMesh* CreateSkeletalMesh(const FSkeletalMeshData* MeshData)
-	{
-		if (!MeshData || MeshData->SkinnedVertices.IsEmpty() || MeshData->Indices.IsEmpty())
-			return nullptr;
-
-		uint32 VertexCount = static_cast<uint32>(MeshData->SkinnedVertices.Num());
-
-		// 1. 초기 T-Pose 정점 버퍼 데이터 조립: 원본 정점과 본 데이터를 공유 정적 버퍼에 올린다.
-		// 2. 엔진 표준 RenderCommand로 버퍼 생성 (버텍스는 CPU 스키닝용 Dynamic, 인덱스는 Static)
-		// CPU 스키닝용 Dynamic 버퍼는 컴포넌트별로 만들고, 여기서는 Static 원본 버퍼를 만든다.
-		TUniquePtr<FVertexBuffer> VB = RenderCommand::CreateStaticVertexBuffer(
-			MeshData->SkinnedVertices.GetData(), sizeof(FSkeletalVertex) * VertexCount, sizeof(FSkeletalVertex));
-		TUniquePtr<FIndexBuffer> IB = RenderCommand::CreateStaticIndexBuffer(
-			MeshData->Indices.GetData(), static_cast<uint32>(MeshData->Indices.Num()));
-
-		if (!VB || !IB) return nullptr;
-		// 초기 T-Pose 데이터 업로드: CreateStaticVertexBuffer의 초기 데이터로 전달한다.
-
-		// 3. USkeletalMesh 객체 생성
-		USkeletalMesh* Mesh = NewObject<USkeletalMesh>();
-		Mesh->MeshData = *MeshData;
-		Mesh->VertexBuffer = std::move(VB);
-		Mesh->IndexBuffer = std::move(IB);
-
-		// 4. 머티리얼 인스턴스 생성 (CreateStaticMesh와 동일)
-		UMaterial* DefaultMaterial = UAssetManager::GetAssetByPath<UMaterial>("DefaultMaterial");
-		for (const FSkeletalMaterialSlot& Slot : Mesh->MeshData.MaterialSlots)
-		{
-			UMaterial* Material = DefaultMaterial ? UMaterial::CreateInstance(DefaultMaterial) : NewObject<UMaterial>();
-			if (Material)
-			{
-				Material->BaseColor = Slot.BaseColor;
-                Material->ApplyImportedProperties(Slot);
-				if (Material->BaseColor.W < 1.0f) Material->SetBlendState(EBlendState::AlphaBlend);
-				if (!Slot.DiffuseTexturePath.empty())
-				{
-					if (UTexture2D* Diffuse = UAssetManager::Get().LoadTexture(Slot.DiffuseTexturePath))
-					{
-						if (Material->Textures.Num() > 0)
-							Material->Textures[0] = Diffuse;
-						else
-							Material->Textures.Add(Diffuse);
-					}
-				}
-
-				if (!Slot.NormalTexturePath.empty())
-				{
-					if (UTexture2D* Normal = UAssetManager::Get().LoadTexture(Slot.NormalTexturePath))
-					{
-						if (Material->Textures.Num() > 1)
-							Material->Textures[1] = Normal;
-						else
-							Material->Textures.Add(Normal);
-					}
-				}
-				Mesh->Materials.Add(Material);
-			}
-		}
-
-		// 5. 바운드 및 프록시 데이터 갱신
-		Mesh->RebuildRenderData();
-
-		return Mesh;
-	}
-
 	FString MakeAssetKey(const FString& Path)
 	{
 		return FbxPath::ToString(fs::relative(FbxPath::FromString(Path), "Assets"));
+	}
+
+	FString FoldCase(FString Value)
+	{
+		for (char& Character : Value) Character = static_cast<char>(std::tolower(static_cast<unsigned char>(Character)));
+		return Value;
 	}
 }
 
@@ -237,6 +178,7 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 		}
 	}
 
+	TArray<FString> FbxFiles;
 	const int32 Total = Files.Num();
 	for (int32 i = 0; i < Total; ++i)
 	{
@@ -246,11 +188,41 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 		AssetPathMap.Add(Key, Path);
 		LoadAsset(Key, Path);
 
+		const FString Extension = GetAssetExtension(Path);
+		if (Extension == ".fbx") FbxFiles.Add(Path);
+		else if (Extension == ".fbxbin")
+		{
+			// 실제로 로드된 메시 바이너리가 있어야 임포트된 FBX로 친다. 구버전이나 손상 파일은 다시 묻는다.
+			FFbxAssetData Header; FString Error;
+			if (FFbxAssetBake::ReadHeader(Path, Header, Error) &&
+				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh) &&
+				GetAssetByPath<URenderAsset>(Path))
+				MarkFbxImported(Header.SourcePath);
+		}
+
 		if (OnProgress)
 		{
 			OnProgress(i + 1, Total, Key);
 		}
 	}
+
+	// 스캔 순서는 정해져 있지 않으므로 모든 바이너리를 본 뒤에 비교한다.
+	FbxImportCandidates.Reset();
+	for (const FString& Path : FbxFiles)
+	{
+		FString Key, Error;
+		if (FbxPath::GetAssetKey(Path, Key, Error) && !IsFbxImported(Key)) FbxImportCandidates.Add(Path);
+	}
+}
+
+void UAssetManager::MarkFbxImported(const FString& SourceIdentity)
+{
+	ImportedFbxSources.insert(FoldCase(SourceIdentity));
+}
+
+bool UAssetManager::IsFbxImported(const FString& SourceIdentity) const
+{
+	return ImportedFbxSources.contains(FoldCase(SourceIdentity));
 }
 
 void UAssetManager::LoadAsset(const FString& Key, const FString& Path) {
@@ -563,39 +535,27 @@ USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)
 	if (GetAssetExtension(Path) == ".fbxbin")
 	{
 		FString Error;
-		return Cast<USkeletalMesh>(FFbxAssetLoader::LoadAsset(Path, Error));
+		USkeletalMesh* Mesh = Cast<USkeletalMesh>(FFbxAssetLoader::LoadAsset(Path, Error));
+		if (!Mesh && !Error.empty()) HTR_LOG(Warning, "[FBX] {}", Error);
+		return Mesh;
 	}
-	const FString Key = MakeAssetKey(Path);
-	if (USkeletalMesh* Cached = GetAssetByPath<USkeletalMesh>(Key))
-	{
-		return Cached;
-	}
-
-	TUniquePtr<FSkeletalMeshData> Data = FFbxImporter::LoadSkeletalMeshData(Path);
-	USkeletalMesh* Mesh = CreateSkeletalMesh(Data.get());
-	if (!Mesh)
-	{
-		return nullptr;
-	}
-
-	Get().RegisterAsset(Key, Mesh);
-	return Mesh;
+	// 메시는 .fbxbin에서만 온다. .fbx를 여기서 파싱하지 않는다.
+	return GetAssetByPath<USkeletalMesh>(MakeAssetKey(Path));
 }
 
 const TArray<FAnimationClip>* UAssetManager::LoadFbxAnimations(const FString& Path)
 {
-	const FString Key = MakeAssetKey(Path);
+	USkeletalMesh* Mesh = LoadFbxSkeletalMesh(Path);
+	if (!Mesh || GetAssetExtension(Path) != ".fbxbin") return nullptr;
+	FFbxAssetData Header; FString Error;
+	if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) { HTR_LOG(Warning, "[FBX] {}", Error); return nullptr; }
 	TArray<FAnimationClip> Clips;
-	FString SourcePath = Path;
-	if (GetAssetExtension(Path) == ".fbxbin")
+	if (!FFbxAssetImporter::ExtractAnimationClips(FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath)), Header.Options, Mesh->RefSkeleton, Clips, Error))
 	{
-		FFbxAssetData Data; FString Error;
-		if (!FFbxAssetBake::ReadBaked(Path, Data, Error)) return nullptr;
-		auto Source = FbxPath::FromString(Data.SourcePath);
-		if (!Source.is_absolute()) Source = fs::path("Assets") / Source;
-		SourcePath = FbxPath::ToString(Source);
+		HTR_LOG(Warning, "[FBX] Animation extraction failed: {}", Error);
+		return nullptr;
 	}
-	if (!FFbxImporter::LoadAnimationClips(SourcePath, Clips)) return nullptr;
+	const FString Key = MakeAssetKey(Path);
 	Get().AnimationMap.FindOrAdd(Key) = std::move(Clips);
 	return Get().AnimationMap.Find(Key);
 }

@@ -119,6 +119,7 @@ public:
 protected:
 	void PreLoadMap(FWorldContext& Context) override;
 	void PostLoadMap(FWorldContext& Context) override;
+	void RefreshImportedAssets();
 
 private:
 	// 이번 프레임 DeltaTime을 패널에 전달하고 에디터 단축키를 처리한다.

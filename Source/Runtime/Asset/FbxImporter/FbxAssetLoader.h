@@ -8,7 +8,8 @@ class FFbxAssetLoader
 {
 public:
 	static URenderAsset* LoadAsset(const FString& Path, FString& Error);
-	static FFbxImportResult Import(const FString& SourcePath, const FFbxImportOptions& Options, const FString& OutputDirectory = {});
+	// OwnerSource를 주면 SourcePath를 읽어 OwnerSource의 바이너리를 덮어쓴다 (Reimport From File).
+	static FFbxImportResult Import(const FString& SourcePath, const FFbxImportOptions& Options, const FString& OutputDirectory = {}, const FString& OwnerSource = {});
 private:
 	static URenderAsset* CreateTexture(const FImageData& Image, FString& Error);
 };

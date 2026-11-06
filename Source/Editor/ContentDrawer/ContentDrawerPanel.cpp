@@ -3,6 +3,7 @@
 #include "Editor/ContentDrawer/ContentDrawerPanel.h"
 #include "Editor/EditorUI/EditorUIScale.h"
 #include "Asset/AssetManager.h"
+#include "Asset/FbxImporter/FbxAssetBake.h"
 #include "Asset/FbxImporter/FbxAssetLoader.h"
 #include "Asset/FbxImporter/FbxPath.h"
 #include "Text/Font.h"
@@ -59,7 +60,7 @@ bool FContentDrawerPanel::Init()
 
 void FContentDrawerPanel::Tick(float DeltaTime)
 {
-	if (bRefreshThumbnails) { ThumbnailCache.clear(); bRefreshThumbnails = false; }
+	if (bRefreshThumbnails) { ThumbnailCache.clear(); FbxCachePath.clear(); bRefreshThumbnails = false; }
 }
 
 void FContentDrawerPanel::OnRender()
@@ -115,6 +116,9 @@ void FContentDrawerPanel::OnRender()
 		ImGui::EndDisabled();
 		ImGui::SetItemTooltip("Go to parent folder");
 		ImGui::SameLine();
+		if (ImGui::Button("Import") && OnImportFbxFiles) OnImportFbxFiles(FbxPath::ToString(CurrentPath));
+		ImGui::SetItemTooltip("Import FBX files into this folder");
+		ImGui::SameLine();
 		ImGui::TextUnformatted(FbxPath::ToString(CurrentPath).c_str());
 		ImGui::Separator();
 
@@ -161,6 +165,7 @@ void FContentDrawerPanel::OnRender()
 		fs::path PendingOpen;
 		if (ImGui::BeginTable("AssetGridTable", ColumnCount))
 		{
+			RefreshFbxFolderCache();
 			std::error_code IterateError;
 			fs::directory_iterator It(CurrentPath, IterateError);
 			const fs::directory_iterator End;
@@ -168,7 +173,7 @@ void FContentDrawerPanel::OnRender()
 			for (; !IterateError && It != End; It.increment(IterateError))
 			{
 				const fs::path Path = It->path();
-				if (Path.extension() == ".bin" || FbxPath::ToString(Path.filename()).starts_with('.')) continue;
+				if (Path.extension() == ".bin" || FbxPath::ToString(Path.filename()).starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
 
 				std::error_code TypeError;
 				const bool bIsDirectory = fs::is_directory(Path, TypeError);
@@ -211,7 +216,7 @@ void FContentDrawerPanel::OnRender()
 						// 폰트는 글리프 아틀라스를 그대로 미리보기로 쓴다
 						Thumbnail = FontAsset->AtlasTexture;
 					}
-					else if ((Asset && Asset->IsA<USkeletalMesh>()) || Path.extension() == ".fbx" || Path.extension() == ".FBX")
+					else if (Asset && Asset->IsA<USkeletalMesh>())
 					{
 						if (FTexture2D* FbxThumb = GetOrCreateSkeletalMeshThumbnail(PathString))
 						{
@@ -265,10 +270,9 @@ void FContentDrawerPanel::OnRender()
 				{
 					FString Extension = Path.extension().string();
 					std::transform(Extension.begin(), Extension.end(), Extension.begin(), [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
-					if ((Extension == ".fbx" || Extension == ".fbxbin") && OnImportFbx)
-						if (ImGui::MenuItem(Extension == ".fbx" ? "Import FBX..." : "Reimport..."))
-							OnImportFbx(PathString, Extension == ".fbxbin");
-					if (ImGui::MenuItem("Open")) bOpenRequested = true;
+					if (Extension == ".fbx" && OnImportFbx && ImGui::MenuItem("Import FBX...")) OnImportFbx(PathString, false);
+					if (Extension == ".fbxbin") DrawFbxBinaryMenu(PathString);
+					if (Extension != ".fbx" && ImGui::MenuItem("Open")) bOpenRequested = true;
 					ImGui::EndPopup();
 				}
 
@@ -298,6 +302,8 @@ void FContentDrawerPanel::OnRender()
 					ImGui::TextUnformatted(FilenameString.c_str());
 					ImGui::EndDragDropSource();
 				}
+				// 파일 이름 표시
+
 				// 이름 영역은 두 줄로 고정하고, 남은 이름은 두 번째 줄에서 말줄임한다.
 				const ImVec2 NamePos = ImGui::GetCursorScreenPos();
 				const float NameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
@@ -319,6 +325,7 @@ void FContentDrawerPanel::OnRender()
 				}
 				ImGui::Dummy(ImVec2(NameWidth, LineHeight * 2.0f));
 				ImGui::SetItemTooltip("%s", FilenameString.c_str());
+
 				bOpenRequested |= OpenOnClick();
 				if (bOpenRequested) PendingOpen = Path;
 
@@ -347,8 +354,72 @@ void FContentDrawerPanel::OpenItem(const fs::path& Path)
 		else if (Asset->IsA<USkeletalMesh>() && OnOpenSkeletalMesh) OnOpenSkeletalMesh(FbxPath::ToString(Path));
 		else if (OnOpenAsset) OnOpenAsset(FbxPath::ToString(Path));
 	}
-	else if (Extension == ".fbx" && OnOpenSkeletalMesh) OnOpenSkeletalMesh(FbxPath::ToString(Path));
+	// .fbx는 메시로 열지 않는다. 바이너리가 이 폴더에 있으면 .fbx가 숨겨지므로 여기 오는 것은 임포트 요청이다.
+	else if (Extension == ".fbx") { if (OnImportFbx) OnImportFbx(FbxPath::ToString(Path), false); }
 	else if (OnOpenAsset) OnOpenAsset(FbxPath::ToString(Path));
+}
+
+void FContentDrawerPanel::RefreshFbxFolderCache()
+{
+	const double Now = ImGui::GetTime();
+	if (FbxCachePath == CurrentPath && Now < FbxCacheTime) return;
+	FbxCachePath = CurrentPath;
+	FbxCacheTime = Now + 1.0;   // 탐색기에서 파일을 옮겨도 곧 반영된다
+	HiddenFbxFiles.clear();
+	UnimportedFbxFiles.clear();
+
+	const auto Lower = [](FString Value)
+	{
+		std::transform(Value.begin(), Value.end(), Value.begin(), [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
+		return Value;
+	};
+	std::set<FString> FolderSources;
+	std::vector<fs::path> FbxFiles;
+	std::error_code Error;
+	for (fs::directory_iterator It(CurrentPath, Error), End; !Error && It != End; It.increment(Error))
+	{
+		const fs::path Path = It->path();
+		const FString Extension = Lower(FbxPath::ToString(Path.extension()));
+		if (Extension == ".fbx") FbxFiles.push_back(Path);
+		else if (Extension == ".fbxbin")
+		{
+			FFbxAssetData Header; FString HeaderError;
+			if (FFbxAssetBake::ReadHeader(FbxPath::ToString(Path), Header, HeaderError) &&
+				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh))
+				FolderSources.insert(Lower(Header.SourcePath));
+		}
+	}
+	for (const fs::path& Path : FbxFiles)
+	{
+		FString Key, KeyError;
+		if (!FbxPath::GetAssetKey(FbxPath::ToString(Path), Key, KeyError)) continue;
+		if (FolderSources.contains(Lower(Key))) HiddenFbxFiles.insert(Path.filename());
+		else if (!UAssetManager::Get().IsFbxImported(Key)) UnimportedFbxFiles.insert(Path.filename());
+	}
+}
+
+void FContentDrawerPanel::DrawFbxBinaryMenu(const FString& Path)
+{
+	if (ImGui::IsWindowAppearing())
+	{
+		FFbxAssetData Header; FString Error;
+		bFbxMenuHasSource = false;
+		if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) FbxMenuStatus = "Binary is outdated or unreadable";
+		else
+		{
+			const fs::path Source = FbxPath::SourceFile(Header.ActualSourcePath);
+			std::error_code FileError;
+			bFbxMenuHasSource = fs::is_regular_file(Source, FileError);
+			FbxMenuStatus = !bFbxMenuHasSource ? "Source not found: " + Header.ActualSourcePath :
+				FbxPath::FileHash(Source) == Header.SourceHash ? "Source unchanged: " + Header.ActualSourcePath :
+				"Source changed: " + Header.ActualSourcePath;
+		}
+	}
+	ImGui::TextDisabled("%s", FbxMenuStatus.c_str());
+	ImGui::Separator();
+	if (OnImportFbx && ImGui::MenuItem("Reimport...", nullptr, false, bFbxMenuHasSource)) OnImportFbx(Path, true);
+	if (OnReimportFromFile && ImGui::MenuItem("Reimport From File...")) OnReimportFromFile(Path);
+	ImGui::Separator();
 }
 
 void FContentDrawerPanel::RenderFolderTree(const fs::path& Path, fs::path& SelectedPath)

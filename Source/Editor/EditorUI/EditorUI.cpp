@@ -171,7 +171,7 @@ void FEditorUI::DrawMainMenuBar()
 
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Import FBX...")) OpenFbxImportDialog();
+			if (ImGui::MenuItem("Import FBX...", nullptr, false, !(IsFbxImportBlocked && IsFbxImportBlocked()))) OpenFbxImportDialog();
 
 			ImGui::EndMenu();
 		}

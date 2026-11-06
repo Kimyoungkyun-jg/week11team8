@@ -3,19 +3,12 @@
 #include "Editor/EditorUI/EditorPanel.h"
 #include "Editor/Viewports/EditorViewportClient.h"
 #include "Editor/Gizmo/Gizmo.h"
+#include "Components/SkeletalMeshDebugComponent.h"
 
 class UWorld;
 class USkeletalMeshComponent;
 class UTexture2D;
 class FSkyboxRenderer;
-
-enum class EBoneDrawMode : uint8
-{
-	AllHierarchy,       // 모든 계층구조
-	SelectedOnly,       // 선택된 본만
-	SelectedAndParents, // 선택된 본과 부모
-	None                // 없음
-};
 
 // FBX 하나를 띄우는 창. 레벨과 섞이지 않도록 월드를 따로 갖는다.
 struct FSkeletalMeshViewer
@@ -48,8 +41,14 @@ struct FSkeletalMeshViewer
 	float CameraSpeed = 4.0f;
 	bool bEditingCameraSpeed = false;
 	bool bFocusCameraSpeedInput = false;
-	float SaveNotificationTimer = 0.0f;
 	UTexture2D* ShowFlagsIcon = nullptr;
+
+	// 본 트랜스폼 편집 값. 행렬을 매 프레임 분해하면 오일러 값이 튀므로 행렬이 바뀔 때만 다시 분해한다.
+	int32 EditedBone = -1;
+	FMatrix EditedMatrix;
+	FVector EditedLocation;
+	FRotator EditedRotation;
+	FVector EditedScale;
 	TUniquePtr<FSkyboxRenderer> Skybox;
 };
 
@@ -73,8 +72,8 @@ private:
 	void DrawBoneTree(FSkeletalMeshViewer& Viewer);
 	void DrawBoneNode(FSkeletalMeshViewer& Viewer, int32 BoneIndex);
 	void DrawBoneDetails(FSkeletalMeshViewer& Viewer);
-	void SaveViewerPose(FSkeletalMeshViewer& Viewer);
-	int32 DrawSkeleton(FSkeletalMeshViewer& Viewer, const ImVec2& ViewMin, const ImVec2& ViewSize);
+	void FocusOnSelectedBone(FSkeletalMeshViewer& Viewer);
+	int32 PickBone(FSkeletalMeshViewer& Viewer, const ImVec2& ViewMin, const ImVec2& ViewSize);
 	void SelectBone(FSkeletalMeshViewer& Viewer, int32 BoneIndex);
 	void UpdateBoneGizmo(FSkeletalMeshViewer& Viewer, const ImVec2& ViewMin, bool bLeftDown);
 
