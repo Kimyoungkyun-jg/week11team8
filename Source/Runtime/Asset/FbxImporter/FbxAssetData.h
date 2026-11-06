@@ -33,6 +33,8 @@ struct FFbxImportOptions
 	// 둘 다 켜면 스킨 유무로 나눈다. Static만 켜면 스킨을 무시하고, Skeletal만 켜면 스킨 없는 메시를 건너뛴다.
 	bool bImportStaticMeshes = true;
 	bool bImportSkeletalMeshes = true;
+	// 스킨 없이 Transform 키만 있는 메시를 노드를 본으로 삼아 스켈레탈로 가져온다. 끄면 스태틱이 되고 키는 버려진다.
+	bool bImportRigidAnimation = false;
 	bool bForceFrontX = true;
 	float UniformScale = 1.f; // 정점과 본 이동에 곱한다.
 };

@@ -325,6 +325,10 @@ void FEditorUI::DrawFbxImportBody()
 	ImGui::Checkbox("Import Skeletal Meshes", &FbxOptions.bImportSkeletalMeshes);
 	ImGui::EndDisabled();
 	ImGui::SetItemTooltip("On alone: meshes without a skin are skipped.");
+	ImGui::BeginDisabled(Request.bReimport || !FbxOptions.bImportSkeletalMeshes);
+	ImGui::Checkbox("Import Rigid Animation", &FbxOptions.bImportRigidAnimation);
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("On: meshes without a skin that have transform keys become skeletal meshes.\nTheir nodes are used as bones.\nOff: they stay static and the keys are ignored.");
 	ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeSkeletalMeshes);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: include placement outside the rig in geometry and bind transforms.\nOff: remove the root bone parent's global bind transform; retain the root bone's own transform.");
 	ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineSkeletalMeshes);

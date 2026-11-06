@@ -9,6 +9,7 @@
 #include "Math/EngineMath.h"
 #include "Render/RenderCommand.h"
 #include "Render/SceneRenderOptions.h"
+#include <imgui.h>
 #include <algorithm>
 #include <cmath>
 
@@ -62,6 +63,35 @@ void FEditorViewportClient::TickInput(float DeltaTime, bool bCaptured,
   Input.bLeft = FInputSystem::IsKeyDown(EKeyCode::A);
   Input.bUp = FInputSystem::IsKeyDown(EKeyCode::E);
   Input.bDown = FInputSystem::IsKeyDown(EKeyCode::Q);
+  ApplyCameraInput(Input, DeltaTime, MoveSpeed, MouseSensitivity);
+}
+
+void FEditorViewportClient::TickInputFromImGui(float DeltaTime, bool bCaptured,
+                                               bool bHovered, int32 WheelDelta,
+                                               float MoveSpeed, float MouseSensitivity) {
+  if (bFraming && (bCaptured || WheelDelta != 0))
+    bFraming = false;
+  TickFrameTransition(DeltaTime);
+
+  const ImGuiIO& IO = ImGui::GetIO();
+  const bool bKeys = bCaptured && !IO.WantTextInput;
+  FViewportCameraInput Input;
+  Input.bCaptured = bCaptured;
+  Input.bAllowWheel = bCaptured || bHovered;
+  Input.MouseX = IO.MouseDelta.x;
+  Input.MouseY = IO.MouseDelta.y;
+  Input.Wheel = static_cast<float>(WheelDelta);
+  Input.bForward = bKeys && ImGui::IsKeyDown(ImGuiKey_W);
+  Input.bBackward = bKeys && ImGui::IsKeyDown(ImGuiKey_S);
+  Input.bRight = bKeys && ImGui::IsKeyDown(ImGuiKey_D);
+  Input.bLeft = bKeys && ImGui::IsKeyDown(ImGuiKey_A);
+  Input.bUp = bKeys && ImGui::IsKeyDown(ImGuiKey_E);
+  Input.bDown = bKeys && ImGui::IsKeyDown(ImGuiKey_Q);
+  ApplyCameraInput(Input, DeltaTime, MoveSpeed, MouseSensitivity);
+}
+
+void FEditorViewportClient::ApplyCameraInput(const FViewportCameraInput& Input, float DeltaTime,
+                                             float MoveSpeed, float MouseSensitivity) {
   FViewportCameraState Camera{ViewLocation, ViewRotation, OrthoWidth,
       Width > 0 ? static_cast<float>(Width) : 800.0f, bIsPerspective};
   ApplyViewportCameraMovement(Camera, Input, DeltaTime, MoveSpeed, MouseSensitivity);

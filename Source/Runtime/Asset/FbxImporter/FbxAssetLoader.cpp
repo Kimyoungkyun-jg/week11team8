@@ -253,14 +253,35 @@ URenderAsset* FFbxAssetLoader::LoadAsset(const FString& Path, FString& Error)
 	try
 	{
 		FString Key;
-		if (!FbxPath::GetAssetKey(Path, Key, Error)) return nullptr;
-		if (auto* Existing = UAssetManager::GetAssetByPath<URenderAsset>(Key)) return Existing;
-		FLoadBatch Batch; Batch.TextureFactory = CreateTexture;
+
+		if (!FbxPath::GetAssetKey(Path, Key, Error))
+		{
+			return nullptr;
+		}
+
+		if (auto* Existing = UAssetManager::GetAssetByPath<URenderAsset>(Key))
+		{
+			return Existing;
+		}
+
+		FLoadBatch Batch;
+		Batch.TextureFactory = CreateTexture;
 		auto* Object = Batch.Resolve(Key);
-		if (!Object) { Error = Batch.Error; return nullptr; }
-		Batch.Publish(); return Object;
+
+		if (!Object)
+		{
+			Error = Batch.Error;
+			return nullptr;
+		}
+
+		Batch.Publish();
+		return Object;
 	}
-	catch (const std::exception& E) { Error = E.what(); return nullptr; }
+	catch (const std::exception& E)
+	{
+		Error = E.what();
+		return nullptr;
+	}
 }
 
 FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxImportOptions& Options, const FString& OutputDirectory, const FString& OwnerSource)

@@ -49,6 +49,7 @@ private:
 	int32 SourceYaw = 0;
 	int32 SelectedAnimation = -1;
 	int32 LastAnimationFrame = -1;
+	float CameraSpeed = 1.0f;
 	float AnimationTime = 0.0f;
 	float MappingPanelHeight = 320.0f;
 	int32 FocusMode = 0;
