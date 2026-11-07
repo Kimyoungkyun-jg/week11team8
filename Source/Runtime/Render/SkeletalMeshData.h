@@ -2,7 +2,7 @@
 
 #include "Vertex.h"
 #include "Render/ImportedMaterialProperties.h"
-#include "Math/BVH.h"
+//#include "Math/BVH.h"
 #include "Math/Box.h"
 
 struct FBoneInfo

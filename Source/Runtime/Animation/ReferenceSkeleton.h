@@ -17,7 +17,10 @@ struct FMeshBoneInfo
 // 포즈 블렌딩은 로컬 FBoneTransform 배열로 한 뒤 FillComponentSpaceTransforms로 행렬을 만든다.
 struct FReferenceSkeleton
 {
+	//본 이름, 부모 인덱스
 	TArray<FMeshBoneInfo> RefBoneInfo;
+
+	//로컬 바인드 TRS
 	TArray<FBoneTransform> RefBonePose;
 
 	int32 GetNum() const { return RefBoneInfo.Num(); }
