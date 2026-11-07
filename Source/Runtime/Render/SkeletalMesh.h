@@ -40,6 +40,8 @@ public:
     UMaterial* GetMaterial(uint32 SlotIndex) const;
 
     void RebuildRenderData();
+    // 본 테이블, USkeleton, 바인드 행렬, 스킨 웨이트가 서로 맞는지 확인하고 로그로 남긴다.
+    void ValidateBoneData() const;
     const FLODSphere& GetLocalLODSphere() const { return LocalLODSphere; }
     const FBox& GetRenderBounds() const { return RenderBounds; }
     void RegisterProxy(FPrimitiveSceneProxy* Proxy);
@@ -47,6 +49,8 @@ public:
 
 
 	USkeleton* Skeleton = nullptr;
+
+    // Bones에 이름, 부모, local/Global/Inverse 바인드 행렬 있음.
     FSkeletalMeshData MeshData;
 	TArray<FSkeletalMeshLODResource> AdditionalLODs;
 
@@ -54,7 +58,9 @@ public:
 
 	std::array<float, 3> ScreenThresholds{ .30f, .10f, .03f };
 
-    // MeshData.Bones에서 만든 TRS 본 테이블. 애니메이션 포즈 계산은 이것을 쓴다. RebuildRenderData가 갱신한다.
+    // 이 메시의 본 테이블과 바인드 포즈(부모 기준 로컬 위치, 회전, 크기) : Global 행렬 아님.
+    // 로더가 임포트 데이터로 채운다.
+    // 애니메이션 포즈 계산은 이것을 쓴다. MeshData.Bones는 같은 순서의 행렬 형태다.
     FReferenceSkeleton RefSkeleton;
 
     // Renderer가 바인드할 런타임 머티리얼 목록
