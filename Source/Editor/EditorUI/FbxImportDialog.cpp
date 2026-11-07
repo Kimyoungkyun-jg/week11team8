@@ -313,7 +313,7 @@ void FEditorUI::DrawFbxImportBody()
 	ImGui::BeginDisabled(Request.bReimport);
 	ImGui::Checkbox("Import Static Meshes", &FbxOptions.bImportStaticMeshes);
 	ImGui::EndDisabled();
-	ImGui::SetItemTooltip("On with Skeletal: meshes without a skin become static meshes.\nOn alone: skins are ignored and every mesh becomes static.");
+	ImGui::SetItemTooltip("On with Skeletal: meshes without a skin become static meshes unless transform keys move them.\nOn alone: skins are ignored and every mesh becomes static.");
 	ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeStaticMeshes);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: bake the mesh node and all parent transforms into geometry.\nOff: import local geometry without the mesh node transform.\nCombine does not restore relative placement when Bake is off.");
 	ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineStaticMeshes);
@@ -324,11 +324,7 @@ void FEditorUI::DrawFbxImportBody()
 	ImGui::BeginDisabled(Request.bReimport);
 	ImGui::Checkbox("Import Skeletal Meshes", &FbxOptions.bImportSkeletalMeshes);
 	ImGui::EndDisabled();
-	ImGui::SetItemTooltip("On alone: meshes without a skin are skipped.");
-	ImGui::BeginDisabled(Request.bReimport || !FbxOptions.bImportSkeletalMeshes);
-	ImGui::Checkbox("Import Rigid Animation", &FbxOptions.bImportRigidAnimation);
-	ImGui::EndDisabled();
-	ImGui::SetItemTooltip("On: meshes without a skin that have transform keys become skeletal meshes.\nTheir nodes are used as bones.\nOff: they stay static and the keys are ignored.");
+	ImGui::SetItemTooltip("Meshes without a skin use their own node as a bone.\nOn with Static: only meshes moved by transform keys become skeletal.\nOn alone: every mesh without a skin becomes skeletal.");
 	ImGui::Checkbox("Bake Meshes", &FbxOptions.bBakeSkeletalMeshes);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: include placement outside the rig in geometry and bind transforms.\nOff: remove the root bone parent's global bind transform; retain the root bone's own transform.");
 	ImGui::Checkbox("Combine Meshes", &FbxOptions.bCombineSkeletalMeshes);

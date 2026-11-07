@@ -2,7 +2,6 @@
 
 #include "Editor/EditorUI/EditorPanel.h"
 #include "Editor/Viewports/EditorViewportClient.h"
-#include "Asset/FbxImporter/AnimationData.h"
 
 class UWorld;
 class USkeletalMesh;
@@ -30,8 +29,6 @@ private:
 	void RefreshFbxFiles();
 	void DrawViewport(int32 Index, const char* Label);
 	void DrawMapping();
-	void SelectAnimation(int32 ClipIndex);
-	void ApplyAnimationFrame();
 	void FitCamera(int32 Index);
 
 	UWorld* PreviewWorlds[3]{};
@@ -41,19 +38,13 @@ private:
 	USkeletalMesh* TargetMesh = nullptr;
 	TArray<int32> TargetToSource;
 	TArray<int32> TargetAimChild;
-	FAnimationClip AlignedSourceClip;
 	TArray<FString> AvailableFbxPaths;
 	char ProfileName[128] = "DragonToHuman";
 	FString Message;
-	FString AnimationMessage;
 	int32 SourceYaw = 0;
-	int32 SelectedAnimation = -1;
-	int32 LastAnimationFrame = -1;
 	float CameraSpeed = 1.0f;
-	float AnimationTime = 0.0f;
 	float MappingPanelHeight = 320.0f;
 	int32 FocusMode = 0;
-	bool bAnimationPlaying = false;
 	bool bResultPoseApplied = false;
 	bool bShowBones = true;
 	bool bShowMesh = true;

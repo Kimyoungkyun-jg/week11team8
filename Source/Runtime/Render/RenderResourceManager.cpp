@@ -115,33 +115,6 @@ void FRenderResourceManager::InitPipelineStates()
 		ShaderProgramMap[Key] = MakeUnique<FShaderProgram>(VSRaw, PSRaw);
 		if (std::strcmp(Name, "VIEW_MODE_WORLD_NORMAL") == 0)
 			PipelineStateMap[EPSOType::StaticMesh_WorldNormal]->Shader = ShaderProgramMap[Key].get();
-
-		const D3D_SHADER_MACRO SkinningDefines[] = { { Variant.Shading, "1" }, { Variant.Reflection, "1" }, { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
-		FString SkinningVSPath;
-		FShaderByteCode SkinningCode = RenderUtil::GetOrCompile(Path, "mainVS", EShaderType::Vertex, SkinningVSPath, SkinningDefines);
-		if (!SkinningCode.IsValid()) continue;
-		auto SkinningVS = RenderCommand::CreateVertexShader(SkinningCode);
-		if (!SkinningVS || !SkinningVS->IsValid()) continue;
-		FVertexShader* SkinningVSRaw = SkinningVS.get();
-		VertexShaderMap[SkinningVSPath] = std::move(SkinningVS);
-		ShaderProgramMap[Key + "#GPU"] = MakeUnique<FShaderProgram>(SkinningVSRaw, PSRaw);
-	}
-	const FString TranslucentPath = "Resources/Shader/StaticMeshTranslucentShader.hlsl";
-	if (auto* Base = ShaderProgramMap.Find(TranslucentPath))
-	{
-		const D3D_SHADER_MACRO Defines[] = { { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
-		FString VSPath;
-		FShaderByteCode Code = RenderUtil::GetOrCompile(TranslucentPath, "mainVS", EShaderType::Vertex, VSPath, Defines);
-		if (Code.IsValid())
-		{
-			auto VS = RenderCommand::CreateVertexShader(Code);
-			if (VS && VS->IsValid())
-			{
-				FVertexShader* VSRaw = VS.get();
-				VertexShaderMap[VSPath] = std::move(VS);
-				ShaderProgramMap[TranslucentPath + "#GPU"] = MakeUnique<FShaderProgram>(VSRaw, (*Base)->PixelShader);
-			}
-		}
 	}
 }
 
@@ -151,27 +124,13 @@ FShaderProgram* FRenderResourceManager::GetShadowDepthShaderProgram()
 	return nullptr;
 }
 
-FShaderProgram* FRenderResourceManager::GetForwardShaderProgram(EReflectionModel Reflection, EShadingModel Shading, bool bGPUSkinning, bool bUnlit)
+FShaderProgram* FRenderResourceManager::GetForwardShaderProgram(EReflectionModel Reflection, EShadingModel Shading, bool bUnlit)
 {
 	const char* ReflectionName = Reflection == EReflectionModel::Phong ? "Phong" :
 		Reflection == EReflectionModel::Lambert ? "Lambert" : "BlinnPhong";
 	const FString Name = bUnlit ? FString("VIEW_MODE_UNLIT") :
 		FString(Shading == EShadingModel::Gouraud ? "Gouraud" : "Phong") + ReflectionName;
-	const FString Key = FString("Resources/Shader/UberLit.hlsl#") + Name + (bGPUSkinning ? "#GPU" : "");
-	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
-	return nullptr;
-}
-
-FShaderProgram* FRenderResourceManager::GetWorldNormalShaderProgram(bool bGPUSkinning)
-{
-	const FString Key = FString("Resources/Shader/UberLit.hlsl#VIEW_MODE_WORLD_NORMAL") + (bGPUSkinning ? "#GPU" : "");
-	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
-	return nullptr;
-}
-
-FShaderProgram* FRenderResourceManager::GetTranslucentShaderProgram(bool bGPUSkinning)
-{
-	const FString Key = FString("Resources/Shader/StaticMeshTranslucentShader.hlsl") + (bGPUSkinning ? "#GPU" : "");
+	const FString Key = FString("Resources/Shader/UberLit.hlsl#") + Name;
 	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
 	return nullptr;
 }

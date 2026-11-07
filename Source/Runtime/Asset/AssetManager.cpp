@@ -406,7 +406,6 @@ void UAssetManager::Shutdown()
 {
 	Get().AssetMap.Empty();
 	Get().SoundMap.Empty();
-	Get().AnimationMap.Empty();
 }
 
 
@@ -544,28 +543,6 @@ USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)
 	}
 	// 메시는 .fbxbin에서만 온다. .fbx를 여기서 파싱하지 않는다.
 	return GetAssetByPath<USkeletalMesh>(MakeAssetKey(Path));
-}
-
-const TArray<FAnimationClip>* UAssetManager::LoadFbxAnimations(const FString& Path)
-{
-	USkeletalMesh* Mesh = LoadFbxSkeletalMesh(Path);
-	if (!Mesh || GetAssetExtension(Path) != ".fbxbin") return nullptr;
-	FFbxAssetData Header; FString Error;
-	if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) { HTR_LOG(Warning, "[FBX] {}", Error); return nullptr; }
-	TArray<FAnimationClip> Clips;
-	if (!FFbxAssetImporter::ExtractAnimationClips(FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath)), Header.Options, Mesh->RefSkeleton, Clips, Error))
-	{
-		HTR_LOG(Warning, "[FBX] Animation extraction failed: {}", Error);
-		return nullptr;
-	}
-	const FString Key = MakeAssetKey(Path);
-	Get().AnimationMap.FindOrAdd(Key) = std::move(Clips);
-	return Get().AnimationMap.Find(Key);
-}
-
-const TArray<FAnimationClip>* UAssetManager::GetFbxAnimations(const FString& AssetKey)
-{
-	return Get().AnimationMap.Find(AssetKey);
 }
 
 bool UAssetManager::ReorientStaticMesh(UStaticMesh& Mesh, const std::function<FVector(const FVector&)>& Rotate)

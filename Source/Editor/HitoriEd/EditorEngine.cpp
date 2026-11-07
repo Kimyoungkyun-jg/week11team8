@@ -806,10 +806,6 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 // 월드를 한 번 Tick·Capture한 뒤 에디터와 피킹을 갱신한다.
 void UEditorEngine::TickWorldAndEditor(const float DeltaTime)
 {
-	const FEditorSettings& RenderSettings = SettingsPanel->GetSettings();
-	USkeletalMeshComponent::SetSkinningMode(RenderSettings.RenderingPath == ERenderingPath::Forward
-		? RenderSettings.SkinningMode : ESkinningMode::CPU);
-
 	// 게임 입력 처리
 	if (PlayWorld)
 	{

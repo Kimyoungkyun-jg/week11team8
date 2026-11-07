@@ -47,7 +47,7 @@ void USkeletalMeshComponent::TickComponent(float DeltaTime)
 {
 	Super::TickComponent(DeltaTime);
 
-	if (!SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode))
+	if (!SkinningMatrices.IsEmpty() && bSkinningMatricesDirty)
 	{
 		UpdateSkinning();
 	}
@@ -70,14 +70,12 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	SkinnedVertexBuffer.reset();
 	SkinnedLODs.Reset();
 	++PoseRevision;
-	SkinningMatricesBuffer.reset();
 	LocalBoneTransforms.Reset();
 	GlobalBoneTransforms.Reset();
 	SkinningMatrices.Reset();
 	SkinnedVertices.Reset();
 	bSkinningMatricesDirty = false;
 	bGlobalBoneTransformsOverridden = false;
-	AppliedMode = ESkinningMode::CPU;
 	if (!SkeletalMesh) return;
 	SkinnedLODs.SetNum(SkeletalMesh->AdditionalLODs.Num());
 
@@ -182,26 +180,7 @@ void USkeletalMeshComponent::UpdateSkinning()
 	if (!SkeletalMesh || SkinningMatrices.IsEmpty()) return;
 	++PoseRevision;
 	if (bSkinningMatricesDirty) UpdateBoneMatrices();
-	if (SkinningMode == ESkinningMode::GPU)
-	{
-		if (!SkinningMatricesBuffer)
-			SkinningMatricesBuffer = RenderCommand::CreateDynamicStructuredBuffer(
-				static_cast<uint32>(SkinningMatrices.Num()), sizeof(FMatrix));
-		if (SkinningMatricesBuffer && SkinningMatricesBuffer->GetBuffer() && SkinningMatricesBuffer->GetSRV())
-		{
-			RenderCommand::UpdateBufferData(SkinningMatricesBuffer.get(), SkinningMatrices.GetData(),
-				static_cast<uint32>(SkinningMatrices.Num() * sizeof(FMatrix)));
-			if (AppliedMode != ESkinningMode::GPU)
-			{
-				SkinnedBounds = SkeletalMesh->MeshData.AABB;
-				MarkTransformDirty();
-			}
-			AppliedMode = ESkinningMode::GPU;
-			return;
-		}
-	}
 	PerformCPUSkinning();
-	AppliedMode = ESkinningMode::CPU;
 }
 
 void USkeletalMeshComponent::PerformCPUSkinning()
@@ -279,14 +258,12 @@ void USkeletalMeshComponent::PerformCPUSkinning()
 			VertexCount * sizeof(FVertex)
 		);
 	}
-
-	AppliedMode = ESkinningMode::CPU;
 }
 
 FBox USkeletalMeshComponent::CalcLocalBounds() const
 {
 	const_cast<USkeletalMeshComponent*>(this)->EnsureBoneState();
-	if (SkeletalMesh && !SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode))
+	if (SkeletalMesh && !SkinningMatrices.IsEmpty() && bSkinningMatricesDirty)
 		const_cast<USkeletalMeshComponent*>(this)->UpdateSkinning();
 	return SkeletalMesh ? SkinnedBounds : Super::CalcLocalBounds();
 }
@@ -331,8 +308,8 @@ void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, cons
 {
 	EnsureBoneState();
 	if (!SkeletalMesh) return;
-	if (!SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode)) UpdateSkinning();
-	if (!SkinnedVertexBuffer && AppliedMode == ESkinningMode::CPU) return;
+	if (!SkinningMatrices.IsEmpty() && bSkinningMatricesDirty) UpdateSkinning();
+	if (!SkinnedVertexBuffer) return;
 	FMeshRenderState State;
 	State.LODCount = static_cast<uint8>(SkeletalMesh->GetLODCount());
 	for (int I = 0; I < 3; ++I) State.LODThresholdSq[I] = SkeletalMesh->ScreenThresholds[I] * SkeletalMesh->ScreenThresholds[I];
@@ -347,9 +324,8 @@ void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, cons
 
 		FRenderPacket Packet;
 		Packet.SkeletalMesh = SkeletalMesh;
-		Packet.SkeletalVertexBuffer = AppliedMode == ESkinningMode::CPU ? GetSkinnedVertexBuffer(LOD) : nullptr;
+		Packet.SkeletalVertexBuffer = GetSkinnedVertexBuffer(LOD);
 		Packet.LODIndex = static_cast<uint8>(LOD);
-		Packet.SkinningMatricesBuffer = AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr;
 		Packet.Model = RenderQueue.StoreWorldMatrix(GetWorldMatrix());
 		Packet.StartIndex = Section.StartIndex;
 		Packet.IndexCount = Section.IndexCount;

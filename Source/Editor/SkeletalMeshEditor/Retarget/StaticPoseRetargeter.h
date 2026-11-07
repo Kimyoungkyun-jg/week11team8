@@ -12,7 +12,3 @@ class USkeletalMeshComponent;
 bool ApplyStaticRigPose(const USkeletalMesh& SourceRig, USkeletalMeshComponent& TargetMesh,
 	const TArray<int32>& TargetBoneToSourceBone, const TArray<int32>& TargetAimChild,
 	int32 SourceYawQuarterTurns, FString& OutError);
-
-bool ApplyAnimatedRigPose(const USkeletalMesh& SourceRig, const TArray<FMatrix>& SourceGlobalPose,
-	USkeletalMeshComponent& TargetMesh, const TArray<int32>& TargetBoneToSourceBone,
-	const TArray<int32>& TargetAimChild, int32 SourceYawQuarterTurns, FString& OutError);

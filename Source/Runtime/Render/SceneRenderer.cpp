@@ -219,7 +219,7 @@ bool FSceneRenderer::BindForwardLighting(FRenderer* Renderer, const FSceneRender
 	}
 
 	FPipelineState* BasePSO = FRenderResourceManager::GetPSO(EPSOType::StaticMesh_Forward);
-	FShaderProgram* Program = FRenderResourceManager::GetForwardShaderProgram(Options.ReflectionModel, Options.ShadingModel, false, Options.bUnlit);
+	FShaderProgram* Program = FRenderResourceManager::GetForwardShaderProgram(Options.ReflectionModel, Options.ShadingModel, Options.bUnlit);
 	if (!BasePSO || !Program)
 	{
 		return false;

@@ -67,12 +67,12 @@ namespace
 			| (static_cast<uint64>(Group.LODIndex & 0x3) << 29);
 	}
 
-	FShaderProgram* GetMaterialForwardShader(const UMaterial& Material, const FSceneRenderOptions& Options, bool bGPUSkinning = false)
+	FShaderProgram* GetMaterialForwardShader(const UMaterial& Material, const FSceneRenderOptions& Options)
 	{
 		FSceneRenderOptions Effective = Options;
 		if (!Options.bUnlit && !Options.bOverrideMaterialLighting && Material.bOverrideShadingModel)
 			Effective.SetLegacyLightingModel(Material.ShadingModel);
-		return FRenderResourceManager::GetForwardShaderProgram(Effective.ReflectionModel, Effective.ShadingModel, bGPUSkinning, Effective.bUnlit);
+		return FRenderResourceManager::GetForwardShaderProgram(Effective.ReflectionModel, Effective.ShadingModel, Effective.bUnlit);
 	}
 
 	bool BuildBatch(FMeshDrawBatch& Batch, UStaticMesh* Mesh, uint8 LOD,
@@ -154,7 +154,7 @@ namespace
 	}
 
 	bool BuildBatch(FMeshDrawBatch& Batch, USkeletalMesh* Mesh,
-		UMaterial* Material, EMeshPassType Pass, const FSceneView& View, const FSceneRenderOptions& Options, bool bGPUSkinning, uint8 LOD,
+		UMaterial* Material, EMeshPassType Pass, const FSceneView& View, const FSceneRenderOptions& Options, uint8 LOD,
 		const void* OverrideParams = nullptr, uint32 OverrideSize = 0)
 	{
 		if (!Mesh || !Material) return false;
@@ -168,8 +168,8 @@ namespace
 			const bool bWorldNormal = Pass == EMeshPassType::WorldNormal;
 			FPipelineState* Base = FRenderResourceManager::GetPSO(bWorldNormal
 				? EPSOType::StaticMesh_WorldNormal : EPSOType::StaticMesh_Forward);
-			FShaderProgram* Shader = bWorldNormal ? FRenderResourceManager::GetWorldNormalShaderProgram(bGPUSkinning)
-				: GetMaterialForwardShader(*Material, Options, bGPUSkinning);
+			FShaderProgram* Shader = bWorldNormal ? (Base ? Base->Shader : nullptr)
+				: GetMaterialForwardShader(*Material, Options);
 			if (!Base || !Shader || !Shader->VertexShader || !Shader->PixelShader) return false;
 			Batch.Pipeline = *Base;
 			Batch.Pipeline.Shader = Shader;
@@ -196,11 +196,6 @@ namespace
 			FPipelineState* Pipeline = FRenderResourceManager::GetPSO(Type);
 			if (!Pipeline) return false;
 			Batch.Pipeline = *Pipeline;
-			if (bGPUSkinning && Type == EPSOType::StaticMesh_Translucent)
-			{
-				Batch.Pipeline.Shader = FRenderResourceManager::GetTranslucentShaderProgram(true);
-				if (!Batch.Pipeline.Shader) return false;
-			}
 			Batch.bForceWireframe = Pass == EMeshPassType::GBuffer && View.bIsWireframe;
             Batch.ObjectStages = EShaderBindFlagBits::Vertex | EShaderBindFlagBits::Pixel;
 			if (Material->PSOType == EPSOType::StaticMesh_Opaque ||
@@ -344,12 +339,11 @@ bool FMeshPassProcessor::Build(const FSceneView& View, const FRenderQueue& Queue
 		}
 		else if (Packet.SkeletalMesh)
 		{
-			const bool bGPUSkinning = Packet.SkinningMatricesBuffer != nullptr;
 			bBatchBuilt = BuildBatch(Batch, Packet.SkeletalMesh, Packet.Material, Pass, View,
-				Options, bGPUSkinning, Packet.LODIndex, Packet.MaterialParamData, Packet.MaterialParamDataSize);
+				Options, Packet.LODIndex, Packet.MaterialParamData, Packet.MaterialParamDataSize);
+			// CPU 스키닝 결과(FVertex) 버퍼로 그린다.
 			if (bBatchBuilt && Packet.SkeletalVertexBuffer)
 				Batch.VertexBuffer = Packet.SkeletalVertexBuffer;
-			if (bBatchBuilt) Batch.SkinningMatricesBuffer = Packet.SkinningMatricesBuffer;
 		}
 		if (!bBatchBuilt) return false;
 

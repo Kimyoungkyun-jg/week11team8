@@ -15,12 +15,6 @@ enum class ERenderingPath
     Deferred
 };
 
-enum class ESkinningMode : uint8_t
-{
-	CPU,
-	GPU
-};
-
 // Reflection determines the lighting equation, independently of interpolation.
 enum class EReflectionModel
 {

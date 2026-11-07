@@ -21,7 +21,6 @@
 #include "LightEvaluation.hlsli"
 #include "LightGridCommon.hlsli"
 #include "NormalMapCommon.hlsli"
-#include "Skinning.hlsli"
 #include "MaterialUV.hlsli"
 
 struct FAmbientLightInfo
@@ -84,10 +83,6 @@ struct VS_IN
 	float4 Tangent : TANGENT;
 	float2 UV : TEXCOORD;
 	float4 Color : COLOR;
-#if GPU_SKINNING
-	int4 BoneIndices : BLENDINDICES;
-	float4 BoneWeights : BLENDWEIGHT;
-#endif
 };
 
 struct VS_OUT
@@ -418,9 +413,6 @@ FLightResult CalculateTiledLighting(float3 PixelPosition, float3 P, float ViewDe
 
 VS_OUT Uber_VS(VS_IN Input)
 {
-#if GPU_SKINNING
-    SkinVertex(Input.Position, Input.Normal, Input.Tangent, Input.BoneIndices, Input.BoneWeights);
-#endif
     VS_OUT Output;
     float4 WorldPosition = mul(float4(Input.Position, 1.0f), World);
     float4 ViewPosition = mul(WorldPosition, View);
