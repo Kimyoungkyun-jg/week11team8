@@ -1237,6 +1237,7 @@ void UEditorEngine::EndFrame()
 	SettingsPanel->CaptureViewportSettings();
 	// 프로파일러 반영
 	FStatRegistry::EndFrame();
+	USkeletalMeshComponent::EndSkinningStatsFrame();
 }
 
 FWorldContext& UEditorEngine::GetEditorWorldContext()

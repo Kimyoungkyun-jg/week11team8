@@ -23,6 +23,8 @@
 #include "Render/Decal/ProjectedDecalRenderer.h"
 #include "Render/Decal/DecalStats.h"
 #include "Render/Decal/DecalBounds.h"
+#include "Render/SkinningStats.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Text/TextRenderer.h"
 #include "UObject/UObjectIterator.h"
 
@@ -272,6 +274,32 @@ void FSceneRenderer::UnbindForwardLighting(FRenderer* Renderer)
 void FSceneRenderer::UnbindForwardDecal(FRenderer* Renderer)
 {
 	RenderCommand::UnbindShaderResources(14, 3, EShaderBindFlagBits::Vertex | EShaderBindFlagBits::Pixel);
+}
+
+void FSceneRenderer::AttachBasePassGpuTiming(FRenderGraphRasterPassDesc& Pass)
+{
+	if (!FSkinningStats::IsCollecting())
+		return;
+
+	// CPU/GPU 표본이 한 평균에 섞이지 않게 모드가 바뀌면 이력을 새로 만든다.
+	const ESkinningMode Mode = USkeletalMeshComponent::GetSkinningMode();
+	if (!RenderData.BasePassGpu || RenderData.BasePassGpuMode != Mode)
+	{
+		RenderData.BasePassGpu = std::make_shared<FGpuTimingHistory>();
+		RenderData.BasePassGpuMode = Mode;
+	}
+
+	const std::shared_ptr<FGpuTimingHistory> Destination = RenderData.BasePassGpu;
+	const auto Handle = std::make_shared<int32>(-1);
+	Pass.OnBeforeExecute = [this, Destination, Handle]
+		{
+			if (bCorePassSucceeded)
+				*Handle = FGpuProfiler::Get().BeginScope(Destination);
+		};
+	Pass.OnAfterExecute = [Handle]
+		{
+			FGpuProfiler::Get().EndScope(*Handle);
+		};
 }
 
 bool FSceneRenderer::PrepareDecalPasses(FRenderGraphBuilder& Graph, FRenderer* Renderer, FSceneViewTargets& Targets,
@@ -717,6 +745,7 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 
 			GBuffer.DepthAttachment = { Depth,
 				bUseDepthPrepass ? ERenderGraphLoadAction::Load : ERenderGraphLoadAction::Clear, 1.0f, 0 };
+			AttachBasePassGpuTiming(GBuffer);
 
 			if (!Graph.AddRasterPass(std::move(GBuffer), [this, Renderer, bUseDepthPrepass]
 				{
@@ -921,6 +950,7 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 			{ LightingHDR, ERenderGraphLoadAction::Load }
 		};
 		Forward.DepthAttachment = { Depth, bUseDepthPrepass ? ERenderGraphLoadAction::Load : ERenderGraphLoadAction::Clear, 1.0f, 0 };
+		AttachBasePassGpuTiming(Forward);
 		if (!Graph.AddRasterPass(std::move(Forward), [this, Renderer, &Graph, LightingOptions = Options, bUseDepthPrepass, ForwardShadowMask]
 			{
 				if (!LightingOptions.bDrawPrimitives) return;

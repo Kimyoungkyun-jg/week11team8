@@ -16,6 +16,7 @@
 #include "Render/Swapchain.h"
 #include "Render/Texture2D.h"
 #include "Audio/AudioDevice.h"
+#include "Components/SkeletalMeshComponent.h"
 namespace
 {
 	constexpr const char* GameConfigPath = ContentPaths::GameConfigFile;
@@ -110,6 +111,7 @@ void UGameEngine::Tick(float DeltaTime)
 	Viewport.TickUI(DeltaTime);
 	RenderFrame(Viewport, World);
 	FStatRegistry::EndFrame();
+	USkeletalMeshComponent::EndSkinningStatsFrame();
 }
 
 bool UGameEngine::SetGameMouseCapture(const UWorld* InWorld, bool bEnabled)
