@@ -10,6 +10,8 @@ struct FSceneRenderOptions
 	float ShadowDepthBias = 0.0001f;
 	bool bCacheShadows = true; // r.Shadow.CacheWholeSceneShadows: 바뀌지 않은 그림자 타일은 다시 그리지 않는다
 	bool bEnableFog = true;
+	bool bDrawSkeletalMeshes = true;   // Show 메뉴의 Skeletal Meshes. 끄면 화면과 그림자 수집에서 스켈레탈 프록시를 뺀다
+	bool bDrawDecals = true;   // Show 메뉴의 Decals. 끄면 데칼을 모으지 않아 DBuffer가 비어 있는 채로 넘어간다
 	bool bEnableFXAA = false;
 	ELightCullingMode LightCullingMode = ELightCullingMode::Tiled;
 	bool bShowSceneDepth = false;
