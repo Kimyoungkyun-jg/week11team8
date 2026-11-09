@@ -4,12 +4,15 @@
 #include "FbxAssetImporter.h"
 #include "FbxPath.h"
 #include "Asset/AssetManager.h"
+#include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
 #include "Render/Material.h"
 #include "Render/Mesh.h"
 #include "Render/RenderCommand.h"
 #include "Render/Texture2D.h"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <set>
@@ -62,6 +65,58 @@ FSkeletalMeshData ConvertSkeletalLOD(const FFbxMeshLODData& Input, const FRefere
 	}
 	return Out;
 }
+
+#ifdef ENGINE_DEBUG
+// 임포트·저장·샘플링이 맞물리는지 보는 점검. 0초 포즈를 Skeleton의 바인드 포즈와 비교해 로그로 남긴다.
+// 트랙이 Skeleton에 연결되지 않으면(unmatched) 이름 연결이 어긋난 것이다.
+// 움직이지 않는 본(static: 세 성분 모두 키 1개)은 바인드 포즈와 같아야 한다. 여기서 차이가 나면 변환 오류다.
+// 움직이는 본(animated)은 첫 프레임이 바인드 자세가 아니면 차이가 커도 정상이다. 가장 많이 다른 본의 이름을 함께 남긴다.
+void LogPoseAgainstBind(const UAnimSequence& Sequence, const FReferenceSkeleton& Ref, const FString& Key)
+{
+	TArray<int32> TrackToBone;
+	Sequence.BuildTrackToBoneMap(Ref, TrackToBone);
+	TArray<FBoneTransform> Pose;
+	Sequence.GetBonePose(0.0f, Ref, TrackToBone, Pose);
+
+	struct FStats
+	{
+		int32 Count = 0;
+		float Position = 0.0f, Rotation = 0.0f, Scale = 0.0f;
+		FString WorstBone;
+	};
+	FStats Static, Animated;
+	int32 Unmatched = 0;
+	for (int32 TrackIndex = 0; TrackIndex < Sequence.Tracks.Num(); ++TrackIndex)
+	{
+		const int32 Bone = TrackIndex < TrackToBone.Num() ? TrackToBone[TrackIndex] : -1;
+		if (Bone < 0 || Bone >= Pose.Num())
+		{
+			++Unmatched;
+			continue;
+		}
+		const FRawAnimSequenceTrack& Keys = Sequence.Tracks[TrackIndex].InternalTrack;
+		FStats& Stats = (Keys.PosKeys.Num() == 1 && Keys.RotKeys.Num() == 1 && Keys.ScaleKeys.Num() == 1) ? Static : Animated;
+		const FBoneTransform& Bind = Ref.RefBonePose[Bone];
+		// q와 -q는 같은 회전이므로 내적의 절댓값으로 각도를 구한다.
+		const FQuat& A = Pose[Bone].Rotation;
+		const FQuat& B = Bind.Rotation;
+		const float Dot = std::min(1.0f, std::abs(A.X * B.X + A.Y * B.Y + A.Z * B.Z + A.W * B.W));
+		const float Degrees = 2.0f * std::acos(Dot) * 57.2957795f;
+		++Stats.Count;
+		Stats.Position = std::max(Stats.Position, (Pose[Bone].Translation - Bind.Translation).Length());
+		Stats.Scale = std::max(Stats.Scale, (Pose[Bone].Scale - Bind.Scale).Length());
+		if (Degrees > Stats.Rotation)
+		{
+			Stats.Rotation = Degrees;
+			Stats.WorstBone = Ref.RefBoneInfo[Bone].Name;
+		}
+	}
+	HTR_LOG(Info, "[Anim] {}: {} tracks ({} unmatched) | static {}: max position {:.4f}, rotation {:.3f} deg ({}), scale {:.4f} | animated {}: max position {:.4f}, rotation {:.3f} deg ({}), scale {:.4f}",
+		Key, Sequence.Tracks.Num(), Unmatched,
+		Static.Count, Static.Position, Static.Rotation, Static.WorstBone, Static.Scale,
+		Animated.Count, Animated.Position, Animated.Rotation, Animated.WorstBone, Animated.Scale);
+}
+#endif
 
 // 아직 등록하지 않은 의존 애셋도 같은 배치에서 찾는다. 실패 시 기존 검색표는 그대로 유지된다.
 class FLoadBatch
@@ -150,6 +205,28 @@ public:
 			auto* Skeleton = Allocate<USkeleton>();
 			Skeleton->RefSkeleton = Asset.RefSkeleton;
 			Object = Skeleton;
+		}
+		else if (Asset.Type == EFbxAssetType::AnimSequence)
+		{
+			// 애니메이션은 Skeleton에 맞춰 만들어진다. 같은 배치나 디스크에서 Skeleton을 먼저 찾는다.
+			auto* Skeleton = Cast<USkeleton>(Resolve(Asset.SkeletonKey));
+			if (!Skeleton)
+			{
+				if (Error.empty())
+				{
+					Error = "Invalid FBX skeleton reference: " + Asset.SkeletonKey;
+				}
+				return nullptr;
+			}
+			auto* Sequence = Allocate<UAnimSequence>();
+			Sequence->SetSkeleton(Skeleton);
+			Sequence->FrameRate = Asset.Animation.FrameRate;
+			Sequence->NumberOfKeys = Asset.Animation.NumberOfKeys;
+			Sequence->Tracks = Asset.Animation.Tracks;
+#ifdef ENGINE_DEBUG
+			LogPoseAgainstBind(*Sequence, Skeleton->RefSkeleton, Key);
+#endif
+			Object = Sequence;
 		}
 		else if (Asset.Type == EFbxAssetType::Material)
 		{

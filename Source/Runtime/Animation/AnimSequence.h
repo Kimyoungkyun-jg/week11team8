@@ -33,6 +33,8 @@ public:
 
 	// 프레임 레이트, 키 수, 트랙 이름과 키 개수, 값이 유효한지 확인한다.
 	bool Validate(FString& OutError) const;
+	// Validate와 같은 검사를 객체 없이 한다. 임포터와 .fbxbin 읽기가 에셋을 만들기 전에 쓴다.
+	static bool ValidateKeys(float FrameRate, int32 NumberOfKeys, const TArray<FBoneAnimationTrack>& Tracks, FString& OutError);
 
 	// 트랙 번호 → 대상 본 번호 표를 만든다. 대상에 없는 본의 트랙은 -1이다.
 	// 대상 본 이름으로 FName 해시맵을 만들어 트랙마다 한 번에 찾는다(본 수 + 트랙 수 만큼).

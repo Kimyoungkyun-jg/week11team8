@@ -170,6 +170,11 @@ void UAnimSequence::GetBonePose(float Time, const FReferenceSkeleton& Target, co
 
 bool UAnimSequence::Validate(FString& OutError) const
 {
+	return ValidateKeys(FrameRate, NumberOfKeys, Tracks, OutError);
+}
+
+bool UAnimSequence::ValidateKeys(float FrameRate, int32 NumberOfKeys, const TArray<FBoneAnimationTrack>& Tracks, FString& OutError)
+{
 	if (!std::isfinite(FrameRate) || FrameRate <= 0.0f)
 	{
 		OutError = "Invalid frame rate";

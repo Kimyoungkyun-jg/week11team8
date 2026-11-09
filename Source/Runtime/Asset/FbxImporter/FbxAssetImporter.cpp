@@ -202,6 +202,17 @@ FMatrix EngineMatrix(const FbxAMatrix& M, double UnitScale, bool bEngineInput = 
 	return FMatrix(X.X, X.Y, X.Z, 0, Y.X, Y.Y, Y.Z, 0, Z.X, Z.Y, Z.Z, 0, T.X, T.Y, T.Z, 1);
 }
 
+// FBX 로컬 행렬을 엔진 위치·회전·크기로 바꾼다. EngineMatrix와 같은 축 변환(Y 반사)을 성분에 적용한 것이다.
+// 바인드 포즈(BuildRig)와 애니메이션 키(CookAnimation)가 함께 써야 두 값이 같은 공간에 놓인다.
+FBoneTransform EngineBoneTransform(const FbxAMatrix& Local, double UnitScale)
+{
+	const FbxQuaternion Q = Local.GetQ();
+	const FbxVector4 S = Local.GetS();
+	return FBoneTransform(Reflect(Local.GetT()) * static_cast<float>(UnitScale),
+		FQuat(static_cast<float>(Q[0]), static_cast<float>(-Q[1]), static_cast<float>(Q[2]), static_cast<float>(-Q[3])).Normalized(),
+		FVector(static_cast<float>(S[0]), static_cast<float>(S[1]), static_cast<float>(S[2])));
+}
+
 bool FiniteMatrix(const FMatrix& M)
 {
 	for (int R = 0; R < 4; ++R)
@@ -454,6 +465,7 @@ struct FRig
 	std::unordered_map<FbxNode*, uint16> Indices;
 	FReferenceSkeleton Reference;
 	FbxAMatrix ParentBind;
+	FbxAMatrix FrameInverse; // 본 글로벌을 리그 기준 공간으로 옮기는 행렬. Bake Meshes면 단위 행렬이다.
 	FString Key;
 };
 
@@ -552,6 +564,8 @@ public:
 	FbxAMatrix Bind(FbxNode* Node);
 	FbxAMatrix MeshBind(const FMeshItem& Item);
 	bool BuildRig(FRig& Rig);
+	bool CookAnimations(const FRig& Rig);
+	bool CookAnimation(const FRig& Rig, FbxAnimStack* Stack);
 	FString Material(FbxSurfaceMaterial* SourceMaterial);
 	FString Texture(FbxProperty Property);
 	FString OpacityTexture(FbxSurfaceMaterial* Material, const FString& DiffuseKey, const FString& OpacityKey, const FString& Identity, ESamplerState Sampler);
@@ -929,7 +943,8 @@ FbxAMatrix FImport::MeshBind(const FMeshItem& Item)
 bool FImport::BuildRig(FRig& Rig)
 {
 	Rig.ParentBind = Bind(Rig.Root->GetParent());
-	const FbxAMatrix FrameInverse = Options.bBakeSkeletalMeshes ? FbxAMatrix() : Rig.ParentBind.Inverse();
+	Rig.FrameInverse = Options.bBakeSkeletalMeshes ? FbxAMatrix() : Rig.ParentBind.Inverse();
+	const FbxAMatrix& FrameInverse = Rig.FrameInverse;
 	if (!FiniteMatrix(EngineMatrix(Rig.ParentBind, UnitScale)))
 	{
 		Error = "Singular rig parent bind transform";
@@ -957,12 +972,7 @@ bool FImport::BuildRig(FRig& Rig)
 			Error = "Invalid bind transform: " + NodePath(Node);
 			return false;
 		}
-		const FbxQuaternion Q = Local.GetQ();
-		const FVector Translation = Reflect(Local.GetT()) * static_cast<float>(UnitScale);
-		const FbxVector4 S = Local.GetS();
-		FBoneTransform Transform(Translation,
-			FQuat(static_cast<float>(Q[0]), static_cast<float>(-Q[1]), static_cast<float>(Q[2]), static_cast<float>(-Q[3])).Normalized(),
-			FVector(static_cast<float>(S[0]), static_cast<float>(S[1]), static_cast<float>(S[2])));
+		const FBoneTransform Transform = EngineBoneTransform(Local, UnitScale);
 		const FMatrix Rebuilt = Transform.ToMatrix();
 		bool Difference = false;
 		for (int R = 0; R < 4; ++R)
@@ -998,6 +1008,168 @@ bool FImport::BuildRig(FRig& Rig)
 	}
 	auto Asset = Data(EFbxAssetType::Skeleton, Rig.Key, "Skeleton:" + NodePath(Rig.Root));
 	Asset.RefSkeleton = Rig.Reference;
+	Output.Add(std::move(Asset));
+	return true;
+}
+
+// 씬의 시간 모드가 정한 프레임 레이트. 사용자 지정 모드면 그 값을, 알 수 없으면 30fps를 쓴다.
+double SceneFrameRate(FbxScene* Scene)
+{
+	const FbxGlobalSettings& Settings = Scene->GetGlobalSettings();
+	const FbxTime::EMode Mode = Settings.GetTimeMode();
+	const double Rate = Mode == FbxTime::eCustom ? Settings.GetCustomFrameRate() : FbxTime::GetFrameRate(Mode);
+	return std::isfinite(Rate) && Rate > 0.0 ? Rate : 30.0;
+}
+
+bool NearVector(const FVector& A, const FVector& B, float Tolerance)
+{
+	return std::abs(A.X - B.X) <= Tolerance && std::abs(A.Y - B.Y) <= Tolerance && std::abs(A.Z - B.Z) <= Tolerance;
+}
+
+bool NearQuat(const FQuat& A, const FQuat& B, float Tolerance)
+{
+	return std::abs(A.X - B.X) <= Tolerance && std::abs(A.Y - B.Y) <= Tolerance && std::abs(A.Z - B.Z) <= Tolerance &&
+		std::abs(A.W - B.W) <= Tolerance;
+}
+
+// 모든 키가 첫 키와 같으면 1개로 줄인다(상수 트랙). 줄였으면 false, 움직이면 true를 돌려준다.
+template<class T, class FNear>
+bool ReduceConstantKeys(TArray<T>& Keys, FNear Near)
+{
+	for (int32 I = 1; I < Keys.Num(); ++I)
+	{
+		if (!Near(Keys[0], Keys[I]))
+		{
+			return true;
+		}
+	}
+	if (Keys.Num() > 1)
+	{
+		Keys.SetNum(1);
+	}
+	return false;
+}
+
+bool FImport::CookAnimations(const FRig& Rig)
+{
+	// 샘플링은 현재 AnimStack을 바꿔 가며 평가한다. 끝나면 원래 스택으로 되돌린다.
+	FbxAnimStack* Original = Scene->GetCurrentAnimationStack();
+	bool bResult = true;
+	for (int S = 0; S < Scene->GetSrcObjectCount<FbxAnimStack>() && bResult; ++S)
+	{
+		if (FbxAnimStack* Stack = Scene->GetSrcObject<FbxAnimStack>(S))
+		{
+			bResult = CookAnimation(Rig, Stack);
+		}
+	}
+	if (Original)
+	{
+		Scene->SetCurrentAnimationStack(Original);
+	}
+	return bResult;
+}
+
+bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
+{
+	const FString StackName = Stack->GetName();
+	// 길이는 애니메이터가 찍은 마지막 키가 아니라 스택의 시간 범위로 정한다. 범위가 없으면 씬 타임라인 범위를 쓴다.
+	FbxTimeSpan Span = Stack->GetLocalTimeSpan();
+	if (Span.GetDuration().GetSecondDouble() <= 0.0)
+	{
+		Scene->GetGlobalSettings().GetTimelineDefaultTimeSpan(Span);
+	}
+	const double Start = Span.GetStart().GetSecondDouble();
+	const double Duration = std::max(0.0, Span.GetStop().GetSecondDouble() - Start);
+	const double Rate = SceneFrameRate(Scene);
+	if (!std::isfinite(Start) || !std::isfinite(Duration))
+	{
+		Warn("Animation has an invalid time range; skipped: " + StackName);
+		return true;
+	}
+
+	// NumberOfKeys = 길이(초) × FrameRate + 1. 부동소수 오차(29.997프레임 등)는 반올림으로 프레임 격자에 맞춘다.
+	const double FrameCount = std::round(Duration * Rate);
+	const int32 BoneCount = static_cast<int32>(Rig.Bones.size());
+	if (FrameCount + 1.0 > 100000.0 || (FrameCount + 1.0) * BoneCount > 50000000.0)
+	{
+		Error = "Animation is too long: " + StackName;
+		return false;
+	}
+
+	FFbxAnimationData Animation;
+	Animation.FrameRate = static_cast<float>(Rate);
+	Animation.NumberOfKeys = static_cast<int32>(FrameCount) + 1;
+	Animation.Tracks.SetNum(BoneCount);
+	for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+	{
+		auto& Track = Animation.Tracks[Bone];
+		Track.BoneName = FName(Rig.Reference.RefBoneInfo[Bone].Name);
+		Track.InternalTrack.PosKeys.Reserve(Animation.NumberOfKeys);
+		Track.InternalTrack.RotKeys.Reserve(Animation.NumberOfKeys);
+		Track.InternalTrack.ScaleKeys.Reserve(Animation.NumberOfKeys);
+	}
+
+	// 애니메이터의 키와 상관없이 프레임마다 SDK로 곡선을 평가해 키를 만든다(베이크).
+	// 로컬은 BuildRig의 바인드 포즈와 같은 식이다: (Frame × 부모 글로벌)⁻¹ × (Frame × 글로벌)
+	Scene->SetCurrentAnimationStack(Stack);
+	std::vector<FbxAMatrix> Globals(BoneCount);
+	for (int32 Key = 0; Key < Animation.NumberOfKeys; ++Key)
+	{
+		FbxTime Time;
+		Time.SetSecondDouble(Start + std::min(Key / Rate, Duration));
+		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+		{
+			// 본은 부모가 먼저 오는 순서라 부모 글로벌은 이미 구해져 있다.
+			Globals[Bone] = Rig.FrameInverse * Rig.Bones[Bone]->EvaluateGlobalTransform(Time);
+			const int32 Parent = Rig.Reference.RefBoneInfo[Bone].ParentIndex;
+			const FbxAMatrix Local = Parent < 0 ? Globals[Bone] : Globals[Parent].Inverse() * Globals[Bone];
+			FBoneTransform Transform = EngineBoneTransform(Local, UnitScale);
+
+			auto& Keys = Animation.Tracks[Bone].InternalTrack;
+			// q와 -q는 같은 회전이다. 앞 키와 같은 쪽 부호로 맞춰 두면 상수 판정과 보간이 안정된다.
+			if (!Keys.RotKeys.IsEmpty())
+			{
+				const FQuat& Previous = Keys.RotKeys[Keys.RotKeys.Num() - 1];
+				FQuat& Q = Transform.Rotation;
+				if (Previous.X * Q.X + Previous.Y * Q.Y + Previous.Z * Q.Z + Previous.W * Q.W < 0.0f)
+				{
+					Q = FQuat(-Q.X, -Q.Y, -Q.Z, -Q.W);
+				}
+			}
+			Keys.PosKeys.Add(Transform.Translation);
+			Keys.RotKeys.Add(Transform.Rotation);
+			Keys.ScaleKeys.Add(Transform.Scale);
+		}
+	}
+
+	// 변하지 않는 성분은 키 1개로 줄인다. 위치는 엔진 단위, 회전은 쿼터니언 성분, 크기는 배율 기준 허용 오차다.
+	int32 AnimatedBones = 0;
+	for (auto& Track : Animation.Tracks)
+	{
+		auto& Keys = Track.InternalTrack;
+		bool bAnimated = ReduceConstantKeys(Keys.PosKeys, [](const FVector& A, const FVector& B) { return NearVector(A, B, 1.e-4f); });
+		bAnimated |= ReduceConstantKeys(Keys.RotKeys, [](const FQuat& A, const FQuat& B) { return NearQuat(A, B, 1.e-5f); });
+		bAnimated |= ReduceConstantKeys(Keys.ScaleKeys, [](const FVector& A, const FVector& B) { return NearVector(A, B, 1.e-5f); });
+		AnimatedBones += bAnimated ? 1 : 0;
+	}
+	const FString Identity = "Anim:" + NodePath(Rig.Root) + "/" + StackName;
+	if (!AnimatedBones)
+	{
+		// 메시 FBX에 흔한 빈 기본 테이크("Take 001" 등)는 에셋을 만들지 않는다.
+		HTR_LOG(Info, "[Anim] {}: no bone moves; skipped", Identity);
+		return true;
+	}
+
+	const FString Key = MakeKey("AS", StackName, Identity);
+	if (Key.empty())
+	{
+		return false;
+	}
+	HTR_LOG(Info, "[Anim] {}: source {:.3f}s ~ {:.3f}s, {:.2f} fps, {} keys, {:.3f}s, {}/{} bones animated",
+		Key, Start, Start + Duration, Rate, Animation.NumberOfKeys, (Animation.NumberOfKeys - 1) / Rate, AnimatedBones, BoneCount);
+	auto Asset = Data(EFbxAssetType::AnimSequence, Key, Identity);
+	Asset.SkeletonKey = Rig.Key;
+	Asset.Animation = std::move(Animation);
 	Output.Add(std::move(Asset));
 	return true;
 }
@@ -1907,7 +2079,9 @@ bool FImport::CookMesh(const FOutputGroup& Group)
 
 bool FImport::Run()
 {
+	//메시 모으기
 	Gather(Scene->GetRootNode(), true);
+
 	if (Meshes.empty())
 	{
 		Error = "No visible supported mesh geometry in FBX";
@@ -1918,10 +2092,13 @@ bool FImport::Run()
 		Error = "Select Static or Skeletal mesh import";
 		return false;
 	}
+
 	// 리그를 찾지 않으면 스킨 메시도 Static 경로로 들어간다.
 	if (Options.bImportSkeletalMeshes)
 	{
+		//본 찾기
 		FindRigs();
+
 		if (!Error.empty())
 		{
 			return false;
@@ -1954,6 +2131,7 @@ bool FImport::Run()
 			Used.insert(Item.Rig);
 		}
 	}
+	//메시가 쓰는 리그만 BuildRig로 만든다.
 	for (auto& [Path, Rig] : Rigs)
 	{
 		if (Used.contains(Rig.Root) && !BuildRig(Rig))
@@ -1978,6 +2156,17 @@ bool FImport::Run()
 		if (!CookMesh(Group))
 		{
 			return false;
+		}
+	}
+	// 애니메이션은 출력된 Skeleton(메시가 쓰는 리그)마다 만든다.
+	if (Options.bImportSkeletalMeshes && Options.bImportAnimations)
+	{
+		for (const auto& [Path, Rig] : Rigs)
+		{
+			if (!Rig.Key.empty() && !CookAnimations(Rig))
+			{
+				return false;
+			}
 		}
 	}
 	std::set<FString> ReferencedTextures;

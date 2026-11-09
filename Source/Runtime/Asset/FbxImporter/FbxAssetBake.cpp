@@ -1,6 +1,7 @@
 #include "EnginePCH.h"
 #include "FbxAssetBake.h"
 #include "FbxPath.h"
+#include "Animation/AnimSequence.h"
 #include "Render/Texture.h"
 #include <cmath>
 #include <cstring>
@@ -11,6 +12,7 @@
 namespace
 {
 // 헤더나 직렬화 필드를 변경하면 올린다. 구버전은 에디터에서 명시적으로 재임포트한다.
+// 새 타입(AnimSequence)과 옵션 비트(128) 추가는 기존 타입의 배치를 바꾸지 않으므로 그대로 둔다.
 constexpr uint32 FbxBakeVersion = 5;
 constexpr uint32 MaxElements = 1000000;
 constexpr uint32 MaxImageBytes = 512u * 1024u * 1024u;
@@ -133,10 +135,13 @@ void SerializeCommon(FBinary& Ar, FFbxAssetData& Data)
 	Ar.String(Data.SourceObject);
 	auto& O = Data.Options;
 	uint8 Flags = (O.bBakeStaticMeshes ? 1 : 0) | (O.bCombineStaticMeshes ? 2 : 0) | (O.bBakeSkeletalMeshes ? 4 : 0) |
-		(O.bCombineSkeletalMeshes ? 8 : 0) | (O.bImportStaticMeshes ? 16 : 0) | (O.bImportSkeletalMeshes ? 32 : 0) | (O.bForceFrontX ? 64 : 0);
+		(O.bCombineSkeletalMeshes ? 8 : 0) | (O.bImportStaticMeshes ? 16 : 0) | (O.bImportSkeletalMeshes ? 32 : 0) | (O.bForceFrontX ? 64 : 0) |
+		(O.bImportAnimations ? 128 : 0);
 	Ar.Pod(Flags);
 	if (Ar.In)
 	{
+		// 비트 128이 생기기 전 파일은 0이라 재임포트할 때 애니메이션이 꺼진 채로 시작한다.
+		O.bImportAnimations = Flags & 128;
 		O.bBakeStaticMeshes = Flags & 1;
 		O.bCombineStaticMeshes = Flags & 2;
 		O.bBakeSkeletalMeshes = Flags & 4;
@@ -212,6 +217,37 @@ void Serialize(FBinary& Ar, FFbxAssetData& Data)
 	else if (Data.Type == EFbxAssetType::Skeleton)
 	{
 		Skeleton(Ar, Data.RefSkeleton);
+	}
+	else if (Data.Type == EFbxAssetType::AnimSequence)
+	{
+		auto& Anim = Data.Animation;
+		Ar.String(Data.SkeletonKey);
+		Ar.Pod(Anim.FrameRate);
+		Ar.Pod(Anim.NumberOfKeys);
+		uint32 TrackCount = static_cast<uint32>(Anim.Tracks.Num());
+		Ar.Pod(TrackCount);
+		if (!Ar.bGood || TrackCount > 65536)
+		{
+			Ar.bGood = false;
+			return;
+		}
+		if (Ar.In)
+		{
+			Anim.Tracks.SetNum(TrackCount);
+		}
+		for (auto& Track : Anim.Tracks)
+		{
+			// FName은 실행마다 번호가 달라지므로 문자열로 저장한다.
+			FString Name = Track.BoneName.ToString();
+			Ar.String(Name);
+			if (Ar.In)
+			{
+				Track.BoneName = FName(Name);
+			}
+			Ar.Array(Track.InternalTrack.PosKeys);
+			Ar.Array(Track.InternalTrack.RotKeys);
+			Ar.Array(Track.InternalTrack.ScaleKeys);
+		}
 	}
 	else if (Data.Type == EFbxAssetType::Material)
 	{
@@ -375,6 +411,15 @@ bool FFbxAssetData::Validate(FString& Error) const
 	else if (Type == EFbxAssetType::Skeleton)
 	{
 		return RefSkeleton.Validate(Error);
+	}
+	else if (Type == EFbxAssetType::AnimSequence)
+	{
+		if (SkeletonKey.empty())
+		{
+			Error = "Missing Skeleton asset reference";
+			return false;
+		}
+		return UAnimSequence::ValidateKeys(Animation.FrameRate, Animation.NumberOfKeys, Animation.Tracks, Error);
 	}
 	else if (Type == EFbxAssetType::Material)
 	{

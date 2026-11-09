@@ -35,6 +35,7 @@ namespace
 
 USkeletalMeshComponent::USkeletalMeshComponent()
 {
+	PrimaryComponentTick.bCanEverTick = true;   // 애니메이션 재생. AnimToPlay가 비어 있으면 TickAnimation은 바로 끝난다.
 }
 
 void USkeletalMeshComponent::BeginPlay()
@@ -46,6 +47,9 @@ void USkeletalMeshComponent::BeginPlay()
 void USkeletalMeshComponent::TickComponent(float DeltaTime)
 {
 	Super::TickComponent(DeltaTime);
+
+	// 순서: 시간 진행 → 포즈 계산 → SetLocalPose(dirty) → 아래에서 스키닝. 같은 틱 안에서 끝나므로 한 프레임 늦지 않는다.
+	TickAnimation(DeltaTime);
 
 	if (!SkinningMatrices.IsEmpty() && bSkinningMatricesDirty)
 	{
@@ -116,6 +120,59 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	UpdateSkinning();
 }
 
+void USkeletalMeshComponent::TickAnimation(float DeltaTime)
+{
+	if (!AnimToPlay)
+	{
+		// 애니메이션을 껐으면 마지막 자세에 멈추지 않고 바인드 포즈로 돌린다. 켠 적이 없으면 아무것도 하지 않는다.
+		if (AnimInstance)
+		{
+			AnimInstance.reset();
+			AnimInstanceMesh = nullptr;
+			if (SkeletalMesh)
+			{
+				SetLocalPose(SkeletalMesh->RefSkeleton.RefBonePose);
+			}
+		}
+		return;
+	}
+
+	EnsureBoneState();
+	if (!SkeletalMesh)
+	{
+		return;
+	}
+
+	// 시퀀스나 메시가 바뀌었으면 인스턴스를 새로 맞춘다. 트랙 연결표는 이때만 만든다.
+	if (!AnimInstance || AnimInstanceMesh != SkeletalMesh || AnimInstance->GetAnimationAsset() != AnimToPlay)
+	{
+		// 애니메이션은 Skeleton에 맞춰 만들어진다. 지금은 포인터로 비교한다(부분 재임포트 뒤에는 옛 포인터가 남을 수 있다).
+		if (AnimToPlay->GetSkeleton() != SkeletalMesh->Skeleton)
+		{
+			HTR_LOG(Warning, "[Anim] {}: Skeleton does not match mesh {}; animation cleared",
+				AnimToPlay->GetPath(), SkeletalMesh->GetPath());
+			AnimToPlay = nullptr;
+			return;
+		}
+		if (!AnimInstance)
+		{
+			AnimInstance.reset(NewObject<UAnimSingleNodeInstance>(this, FName("AnimInstance")));
+			AnimInstance->Initialize(this);
+		}
+		AnimInstanceMesh = SkeletalMesh;
+		AnimInstance->SetAnimationAsset(AnimToPlay);
+	}
+
+	// 설정은 프로퍼티가 진실이다. 매 틱 넘겨 두면 Details에서 바꾼 값이 바로 반영된다.
+	AnimInstance->SetLooping(bLoopAnimation);
+	AnimInstance->SetPlayRate(AnimPlayRate);
+	AnimInstance->UpdateAnimation(DeltaTime);
+	if (AnimInstance->EvaluateAnimation(AnimPose))
+	{
+		SetLocalPose(AnimPose);
+	}
+}
+
 void USkeletalMeshComponent::SetBoneTransform(int32 BoneIndex, const FMatrix& LocalTransform)
 {
 	if (BoneIndex < 0 || BoneIndex >= LocalBoneTransforms.Num())
@@ -144,6 +201,24 @@ void USkeletalMeshComponent::SetGlobalBoneTransforms(const TArray<FMatrix>& InGl
 	GlobalBoneTransforms = InGlobalTransforms;
 	bGlobalBoneTransformsOverridden = true;
 	bSkinningMatricesDirty = true;
+}
+
+bool USkeletalMeshComponent::SetLocalPose(const TArray<FBoneTransform>& Pose)
+{
+	EnsureBoneState();
+	if (!SkeletalMesh || Pose.IsEmpty() || Pose.Num() != LocalBoneTransforms.Num())
+	{
+		return false;
+	}
+	// 메시의 LocalBindPose도 FBoneTransform::ToMatrix로 만든 값이라 같은 규약이다.
+	for (int32 Index = 0; Index < Pose.Num(); ++Index)
+	{
+		LocalBoneTransforms[Index] = Pose[Index].ToMatrix();
+	}
+	// 로컬을 통째로 바꿨으므로 글로벌 직접 지정(리타게팅)은 해제하고, 글로벌은 UpdateBoneMatrices가 다시 계산한다.
+	bGlobalBoneTransformsOverridden = false;
+	bSkinningMatricesDirty = true;
+	return true;
 }
 
 void USkeletalMeshComponent::UpdateBoneMatrices()

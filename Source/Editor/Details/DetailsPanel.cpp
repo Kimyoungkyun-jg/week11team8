@@ -669,6 +669,73 @@ namespace
 		}
 	}
 
+	// 애니메이션은 Skeleton에 맞춰 만들어진다. 이 컴포넌트의 메시와 Skeleton이 같은 시퀀스만 보여 준다.
+	// 메시가 없으면 맞출 대상이 없으므로 목록이 비고, "None"으로 해제만 할 수 있다.
+	void DrawAnimSequenceSlot(UObject* Owner, UAnimSequence** AnimSequencePtr)
+	{
+		UAnimSequence* Current = *AnimSequencePtr;
+		USkeletalMeshComponent* SkeletalComponent = Cast<USkeletalMeshComponent>(Owner);
+		const USkeletalMesh* Mesh = SkeletalComponent ? SkeletalComponent->GetSkeletalMesh() : nullptr;
+
+		const auto DisplayName = [](const UAnimSequence* Sequence)
+		{
+			return Sequence->GetPath().empty() ? Sequence->GetName() : GetAssetDisplayName(Sequence->GetPath());
+		};
+
+		FString CurrentPath = Current ? Current->GetPath() : "";
+		FString CurrentFileName = Current ? DisplayName(Current) : "None";
+
+		ImGui::SetNextItemWidth(-1.0f);
+
+		EditorUIScale::LimitNextComboPopupWidth();
+		bool bOpen = ImGui::BeginCombo("##AnimSequence", CurrentFileName.c_str());
+		if (ImGui::IsItemHovered() && Current)
+		{
+			ImGui::SetTooltip("%s", CurrentPath.c_str());
+		}
+
+		if (bOpen)
+		{
+			// 해제하면 컴포넌트가 바인드 포즈로 돌아간다.
+			if (ImGui::Selectable("None", Current == nullptr))
+			{
+				if (SkeletalComponent)
+					SkeletalComponent->SetAnimToPlay(nullptr);
+				else
+					*AnimSequencePtr = nullptr;
+			}
+
+			const TArray<UAnimSequence*> Sequences = EditorSort::CollectSorted<UAnimSequence>(
+				TObjectIterator<UAnimSequence>(),
+				[&](const UAnimSequence* S) { return DisplayName(S); },
+				[&](const UAnimSequence* S) { return !S->IsRetired() && Mesh && S->GetSkeleton() == Mesh->Skeleton; });
+
+			for (UAnimSequence* Item : Sequences)
+			{
+				const bool bSelected = (Item == Current);
+				const FString ItemPath = Item->GetPath();
+
+				ImGui::PushID(Item);
+				if (ImGui::Selectable(DisplayName(Item).c_str(), bSelected))
+				{
+					// 메모리를 직접 바꾸지 않고 SetAnimToPlay를 거친다. 인스턴스는 다음 틱에 이 값을 보고 맞춰진다.
+					if (SkeletalComponent)
+						SkeletalComponent->SetAnimToPlay(Item);
+					else
+						*AnimSequencePtr = Item;
+				}
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip("%s", ItemPath.c_str());
+				}
+				ImGui::PopID();
+				if (bSelected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+	}
+
 	UMaterial* EnsureMaterialOverride(UMeshComponent* MeshComponent, int32 Slot, UMaterial* Effective, UMaterial* Override)
 	{
 		// 이 컴포넌트 전용 인스턴스가 아니면 지금 적용 중인 머티리얼을 복제해서 덮어쓰기로 만든다.
@@ -1164,6 +1231,10 @@ namespace
 			else if (Property.Class == USkeletalMesh::StaticClass())
 			{
 				DrawSkeletalMeshSlot(Object, reinterpret_cast<USkeletalMesh**>(ObjPtr));
+			}
+			else if (Property.Class == UAnimSequence::StaticClass())
+			{
+				DrawAnimSequenceSlot(Object, reinterpret_cast<UAnimSequence**>(ObjPtr));
 			}
 			break;
 		}

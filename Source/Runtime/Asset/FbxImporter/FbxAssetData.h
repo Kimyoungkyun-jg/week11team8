@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Animation/AnimTypes.h"
 #include "Animation/ReferenceSkeleton.h"
 #include "Render/SkeletalMesh.h"
 #include "Render/StaticMeshData.h"
@@ -22,10 +23,11 @@ enum class EFbxAssetType : uint32
 	Skeleton,
 	Material,
 	Texture2D,
+	AnimSequence,
 
 	// 새 타입은 위에 추가하고 Last를 옮긴다. .fbxbin 헤더 검사가 이 범위를 쓴다.
 	First = StaticMesh,
-	Last = Texture2D,
+	Last = AnimSequence,
 };
 
 struct FFbxImportOptions
@@ -38,6 +40,8 @@ struct FFbxImportOptions
 	// Static만 켜면 스킨을 무시하고, Skeletal만 켜면 스킨 없는 메시도 노드를 본으로 삼아 스켈레탈로 만든다.
 	bool bImportStaticMeshes = true;
 	bool bImportSkeletalMeshes = true;
+	// 스켈레탈 메시의 리그마다 AnimStack 하나를 AnimSequence 하나로 만든다. 메시가 없는 FBX는 아직 지원하지 않는다.
+	bool bImportAnimations = true;
 	bool bForceFrontX = true;
 	float UniformScale = 1.f; // 정점과 본 이동에 곱한다.
 };
@@ -55,6 +59,14 @@ struct FFbxMaterialData
 	EBlendState BlendState = EBlendState::Opaque;
 	FString DiffuseTexture;
 	FString NormalTexture;
+};
+
+// AnimStack 하나를 프레임마다 샘플링한 결과. 값은 UAnimSequence의 같은 이름 필드로 그대로 옮긴다.
+struct FFbxAnimationData
+{
+	float FrameRate = 30.0f;
+	int32 NumberOfKeys = 0;
+	TArray<FBoneAnimationTrack> Tracks;
 };
 
 struct FFbxMeshLODData
@@ -77,8 +89,9 @@ struct FFbxAssetData
 	TArray<FFbxMeshLODData> LODs;
 	TArray<FString> MaterialKeys;
 	std::array<float, 3> ScreenThresholds{ .30f, .10f, .03f };
-	FString SkeletonKey;
+	FString SkeletonKey; // SkeletalMesh와 AnimSequence가 쓰는 Skeleton
 	FReferenceSkeleton RefSkeleton;
+	FFbxAnimationData Animation;
 	FFbxMaterialData Material;
 	FImageData Texture;
 
