@@ -7,7 +7,32 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <set>
 
+namespace
+{
+	// 파일 본문과 #include "..."로 끌어온 파일들을 이어 붙인다. 진입점이 include한 파일에만 있는 셰이더
+	// (예: EditorArrowShader.hlsl → UberLit.hlsl)도 VS/PS 셰이더로 알아보려면 include까지 봐야 한다.
+	void AppendShaderSource(const fs::path& Path, std::set<fs::path>& Visited, std::string& Out)
+	{
+		std::error_code Ec;
+		const fs::path Canonical = fs::weakly_canonical(Path, Ec);
+		if (Ec || !Visited.insert(Canonical).second) return;
+		std::ifstream File(Path, std::ios::binary);
+		if (!File) return;
+		const std::string Source(std::istreambuf_iterator<char>{ File }, std::istreambuf_iterator<char>{});
+		Out += Source;
+		for (size_t Pos = Source.find("#include"); Pos != std::string::npos; Pos = Source.find("#include", Pos + 8))
+		{
+			const size_t Open = Source.find('"', Pos);
+			const size_t LineEnd = Source.find('\n', Pos);
+			if (Open == std::string::npos || (LineEnd != std::string::npos && Open > LineEnd)) continue;
+			const size_t Close = Source.find('"', Open + 1);
+			if (Close == std::string::npos) continue;
+			AppendShaderSource(Path.parent_path() / Source.substr(Open + 1, Close - Open - 1), Visited, Out);
+		}
+	}
+}
 
 
 struct FPipelineTableEntry
@@ -200,9 +225,9 @@ void FRenderResourceManager::ScanShaders(const fs::path& ShaderRoot)
 		if (!Entry.is_regular_file()) continue;
 		if (Entry.path().extension() != ".hlsl") continue;
 		// 컴퓨트 전용 .hlsl에는 mainVS/mainPS가 없다. VS/PS로 컴파일하지 않는다.
-		std::ifstream SourceFile(Entry.path(), std::ios::binary);
-		if (!SourceFile) continue;
-		const std::string Source(std::istreambuf_iterator<char>{ SourceFile }, std::istreambuf_iterator<char>{});
+		std::string Source;
+		std::set<fs::path> Visited;
+		AppendShaderSource(Entry.path(), Visited, Source);
 		if (Source.find("mainVS(") == std::string::npos ||
 			Source.find("mainPS(") == std::string::npos) continue;
 
