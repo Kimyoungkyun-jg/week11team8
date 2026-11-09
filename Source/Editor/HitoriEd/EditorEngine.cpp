@@ -427,7 +427,24 @@ bool UEditorEngine::Init()
 	Stop.CanExecute = [this]()->bool {return PlayWorld; };
 	Stop.Execute = [this]() { RequestEndPlayMap(); };
 
-	EditorUI->GetToolbar()->SetCommands({ Play, Pause, Resume, StepFrame, Stop });
+	// F8 자체는 PIE 입력 처리(UpdatePIEInput)가 이미 받는다. 같은 키를 ProcessShortcuts에 또 넣으면 한 번 눌러 두 번 전환되므로,
+	// 여기의 Shortcut은 툴팁 표시용이다(Stop의 Escape와 같다). 버튼은 F8 입력과 같은 경로로 전환을 요청한다.
+	const auto RequestEjectToggle = [this]()
+	{
+		if (FWorldContext* Context = GetPIEWorldContext(); Context && Context->GameViewport)
+			Context->GameViewport->InputKey(nullptr, static_cast<int32>(EKeyCode::F8), true);
+	};
+	const ImVec4 Orange = { 1.0f, 0.70f, 0.25f, 1.0f };
+	Eject = { "Eject", "Eject from the player pawn and use the editor camera", UAssetManager::Get().LoadTexture(EditorResourcePaths::ToolbarEjectIcon), White, { EKeyCode::F8 } };
+	Eject.CanExecute = [this]()->bool { return PlayWorld && !IsSimulatingInEditor(); };
+	Eject.IsVisible = [this]()->bool { return !IsSimulatingInEditor(); };
+	Eject.Execute = RequestEjectToggle;
+	Possess = { "Possess", "Possess the player pawn again", UAssetManager::Get().LoadTexture(EditorResourcePaths::ToolbarEjectIcon), Orange, { EKeyCode::F8 } };
+	Possess.CanExecute = [this]()->bool { return PlayWorld && IsSimulatingInEditor(); };
+	Possess.IsVisible = [this]()->bool { return IsSimulatingInEditor(); };
+	Possess.Execute = RequestEjectToggle;
+
+	EditorUI->GetToolbar()->SetCommands({ Play, Pause, Resume, StepFrame, Stop, Eject, Possess });
 	EditorUI->GetToolbar()->SetPlayModeBinding(
 		[this]() { return PlayMode; },
 		[this](EPlayModeType Mode) { PlayMode = Mode; },
@@ -1138,6 +1155,21 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		: bMouseOverPIE && ViewportsPanel->IsHovered() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
 	UpdatePIEMouseCapture(GameViewport, bClickableOverPIE);
 
+	// Eject/Possess 전환 요청. F8 키와 툴바 버튼이 같은 요청 플래그를 쓰는데, 버튼을 누를 때는 마우스가 툴바 위에 있어서
+	// 아래 포커스 조건(뷰포트 위에 마우스)을 채우지 못한다. 먼저 처리하지 않으면 마우스가 뷰포트로 돌아올 때까지 전환이 미뤄진다.
+	const auto ProcessSIERequest = [&]()
+	{
+		if (!GameViewport.ConsumeSIERequest())
+			return;
+		if (GameViewport.IsSIEMode()) GameViewport.EndSIEMode();
+		else GameViewport.BeginSIEMode();
+		// SIE에서는 에디터 카메라를 움직이므로 커서를 놓는다. 돌아오면 UpdatePIEMouseCapture가 다시 잠근다.
+		if (GameViewport.IsSIEMode())
+			FMouseCapture::Release();
+		OnActiveWorldChanged();
+	};
+	ProcessSIERequest();
+
 	if (!bFocused) { GameViewport.LostFocus(); return; }
 	if (!IsPIEInWindow() &&
 		(FInputSystem::IsMousePressed(EMouseButton::Left) || FInputSystem::IsMousePressed(EMouseButton::Right)) &&
@@ -1147,17 +1179,10 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		return;
 	}
 
+	// F8 키는 포커스가 있을 때만 요청으로 바뀐다. 같은 프레임에 바로 처리한다.
 	if (FInputSystem::IsKeyPressed(EKeyCode::F8))
 		GameViewport.InputKey(nullptr, static_cast<int32>(EKeyCode::F8), true);
-	if (GameViewport.ConsumeSIERequest())
-	{
-		if (GameViewport.IsSIEMode()) GameViewport.EndSIEMode();
-		else GameViewport.BeginSIEMode();
-		// SIE에서는 에디터 카메라를 움직이므로 커서를 놓는다. 돌아오면 UpdatePIEMouseCapture가 다시 잠근다.
-		if (GameViewport.IsSIEMode())
-			FMouseCapture::Release();
-		OnActiveWorldChanged();
-	}
+	ProcessSIERequest();
 	constexpr EKeyCode Keys[] = { EKeyCode::W, EKeyCode::A, EKeyCode::S, EKeyCode::D,
 		EKeyCode::Q, EKeyCode::E, EKeyCode::Space, EKeyCode::Shift };
 	for (EKeyCode Key : Keys)
