@@ -48,6 +48,7 @@ public:
 	void CreateBillboardMaterial();
 	void CreateParticleMaterial();
 	void CreateEditorArrowMaterial();
+	void CreateBoneWeightHeatmapMaterial();
 
 	template <typename T>
 	static T* GetAssetByPath(const FString& InPath)

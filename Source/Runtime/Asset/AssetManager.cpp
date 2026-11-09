@@ -156,6 +156,7 @@ void UAssetManager::Init(const FAssetLoadProgress& OnProgress)
 	Get().CreateBillboardMaterial();
 	Get().CreateParticleMaterial();
 	Get().CreateEditorArrowMaterial();
+	Get().CreateBoneWeightHeatmapMaterial();
 }
 
 void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgress& OnProgress)
@@ -400,6 +401,18 @@ void UAssetManager::CreateEditorArrowMaterial() {
 	ArrowMaterial->Shader = FRenderResourceManager::GetShaderProgram("Resources/Shader/EditorArrowShader.hlsl");
 	ArrowMaterial->BaseColor = FVector4{ 1.0f, 1.0f, 1.0f, 1.0f };
 	RegisterAsset("EditorArrowMaterial", ArrowMaterial);
+}
+
+// Bone Weight Heatmap용. 색 텍스처가 없으면 UberLit이 정점 색을 표면 색으로 쓰고(SurfaceParams.z = 0),
+// BaseColor가 흰색이라 히트 색이 그대로 나온다. 조명은 Viewer가 Unlit 뷰 모드로 끈다.
+void UAssetManager::CreateBoneWeightHeatmapMaterial()
+{
+	UMaterial* HeatmapMaterial{ UMaterial::CreateInstance(GetAssetByPath<UMaterial>("DefaultMaterial")) };
+	if (!HeatmapMaterial) return;
+	HeatmapMaterial->Textures.Empty();
+	HeatmapMaterial->BaseColor = FVector4{ 1.0f, 1.0f, 1.0f, 1.0f };
+	HeatmapMaterial->EmissiveColor = FVector{ 0.0f, 0.0f, 0.0f };
+	RegisterAsset("BoneWeightHeatmapMaterial", HeatmapMaterial);
 }
 
 void UAssetManager::Shutdown()

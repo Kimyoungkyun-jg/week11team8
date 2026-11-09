@@ -68,7 +68,7 @@ bool FStatOverlay::ExecCommand(const FString& CommandLine, FString& OutMessage)
 	if (Tokens.Num() == 0 || !EqualsIgnoreCase(Tokens[0], "stat"))
 		return false;
 
-	constexpr const char* Usage = "Usage: stat <fps|memory|profile|light|decal|all|none> [on|off]";
+	constexpr const char* Usage = "Usage: stat <fps|memory|profile|light|decal|skinning|all|none> [on|off]";
 	if (Tokens.Num() < 2 || Tokens.Num() > 3)
 	{
 		OutMessage = Usage;
@@ -103,7 +103,7 @@ bool FStatOverlay::ExecCommand(const FString& CommandLine, FString& OutMessage)
 	if (EqualsIgnoreCase(Arg, "all"))
 	{
 		const bool bEnable = Explicit != 0;
-		Flags = bEnable ? (EStatFlags::FPS | EStatFlags::Memory | EStatFlags::Profile | EStatFlags::Light | EStatFlags::Decal)
+		Flags = bEnable ? (EStatFlags::FPS | EStatFlags::Memory | EStatFlags::Profile | EStatFlags::Light | EStatFlags::Decal | EStatFlags::Skinning)
 			: EStatFlags::None;
 		OutMessage = bEnable ? "stat all: all overlays enabled" : "stat all: all overlays disabled";
 		return true;
@@ -120,12 +120,14 @@ bool FStatOverlay::ExecCommand(const FString& CommandLine, FString& OutMessage)
 		Target = EStatFlags::Light;
 	else if (EqualsIgnoreCase(Arg, "decal"))
 		Target = EStatFlags::Decal;
+	else if (EqualsIgnoreCase(Arg, "skinning") || EqualsIgnoreCase(Arg, "skin"))
+		Target = EStatFlags::Skinning;
 
 	if (Target == EStatFlags::None)
 	{
 		OutMessage = std::format(
 			"stat: unknown stat '{}'. Available: "
-			"fps, memory, profile, light, decal, all, none", Arg);
+			"fps, memory, profile, light, decal, skinning, all, none", Arg);
 		return true;
 	}
 
