@@ -126,6 +126,28 @@ private:
 
 	void BuildProjectedDecalMeshDrawLists();
 
+	// ---------- 데칼 DBuffer (Forward/Deferred 공용, 언리얼 DBuffer 방식) ----------
+	// 깊이 프리패스 → DBuffer 패스 → 본 패스(ForwardOpaque 또는 GBuffer)가 t14~t16으로 읽는다.
+	struct FDecalPassSetup
+	{
+		FRenderGraphTextureRef Lit{};
+		FRenderGraphTextureRef Unlit{};
+		FRenderGraphTextureRef Normal{};
+		bool bNeedsDBuffer = false;        // 이번 뷰에 그릴 데칼과 수신 물체가 모두 있다
+		bool bUseReceiverStencil = false;  // Depth Reconstruction이 프리패스의 수신 스텐실 비트를 쓴다
+	};
+	// SourceBatches에서 수신 물체를 고르고 데칼을 모아 DBuffer를 만든다.
+	// bAlwaysCreate면 그릴 데칼이 없어도 빈 DBuffer를 만든다 (Forward 셰이더는 항상 읽는다).
+	bool PrepareDecalPasses(FRenderGraphBuilder& Graph, FRenderer* Renderer, FSceneViewTargets& Targets,
+		const FSceneRenderOptions& Options, const TArray<FMeshDrawBatch>& SourceBatches,
+		uint32 Width, uint32 Height, bool bAlwaysCreate, FDecalPassSetup& Out);
+	// DBufferLit/DBufferUnlit 두 패스를 등록한다. 장면 깊이가 이미 채워져 있어야 한다.
+	bool AddDBufferPasses(FRenderGraphBuilder& Graph, FRenderer* Renderer, FRenderGraphTextureRef Depth,
+		const FSceneRenderOptions& Options, const FDecalPassSetup& Setup, uint32 Width, uint32 Height);
+	// 각 배치의 원래 VS로 깊이만 그린다. bWriteReceiverStencil이면 데칼 수신 비트도 기록한다.
+	bool AddDepthPrepass(FRenderGraphBuilder& Graph, FRenderer* Renderer, FRenderGraphTextureRef Depth,
+		const TArray<FMeshDrawBatch>* Batches, bool bWriteReceiverStencil);
+
 	// 이번 프레임에 그림자를 Projection할 광원. Deferred는 이 순서대로 광원마다 마스크를 만들어 더한다.
 	struct FShadowedLight
 	{
@@ -149,6 +171,7 @@ private:
 	bool bLightUploadSucceeded = false;
 	bool bTilesBuilt = false;
 	TArray<FMeshDrawBatch> ForwardBatches;
+	TArray<FMeshDrawBatch> GBufferBatches;   // Deferred: 프리패스와 GBuffer 패스가 같은 배치를 쓴다
 	TArray<FMeshDrawBatch> DecalReceiverBatches;
 	FViewContext CachedViewContext;
 	bool bCorePassSucceeded = true;

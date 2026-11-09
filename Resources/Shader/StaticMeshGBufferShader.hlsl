@@ -10,7 +10,7 @@ cbuffer WorldConstants : register(b2)
 {
     matrix World;
     matrix NormalMatrix;
-    float4 ShadowFlags; // x: bReceiveShadow
+    float4 ShadowFlags; // x: bReceiveShadow, y: bReceiveDecal
 };
 
 cbuffer MaterialParams : register(b1)
@@ -44,6 +44,7 @@ struct PS_INPUT
     float3 WorldPos : TEXCOORD2;
     float3 LocalPos : TEXCOORD3;
     float3 LocalNormal : TEXCOORD4;
+    nointerpolation float ReceiveDecal : TEXCOORD5;
 };
 
 struct GBUFFER_OUTPUT
@@ -57,6 +58,11 @@ struct GBUFFER_OUTPUT
 Texture2D ColorTexture : register(t0);
 Texture2D NormalTexture : register(t1);
 SamplerState ColorSampler : register(s0);
+
+// 데칼 DBuffer (UberLit.hlsl과 같은 슬롯). 데칼이 없는 뷰는 묶지 않으며, 비어 있는 슬롯은 0을 읽어 효과가 없다.
+Texture2D<float4> DBufferLit : register(t14);
+Texture2D<float4> DBufferUnlit : register(t15);
+Texture2D<float4> DBufferNormal : register(t16);
 
 float3 ResolveWorldNormal(float3 WorldNormal, float4 WorldTangent, float3 MapNormal)
 {
@@ -94,6 +100,7 @@ PS_INPUT mainVS(VS_INPUT Input)
     Output.LocalPos = Input.Position;
     Output.LocalNormal = Input.Normal;
     Output.ReceiveShadow = ShadowFlags.x;
+    Output.ReceiveDecal = ShadowFlags.y;
     return Output;
 }
 
@@ -118,6 +125,21 @@ GBUFFER_OUTPUT mainPS(PS_INPUT Input)
             Normal = normalize(ProjectedT * MapNormal.x + ProjectedB * MapNormal.y + normalize(Input.WorldNormal) * MapNormal.z);
     }
 
+    // Lit 데칼: 조명 전에 표면 색과 노멀을 덮는다 (UberLit.hlsl과 같은 식).
+    const bool bReceiveDecal = Input.ReceiveDecal > 0.5f;
+    const int3 PixelCoord = int3(int2(Input.Position.xy), 0);
+    if (bReceiveDecal)
+    {
+        float4 LitDecal = DBufferLit.Load(PixelCoord);
+        LinearAlbedo = LinearAlbedo * (1.0f - LitDecal.a) + LitDecal.rgb;
+
+        float4 DecalNormal = DBufferNormal.Load(PixelCoord);
+        float3 Combined = Normal * (1.0f - DecalNormal.a) + DecalNormal.rgb;
+        float LengthSquared = dot(Combined, Combined);
+        if (LengthSquared > 1.0e-8f)
+            Normal = Combined * rsqrt(LengthSquared);
+    }
+
     // 현재 UMaterial에는 Metallic/Roughness 값이 없어 임시 상수를 쓴다.
     Output.BaseColorMetallic = float4(LinearAlbedo, 0.0f);
     // bReceiveShadow가 꺼진 물체는 w를 음수(-Roughness - 1)로 저장한다. Deferred 조명이 그림자 마스크를 무시한다.
@@ -125,5 +147,16 @@ GBUFFER_OUTPUT mainPS(PS_INPUT Input)
     Output.NormalRoughness = float4(Normal, Input.ReceiveShadow > 0.5f ? Roughness : -Roughness - 1.0f);
     Output.EmissiveModel = float4(Emissive.rgb, WorldUVParams.z > 0.5f ? WorldUVParams.w + 1.0f : 0.0f);
     Output.Specular = SpecularColorShininess;
+
+    // Unlit 데칼: Forward는 조명 결과를 FinalColor * (1 - a) + rgb로 덮는다.
+    // 조명은 Albedo·Specular에 선형이므로 둘을 (1 - a)배 하고 rgb를 Emissive로 더하면 같은 결과가 된다.
+    if (bReceiveDecal)
+    {
+        float4 UnlitDecal = DBufferUnlit.Load(PixelCoord);
+        const float Keep = 1.0f - UnlitDecal.a;
+        Output.BaseColorMetallic.rgb *= Keep;
+        Output.Specular.rgb *= Keep;
+        Output.EmissiveModel.rgb = Output.EmissiveModel.rgb * Keep + UnlitDecal.rgb;
+    }
     return Output;
 }
