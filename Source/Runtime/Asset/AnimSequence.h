@@ -13,10 +13,13 @@ class UAnimSequence : public UAnimSequenceBase
 	GENERATED_BODY()
 public:
 	FString Name;
+	FString SourceFilePath;
+	int32 SourceTakeIndex = 0;
 	bool bEnableRootMotion = false;
 	bool bForceRootLock = false;
 	bool bUseNormalizedRootMotionScale = false;
 	ERootMotionRootLock RootMotionRootLock = ERootMotionRootLock::RefPose;
+	float RateScale = 1.0f;
 
 	int32 GetFrameIndex(float TimeSeconds) const;
 	int32 GetRootBoneIndex() const;

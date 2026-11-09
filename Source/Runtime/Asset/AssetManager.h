@@ -94,10 +94,13 @@ public:
 	static UStaticMesh* LoadObjStaticMesh(const FString& Path);
 	static USkeleton* LoadSkeleton(const FString& AssetPath);
 	static UAnimSequence* LoadAnimSequence(const FString& AssetPath);
+	static UAnimSequence* LoadOrImportFbxAnimSequence(const FString& AssetPath, USkeleton& Skeleton);
 	static bool SaveAnimSequence(const UAnimSequence& Sequence);
 	static UBlendSpace* LoadBlendSpace(const FString& AssetPath);
 	static bool SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& BlendSpace);
 	static void GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArray<UAnimSequence*>& OutSequences);
+	static void GetAllAnimSequences(TArray<UAnimSequence*>& OutSequences);
+	static void GetSkeletalMeshesForSkeleton(const USkeleton* Skeleton, TArray<USkeletalMesh*>& OutMeshes);
 	static USkeletalMesh* LoadFbxSkeletalMesh(const FString& Path);
 	static const TArray<UAnimSequence*>* LoadFbxAnimSequences(const FString& Path, USkeleton& Skeleton);
 	static const TArray<UAnimSequence*>* GetFbxAnimSequences(const FString& AssetKey);

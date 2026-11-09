@@ -1,7 +1,7 @@
 #include "EnginePCH.h"
 #include "Animation/TestAnimInstance.h"
 #include "Asset/AssetManager.h"
-#include "Asset/SimpleBlendSpace.h"
+#include "Asset/SimpleBlendSpace2D.h"
 #include "Asset/AnimSequence.h"
 #include "Components/CharacterMovementComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -10,6 +10,8 @@
 #include "Render/SkeletalMesh.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 
 namespace
 {
@@ -44,56 +46,37 @@ void UTestAnimInstance::BuildGraph()
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
 	if (!Mesh || !Mesh->Skeleton) return;
 
-	const FString BasePath = "Assets/Models/UnrealModel/";
-	const auto LoadSequence = [&](const char* FileName) -> UAnimSequence*
+	const FString BasePath = "Models/UnrealModel/";
+	UAnimSequence* Idle = UAssetManager::LoadAnimSequence(BasePath + "Idle.animseq");
+	if (!Idle || Idle->Skeleton != Mesh->Skeleton) return;
+	constexpr std::array<const char*, 8> Directions{ "Bwd", "Bwd_Left", "Left", "Fwd_Left",
+		"Fwd", "Fwd_Right", "Right", "Bwd_Right" };
+	std::array<UAnimSequence*, 8> Walk{}, Jog{};
+	for (std::size_t Index = 0; Index < Directions.size(); ++Index)
 	{
-		const TArray<UAnimSequence*>* Sequences = UAssetManager::LoadFbxAnimSequences(
-			BasePath + FileName, *Mesh->Skeleton);
-		return Sequences && !Sequences->IsEmpty() ? (*Sequences)[0] : nullptr;
-	};
-	UAnimSequence* Idle = LoadSequence("Idle.FBX");
-	UAnimSequence* Walk = LoadSequence("Walk.FBX");
-	UAnimSequence* Jog = LoadSequence("Jog.FBX");
-	if (!Idle || !Walk || !Jog) return;
+		Walk[Index] = UAssetManager::LoadOrImportFbxAnimSequence(
+			BasePath + "MF_Unarmed_Walk_" + Directions[Index] + ".animseq", *Mesh->Skeleton);
+		Jog[Index] = UAssetManager::LoadOrImportFbxAnimSequence(
+			BasePath + "MF_Unarmed_Jog_" + Directions[Index] + ".animseq", *Mesh->Skeleton);
+		if (!Walk[Index] || !Jog[Index]) return;
+	}
 
-	SimpleBlendSpace = NewObject<USimpleBlendSpace>(this);
+	SimpleBlendSpace = NewObject<USimpleBlendSpace2D>(this);
 	if (!SimpleBlendSpace || !SimpleBlendSpace->Configure(Idle, Walk, Jog))
 	{
 		delete SimpleBlendSpace;
 		SimpleBlendSpace = nullptr;
 		return;
 	}
-	for (UAnimSequence* Sequence : { Idle, Walk, Jog })
-	{
-		Sequence->bEnableRootMotion = false;
-		Sequence->bForceRootLock = true;
-	}
 
 	LocomotionPlayer = CreateNode<FAnimNode_BlendSpacePlayer>();
 	LocomotionPlayer->BlendSpace = SimpleBlendSpace;
 	StateMachine = CreateNode<FAnimNode_StateMachine>();
 	const int32 Locomotion = StateMachine->AddState("Locomotion", LocomotionPlayer);
-	const auto AddClip = [&](const char* FileName, const char* StateName, bool bLoop,
-		FAnimNode_SequencePlayer*& OutPlayer)
-	{
-		UAnimSequence* Sequence = LoadSequence(FileName);
-		if (!Sequence || Sequence->Skeleton != Mesh->Skeleton || !Sequence->GetDataModel()) return -1;
-		Sequence->bEnableRootMotion = false;
-		Sequence->bForceRootLock = true;
-		OutPlayer = CreateNode<FAnimNode_SequencePlayer>();
-		OutPlayer->Sequence = Sequence;
-		OutPlayer->bLoop = bLoop;
-		return StateMachine->AddState(StateName, OutPlayer);
-	};
-	const int32 Jump = AddClip("MM_Jump.FBX", "Jump", false, JumpPlayer);
-	const int32 FallLoop = AddClip("MM_Fall_Loop.FBX", "FallLoop", true, FallLoopPlayer);
-	const int32 Land = AddClip("MM_Land.FBX", "Land", false, LandPlayer);
-	const int32 Attack = AddClip("MM_Attack_01.FBX", "Attack", false, AttackPlayer);
-	if (AttackPlayer)
-	{
-		AttackPlayer->Sequence->bEnableRootMotion = true;
-		AttackPlayer->Sequence->bForceRootLock = true;
-	}
+	const int32 Jump = AddSequenceState(*StateMachine, "Jump", BasePath + "MM_Jump.animseq", false, JumpPlayer);
+	const int32 FallLoop = AddSequenceState(*StateMachine, "FallLoop", BasePath + "MM_Fall_Loop.animseq", true, FallLoopPlayer);
+	const int32 Land = AddSequenceState(*StateMachine, "Land", BasePath + "MM_Land.animseq", false, LandPlayer);
+	const int32 Attack = AddSequenceState(*StateMachine, "Attack", BasePath + "MM_Attack_01.animseq", false, AttackPlayer);
 	if (Jump >= 0 && FallLoop >= 0 && Land >= 0)
 	{
 		StateMachine->AddTransition(Locomotion, Jump, [this] { return bJumpEventThisTick; }, 0.08f);
@@ -147,6 +130,7 @@ void UTestAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	if (!Movement)
 	{
 		LocomotionPlayer->InputX = 0.0f;
+		LocomotionPlayer->InputY = 0.0f;
 		bAttackEventThisTick = false;
 		bAttackRequested = false;
 		return;
@@ -163,6 +147,11 @@ void UTestAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 			TestCharacter->LockJumpUntilLandingAnimation();
 	bAttackEventThisTick = bAttackRequested && bGrounded;
 	bAttackRequested = false;
-	const float Speed = FVector(Velocity.X, Velocity.Y, 0.0f).Size() * 100.0f;
-	LocomotionPlayer->InputX = std::clamp(Speed, 0.0f, 600.0f);
+	const FVector HorizontalVelocity(Velocity.X, Velocity.Y, 0.0f);
+	const float Speed = HorizontalVelocity.Size() * 100.0f;
+	const FQuat Facing = Character->GetActorQuat();
+	const float ForwardSpeed = FVector::Dot(HorizontalVelocity, Facing.GetForwardVector());
+	const float RightSpeed = FVector::Dot(HorizontalVelocity, Facing.GetRightVector());
+	LocomotionPlayer->InputX = Speed > 0.01f ? FMath::RadiansToDegrees(std::atan2(RightSpeed, ForwardSpeed)) : 0.0f;
+	LocomotionPlayer->InputY = std::clamp(Speed, 0.0f, 600.0f);
 }

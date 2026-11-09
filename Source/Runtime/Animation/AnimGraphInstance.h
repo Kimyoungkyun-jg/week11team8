@@ -10,4 +10,6 @@ class UAnimGraphInstance : public UAnimInstance
 protected:
 	void NativeInitializeAnimation() override;
 	virtual void BuildGraph() {}
+	int32 AddSequenceState(FAnimNode_StateMachine& Machine, const FString& Name, const FString& AssetPath,
+		bool bLoop, FAnimNode_SequencePlayer*& OutPlayer);
 };

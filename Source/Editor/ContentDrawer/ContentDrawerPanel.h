@@ -23,7 +23,7 @@ public:
 	const char* GetPanelName() const override { return "Content Drawer"; }
 	void RenderFolderTree(const fs::path& Path, fs::path& SelectedPath);
 	void Release();
-	void RequestThumbnailRefresh() { bRefreshThumbnails = true; }
+	void RequestThumbnailRefresh() { bRefreshThumbnails = true; AnimSequenceDisplayNames.clear(); }
 
 	// .widget 파일을 더블클릭하면 불린다 (UI 에디터가 연다).
 	void SetOpenWidgetCallback(std::function<void(const FString&)> InCallback) { OnOpenWidget = std::move(InCallback); }
@@ -32,6 +32,7 @@ public:
 	// .fbx 파일을 더블클릭 시
 	void SetOpenSkeletalMeshCallback(std::function<void(const FString&)> InCallback) { OnOpenSkeletalMesh = std::move(InCallback); }
 	void SetOpenAssetCallback(std::function<void(const FString&)> InCallback) { OnOpenAsset = std::move(InCallback); }
+	void SetOpenAnimSequenceCallback(std::function<void(const FString&)> InCallback) { OnOpenAnimSequence = std::move(InCallback); }
 	void SetImportFbxCallback(std::function<void(const FString&, bool)> InCallback) { OnImportFbx = std::move(InCallback); }
 	void SetReimportFromFileCallback(std::function<void(const FString&)> InCallback) { OnReimportFromFile = std::move(InCallback); }
 	// Import 버튼. 인자는 지금 보고 있는 폴더이며 바이너리가 여기에 만들어진다.
@@ -51,6 +52,7 @@ private:
 	FString FbxMenuStatus;
 	bool bFbxMenuHasSource = false;
 	std::function<void(const FString&)> OnOpenAsset;
+	std::function<void(const FString&)> OnOpenAnimSequence;
 	std::function<void(const FString&, bool)> OnImportFbx;
 	std::function<void(const FString&)> OnOpenWidget;
 	std::function<void(const FString&)> OnCreateWidget;
@@ -66,6 +68,7 @@ private:
 	const FString FileIconPath = EditorResourcePaths::FileIcon;
 	
 	std::unordered_map<FString, TUniquePtr<FTexture2D>> ThumbnailCache;
+	std::unordered_map<FString, FString> AnimSequenceDisplayNames;
 	UWorld* ThumbnailWorld = nullptr;
 	ASkeletalMeshActor* ThumbnailActor = nullptr;
 	TUniquePtr<class FSkyboxRenderer> ThumbnailSkybox;

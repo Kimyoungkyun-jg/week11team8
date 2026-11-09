@@ -1259,24 +1259,36 @@ bool FFbxAssetImporter::ExtractAnimationSequences(const FString& SourcePath, con
 		FString IgnoredError;
 		if (!FbxPath::GetAssetKey(FbxPath::ToString(Source), RelSourceKey, IgnoredError, false))
 			RelSourceKey = FbxPath::FileName(FbxPath::ToString(Source.filename()));
-		const fs::path CacheDir = ContentPaths::AssetRoot / FbxPath::FromString(RelSourceKey).parent_path();
-		const FString CachePrefix = FbxPath::ToString(Source.filename()) + ".";
+		const fs::path RelativeSource = FbxPath::FromString(RelSourceKey);
+		const fs::path CacheDir = ContentPaths::AssetRoot / RelativeSource.parent_path();
+		const FString BaseName = FbxPath::ToString(RelativeSource.stem());
+		const FString SingleName = BaseName + ".animseq.bin";
+		const FString NumberedPrefix = BaseName + "_";
 		std::map<int, fs::path> CachedStacks;
+		bool bFoundSingle = false, bFoundNumbered = false;
 		FileError.clear();
 		for (fs::directory_iterator It(CacheDir, FileError); !FileError && It != fs::directory_iterator{}; It.increment(FileError))
 		{
 			const FString FileName = FbxPath::ToString(It->path().filename());
-			if (!FileName.starts_with(CachePrefix) || !FileName.ends_with(".animseq.bin")) continue;
-			const FString Stem = FileName.substr(CachePrefix.size(), FileName.size() - CachePrefix.size() - 12);
-			const size_t Separator = Stem.rfind('_');
-			if (Separator == FString::npos || Separator + 1 == Stem.size() ||
-				!std::all_of(Stem.begin() + Separator + 1, Stem.end(), [](unsigned char C) { return std::isdigit(C); })) continue;
+			if (FileName == SingleName)
+			{
+				CachedStacks[0] = It->path();
+				bFoundSingle = true;
+				continue;
+			}
+			if (!FileName.starts_with(NumberedPrefix) || !FileName.ends_with(".animseq.bin")) continue;
+			const FString Number = FileName.substr(NumberedPrefix.size(), FileName.size() - NumberedPrefix.size() - 12);
+			if (Number.empty() || !std::all_of(Number.begin(), Number.end(),
+				[](unsigned char C) { return std::isdigit(C); })) continue;
 			int Index = -1;
-			const auto [ParsedEnd, ParseError] = std::from_chars(Stem.data() + Separator + 1, Stem.data() + Stem.size(), Index);
-			if (ParseError == std::errc{} && ParsedEnd == Stem.data() + Stem.size() && Index < 256)
+			const auto [ParsedEnd, ParseError] = std::from_chars(Number.data(), Number.data() + Number.size(), Index);
+			if (ParseError == std::errc{} && ParsedEnd == Number.data() + Number.size() && Index < 256)
+			{
 				CachedStacks[Index] = It->path();
+				bFoundNumbered = true;
+			}
 		}
-		if (!CachedStacks.empty() && CachedStacks.size() <= 256)
+		if (!(bFoundSingle && bFoundNumbered) && !CachedStacks.empty() && CachedStacks.size() <= 256)
 		{
 			TArray<UAnimSequence*> CachedSequences;
 			int ExpectedIndex = 0;
@@ -1286,9 +1298,12 @@ bool FFbxAssetImporter::ExtractAnimationSequences(const FString& SourcePath, con
 				const auto CacheTime = fs::last_write_time(BinPath, FileError);
 				if (FileError || CacheTime < SourceTime || Index != ExpectedIndex++) break;
 				UAnimSequence* Sequence = NewObject<UAnimSequence>();
-				Sequence->SetPath(RelSourceKey + "." + FbxPath::ToString(BinPath.filename()).substr(CachePrefix.size(),
-					FbxPath::ToString(BinPath.filename()).size() - CachePrefix.size() - 4));
+				FString SequencePath = FbxPath::ToString(RelativeSource.parent_path() / BinPath.filename());
+				SequencePath.resize(SequencePath.size() - 4);
+				Sequence->SetPath(SequencePath);
 				if (!FFbxAssetBake::ReadAnimationSequence(FbxPath::ToString(BinPath), Skeleton, *Sequence)) break;
+				if ((!Sequence->SourceFilePath.empty() && Sequence->SourceFilePath != Identity) ||
+					Sequence->SourceTakeIndex != Index) break;
 				CachedSequences.Add(Sequence);
 			}
 			if (CachedSequences.Num() == static_cast<int32>(CachedStacks.size()))
@@ -1331,17 +1346,25 @@ bool FFbxAssetImporter::ExtractAnimationSequences(const FString& SourcePath, con
 			UAnimSequence* Sequence = NewObject<UAnimSequence>();
 			Sequence->Skeleton = &Skeleton;
 			Sequence->Name = Stack->GetName();
-			FString SafeStackName = Sequence->Name;
-			for (char& Character : SafeStackName)
-				if (!std::isalnum(static_cast<unsigned char>(Character)) && Character != '_' && Character != '-')
-					Character = '_';
-			if (SafeStackName.empty()) SafeStackName = "Animation";
-			const FString SequencePath = RelSourceKey + "." + SafeStackName + "_" + std::to_string(StackIndex) + ".animseq";
+			const FString SequenceFileName = BaseName + (StackCount > 1 ? "_" + std::to_string(StackIndex) : "") + ".animseq";
+			const FString SequencePath = FbxPath::ToString(RelativeSource.parent_path() / FbxPath::FromString(SequenceFileName));
 			Sequence->SetPath(SequencePath);
+			Sequence->SourceFilePath = Identity;
+			Sequence->SourceTakeIndex = StackIndex;
 			const fs::path BinFsPath = ContentPaths::AssetRoot / FbxPath::FromString(SequencePath + ".bin");
 			const FString BinPath = FbxPath::ToString(BinFsPath);
 			FileError.clear();
 			const auto CacheTime = fs::last_write_time(BinFsPath, FileError);
+			if (!FileError)
+			{
+				FString ExistingSkeleton;
+				if (FFbxAssetBake::ReadAnimationSequenceSkeletonPath(BinPath, ExistingSkeleton) &&
+					ExistingSkeleton != Skeleton.GetPath())
+				{ Error = "Animation name is already used by another skeleton: " + BinPath; return false; }
+				if (FFbxAssetBake::ReadAnimationSequence(BinPath, Skeleton, *Sequence) &&
+					!Sequence->SourceFilePath.empty() && Sequence->SourceFilePath != Identity)
+				{ Error = "Animation name is already used by another FBX: " + BinPath; return false; }
+			}
 			if (!FileError && CacheTime >= SourceTime &&
 				FFbxAssetBake::ReadAnimationSequence(BinPath, Skeleton, *Sequence) &&
 				Sequence->Name == Stack->GetName() && Sequence->DataModel->FrameRate.Numerator == 30 &&
@@ -1355,6 +1378,8 @@ bool FFbxAssetImporter::ExtractAnimationSequences(const FString& SourcePath, con
 			if (!FileError && CacheTime < SourceTime)
 				FFbxAssetBake::ReadAnimationSequence(BinPath, Skeleton, *Sequence);
 			Sequence->Name = Stack->GetName();
+			Sequence->SourceFilePath = Identity;
+			Sequence->SourceTakeIndex = StackIndex;
 			if (!Sequence->DataModel) Sequence->DataModel = NewObject<UAnimDataModel>(Sequence);
 			Sequence->DataModel->FrameRate = FAnimFrameRate{};
 			const int32 FrameCount = static_cast<int32>(FrameCountDouble);

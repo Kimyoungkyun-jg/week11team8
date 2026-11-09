@@ -24,6 +24,7 @@
 #include "Engine/Classes/Sound/SoundWave.h"
 
 #include "Render/ImageLoader.h"
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 
@@ -548,7 +549,10 @@ USkeleton* UAssetManager::LoadSkeleton(const FString& AssetPath)
 	if (GetAssetExtension(AssetPath) == ".fbxbin")
 	{
 		FString Error;
-		return Cast<USkeleton>(FFbxAssetLoader::LoadAsset(AssetPath, Error));
+		FString Path = AssetPath;
+		if (!FbxPath::FromString(AssetPath).is_absolute() && AssetPath.rfind("Assets/", 0) != 0 &&
+			!FbxPath::ResolveKey(AssetPath, Path, Error)) return nullptr;
+		return Cast<USkeleton>(FFbxAssetLoader::LoadAsset(Path, Error));
 	}
 	return nullptr;
 }
@@ -559,13 +563,42 @@ UAnimSequence* UAssetManager::LoadAnimSequence(const FString& AssetPath)
 	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
 	const FString BinPath = FbxPath::ToString(ContentPaths::AssetRoot / FbxPath::FromString(Key + ".bin"));
 	FString SkeletonPath;
-	if (!FFbxAssetBake::ReadAnimationSequenceSkeletonPath(BinPath, SkeletonPath)) return nullptr;
+	if (!FFbxAssetBake::ReadAnimationSequenceSkeletonPath(BinPath, SkeletonPath))
+	{
+		HTR_LOG(Warning, "Cannot read animation sequence header: {}", BinPath);
+		return nullptr;
+	}
 	USkeleton* Skeleton = LoadSkeleton(SkeletonPath);
-	if (!Skeleton) return nullptr;
+	if (!Skeleton)
+	{
+		HTR_LOG(Warning, "Cannot load animation skeleton: {}", SkeletonPath);
+		return nullptr;
+	}
 	UAnimSequence* Sequence = NewObject<UAnimSequence>();
-	if (!FFbxAssetBake::ReadAnimationSequence(BinPath, *Skeleton, *Sequence)) return nullptr;
+	if (!FFbxAssetBake::ReadAnimationSequence(BinPath, *Skeleton, *Sequence))
+	{
+		HTR_LOG(Warning, "Cannot read animation sequence: {}", BinPath);
+		return nullptr;
+	}
 	Get().RegisterAsset(Key, Sequence);
 	return Sequence;
+}
+
+UAnimSequence* UAssetManager::LoadOrImportFbxAnimSequence(const FString& AssetPath, USkeleton& Skeleton)
+{
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	if (!Key.ends_with(".animseq")) return nullptr;
+	if (UAnimSequence* Cached = GetAssetByPath<UAnimSequence>(Key))
+		return Cached->Skeleton == &Skeleton ? Cached : nullptr;
+	const fs::path BinPath = ContentPaths::AssetRoot / FbxPath::FromString(Key + ".bin");
+	if (fs::exists(BinPath))
+		if (UAnimSequence* Sequence = LoadAnimSequence(Key))
+			return Sequence->Skeleton == &Skeleton ? Sequence : nullptr;
+	const FString SourceKey = Key.substr(0, Key.size() - 8) + ".FBX";
+	const FString SourcePath = FbxPath::ToString(ContentPaths::AssetRoot / FbxPath::FromString(SourceKey));
+	if (!fs::exists(FbxPath::FromString(SourcePath)) || !LoadFbxAnimSequences(SourcePath, Skeleton)) return nullptr;
+	UAnimSequence* Sequence = GetAssetByPath<UAnimSequence>(Key);
+	return Sequence && Sequence->Skeleton == &Skeleton ? Sequence : nullptr;
 }
 
 UBlendSpace* UAssetManager::LoadBlendSpace(const FString& AssetPath)
@@ -645,6 +678,25 @@ void UAssetManager::GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArra
 	for (const auto& Entry : Get().AssetMap)
 		if (UAnimSequence* Sequence = Cast<UAnimSequence>(Entry.second))
 			if (!Sequence->IsRetired() && Sequence->Skeleton == Skeleton) OutSequences.Add(Sequence);
+}
+
+void UAssetManager::GetAllAnimSequences(TArray<UAnimSequence*>& OutSequences)
+{
+	OutSequences.Reset();
+	for (const auto& Entry : Get().AssetMap)
+		if (UAnimSequence* Sequence = Cast<UAnimSequence>(Entry.second))
+			if (!Sequence->IsRetired()) OutSequences.Add(Sequence);
+	std::sort(OutSequences.begin(), OutSequences.end(),
+		[](const UAnimSequence* A, const UAnimSequence* B) { return A->GetPath() < B->GetPath(); });
+}
+
+void UAssetManager::GetSkeletalMeshesForSkeleton(const USkeleton* Skeleton, TArray<USkeletalMesh*>& OutMeshes)
+{
+	OutMeshes.Reset();
+	if (!Skeleton) return;
+	for (const auto& Entry : Get().AssetMap)
+		if (USkeletalMesh* Mesh = Cast<USkeletalMesh>(Entry.second))
+			if (!Mesh->IsRetired() && Mesh->Skeleton == Skeleton) OutMeshes.Add(Mesh);
 }
 
 USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)

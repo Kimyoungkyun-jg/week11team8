@@ -3,7 +3,7 @@
 #include "Animation/AnimGraphInstance.h"
 #include "TestAnimInstance.generated.h"
 
-class USimpleBlendSpace;
+class USimpleBlendSpace2D;
 
 UCLASS()
 class UTestAnimInstance : public UAnimGraphInstance
@@ -19,7 +19,7 @@ protected:
 	void NativeUpdateAnimation(float DeltaSeconds) override;
 
 private:
-	USimpleBlendSpace* SimpleBlendSpace = nullptr;
+	USimpleBlendSpace2D* SimpleBlendSpace = nullptr;
 	FAnimNode_BlendSpacePlayer* LocomotionPlayer = nullptr;
 	FAnimNode_SequencePlayer* JumpPlayer = nullptr;
 	FAnimNode_SequencePlayer* FallLoopPlayer = nullptr;

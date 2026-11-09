@@ -10,6 +10,7 @@ bool UBlendSpace1D::AddSample(float X, UAnimSequence* Sequence)
 {
 	if (!std::isfinite(X) || !Sequence || !Sequence->Skeleton || !Sequence->GetDataModel() ||
 		!std::isfinite(Sequence->GetDataModel()->PlayLength) ||
+		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f ||
 		Sequence->GetDataModel()->PlayLength <= 0.0f || (Skeleton && Sequence->Skeleton != Skeleton)) return false;
 	for (const FSample& Sample : Samples)
 		if (Sample.X == X) return false;
@@ -48,8 +49,8 @@ float UBlendSpace1D::GetEffectiveLength(float X, float Y) const
 	const FSample* B;
 	float Alpha;
 	if (!GetBlendSamples(X, A, B, Alpha)) return 0.0f;
-	return FMath::Lerp(A->Sequence->GetDataModel()->PlayLength,
-		B->Sequence->GetDataModel()->PlayLength, Alpha);
+	return FMath::Lerp(A->Sequence->GetDataModel()->PlayLength / A->Sequence->RateScale,
+		B->Sequence->GetDataModel()->PlayLength / B->Sequence->RateScale, Alpha);
 }
 
 bool UBlendSpace1D::Evaluate(float X, float Y, float NormalizedTime,

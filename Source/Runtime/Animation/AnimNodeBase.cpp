@@ -40,19 +40,21 @@ bool FAnimNode_SequencePlayer::IsFinished() const
 
 float FAnimNode_SequencePlayer::GetRemainingTime() const
 {
-	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(PlayRate) || PlayRate <= 0.0f)
+	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(PlayRate) || PlayRate <= 0.0f ||
+		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f)
 		return std::numeric_limits<float>::infinity();
-	return std::max(0.0f, Sequence->GetDataModel()->PlayLength - CurrentTime) / PlayRate;
+	return std::max(0.0f, Sequence->GetDataModel()->PlayLength - CurrentTime) / (PlayRate * Sequence->RateScale);
 }
 
 void FAnimNode_SequencePlayer::Update(float DeltaSeconds)
 {
 	if (!bPlaying || !Sequence || !Sequence->GetDataModel() ||
 		!std::isfinite(PlayRate) || PlayRate < 0.0f ||
+		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f ||
 		!std::isfinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
 	const float Length = Sequence->GetDataModel()->PlayLength;
 	if (Length <= 0.0f || !std::isfinite(Length)) return;
-	const float NextTime = CurrentTime + DeltaSeconds * PlayRate;
+	const float NextTime = CurrentTime + DeltaSeconds * PlayRate * Sequence->RateScale;
 	if (!std::isfinite(NextTime)) return;
 	const float PreviousTime = CurrentTime;
 	int32 LoopCount = 0;
