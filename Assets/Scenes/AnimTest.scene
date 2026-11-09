@@ -196,8 +196,8 @@
                                         "Yaw": 0.0
                                     },
                                     "Scale": {
-                                        "X": 0.9,
-                                        "Y": 0.9,
+                                        "X": 0.8999999761581421,
+                                        "Y": 0.8999999761581421,
                                         "Z": 1.5
                                     }
                                 },
@@ -433,6 +433,102 @@
                         "bActorEnableCollision": true
                     },
                     "RootComponentName": "UStaticMeshComponent"
+                },
+                {
+                    "Class": "ASkeletalMeshActor",
+                    "Components": [
+                        {
+                            "Class": "USkeletalMeshComponent",
+                            "Name": "SkeletalMeshComponent",
+                            "OverrideMaterials": [],
+                            "Parent": "",
+                            "Properties": {
+                                "AnimPlayRate": 1.0,
+                                "AnimToPlay": "Models/AnimationTest/XBot/AS_Idle_mixamo.com.fbxbin",
+                                "SkeletalMesh": "Models/AnimationTest/XBot/SK_X Bot_mixamorig_Hips.fbxbin",
+                                "Transform": {
+                                    "Location": {
+                                        "X": 1.1237258911132813,
+                                        "Y": -6.657488822937012,
+                                        "Z": 0.48914337158203125
+                                    },
+                                    "Rotation": {
+                                        "Pitch": 0.0,
+                                        "Roll": 0.0,
+                                        "Yaw": 0.0
+                                    },
+                                    "Scale": {
+                                        "X": 1.0,
+                                        "Y": 1.0,
+                                        "Z": 1.0
+                                    }
+                                },
+                                "bAutoActivate": true,
+                                "bBlockComponent": false,
+                                "bCastShadow": true,
+                                "bGenerateOverlapEvents": true,
+                                "bHiddenInGame": false,
+                                "bLoopAnimation": true,
+                                "bReceiveDecal": true,
+                                "bReceiveShadow": true,
+                                "bVisible": true
+                            }
+                        }
+                    ],
+                    "Name": "ASkeletalMeshActor_5",
+                    "Properties": {
+                        "SkeletalMeshComponent": null,
+                        "bActorEnableCollision": true
+                    },
+                    "RootComponentName": "SkeletalMeshComponent"
+                },
+                {
+                    "Class": "ASkeletalMeshActor",
+                    "Components": [
+                        {
+                            "Class": "USkeletalMeshComponent",
+                            "Name": "SkeletalMeshComponent",
+                            "OverrideMaterials": [],
+                            "Parent": "",
+                            "Properties": {
+                                "AnimPlayRate": 1.0,
+                                "AnimToPlay": "Models/AnimationTest/XBot/AS_Hip Hop Dancing_mixamo.com.fbxbin",
+                                "SkeletalMesh": "Models/AnimationTest/XBot/SK_X Bot_mixamorig_Hips.fbxbin",
+                                "Transform": {
+                                    "Location": {
+                                        "X": 1.1237258911132813,
+                                        "Y": -8.634360313415527,
+                                        "Z": 0.48914337158203125
+                                    },
+                                    "Rotation": {
+                                        "Pitch": 0.0,
+                                        "Roll": 0.0,
+                                        "Yaw": 0.0
+                                    },
+                                    "Scale": {
+                                        "X": 1.0,
+                                        "Y": 1.0,
+                                        "Z": 1.0
+                                    }
+                                },
+                                "bAutoActivate": true,
+                                "bBlockComponent": false,
+                                "bCastShadow": true,
+                                "bGenerateOverlapEvents": true,
+                                "bHiddenInGame": false,
+                                "bLoopAnimation": true,
+                                "bReceiveDecal": true,
+                                "bReceiveShadow": true,
+                                "bVisible": true
+                            }
+                        }
+                    ],
+                    "Name": "ASkeletalMeshActor_6",
+                    "Properties": {
+                        "SkeletalMeshComponent": null,
+                        "bActorEnableCollision": true
+                    },
+                    "RootComponentName": "SkeletalMeshComponent"
                 }
             ],
             "Properties": {}

@@ -2,6 +2,8 @@
 #include "FbxAssetImporter.h"
 #include "FbxAssetBake.h"
 #include "FbxPath.h"
+#include "Animation/Skeleton.h"
+#include "Asset/AssetManager.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -466,6 +468,8 @@ struct FRig
 	FReferenceSkeleton Reference;
 	FbxAMatrix ParentBind;
 	FbxAMatrix FrameInverse; // 본 글로벌을 리그 기준 공간으로 옮기는 행렬. Bake Meshes면 단위 행렬이다.
+	// Target Skeleton 모드에서 본마다 1이면 대상 Skeleton에 같은 이름과 같은 부모로 있는 본이다. 비어 있으면 모든 본을 쓴다.
+	std::vector<uint8> TargetMask;
 	FString Key;
 };
 
@@ -523,6 +527,8 @@ public:
 	std::unordered_map<FString, FString> FileOwners;
 	std::unordered_set<FString> Warned;
 	std::vector<FbxPose*> Poses;
+	// Target Skeleton 모드면 대상 Skeleton이다. 이때는 메시와 새 Skeleton 없이 애니메이션만 만든다.
+	const USkeleton* TargetSkeleton = nullptr;
 
 	FImport(FbxScene* S, const FFbxImportOptions& O, const FString& K, const fs::path& P, const fs::path& D,
 		TArray<FFbxAssetData>& Out, TArray<FString>& W, FString& E)
@@ -564,6 +570,7 @@ public:
 	FbxAMatrix Bind(FbxNode* Node);
 	FbxAMatrix MeshBind(const FMeshItem& Item);
 	bool BuildRig(FRig& Rig);
+	bool MatchTargetSkeleton(FRig& Rig);
 	bool CookAnimations(const FRig& Rig);
 	bool CookAnimation(const FRig& Rig, FbxAnimStack* Stack);
 	FString Material(FbxSurfaceMaterial* SourceMaterial);
@@ -1001,6 +1008,12 @@ bool FImport::BuildRig(FRig& Rig)
 	{
 		return false;
 	}
+	if (TargetSkeleton)
+	{
+		// 새 Skeleton은 만들지 않는다. 대상과 맞는 리그만 키를 받고, 맞지 않으면 애니메이션 대상에서 빠진다.
+		Rig.Key = MatchTargetSkeleton(Rig) ? Options.TargetSkeletonKey : FString();
+		return true;
+	}
 	Rig.Key = MakeKey("SKEL", Rig.Root->GetName(), "Skeleton:" + NodePath(Rig.Root));
 	if (Rig.Key.empty())
 	{
@@ -1009,6 +1022,66 @@ bool FImport::BuildRig(FRig& Rig)
 	auto Asset = Data(EFbxAssetType::Skeleton, Rig.Key, "Skeleton:" + NodePath(Rig.Root));
 	Asset.RefSkeleton = Rig.Reference;
 	Output.Add(std::move(Asset));
+	return true;
+}
+
+// 리그의 본을 대상 Skeleton의 본에 이름으로 연결한다. 로컬 변환은 부모 기준이라 부모 이름까지 같아야 쓸 수 있다.
+// 대상에 없는 본의 트랙은 버리고, FBX에 없는 대상 본은 트랙 없이 남겨 바인드 포즈를 쓰게 한다.
+bool FImport::MatchTargetSkeleton(FRig& Rig)
+{
+	const FReferenceSkeleton& Target = TargetSkeleton->RefSkeleton;
+	const int32 BoneCount = static_cast<int32>(Rig.Bones.size());
+	Rig.TargetMask.assign(BoneCount, 0);
+	int32 Matched = 0;
+	float WorstError = 0.0f;
+	FString WorstBone;
+	for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+	{
+		const FMeshBoneInfo& Info = Rig.Reference.RefBoneInfo[Bone];
+		const int32 TargetBone = Target.FindBoneIndex(Info.Name);
+		if (TargetBone < 0)
+		{
+			continue;
+		}
+		const int32 TargetParent = Target.RefBoneInfo[TargetBone].ParentIndex;
+		const bool bSameParent = Info.ParentIndex < 0 ? TargetParent < 0
+			: TargetParent >= 0 && Rig.Reference.RefBoneInfo[Info.ParentIndex].Name == Target.RefBoneInfo[TargetParent].Name;
+		if (!bSameParent)
+		{
+			Warn("Bone hierarchy differs from the target skeleton at '" + Info.Name + "'; rig '" + FString(Rig.Root->GetName()) + "' is skipped");
+			Rig.TargetMask.clear();
+			return false;
+		}
+		Rig.TargetMask[Bone] = 1;
+		++Matched;
+
+		// 본 길이가 다르면 스케일이 다른 캐릭터다. 리타게팅은 하지 않으므로 알려 준다.
+		const FVector& A = Rig.Reference.RefBonePose[Bone].Translation;
+		const FVector& B = Target.RefBonePose[TargetBone].Translation;
+		const float LengthA = std::sqrt(A.X * A.X + A.Y * A.Y + A.Z * A.Z);
+		const float LengthB = std::sqrt(B.X * B.X + B.Y * B.Y + B.Z * B.Z);
+		const float Longer = std::max(LengthA, LengthB);
+		if (Longer > 1.e-3f && std::abs(LengthA - LengthB) / Longer > WorstError)
+		{
+			WorstError = std::abs(LengthA - LengthB) / Longer;
+			WorstBone = Info.Name;
+		}
+	}
+	if (!Matched)
+	{
+		Warn("No bone matches the target skeleton; rig '" + FString(Rig.Root->GetName()) + "' is skipped");
+		Rig.TargetMask.clear();
+		return false;
+	}
+	if (WorstError > 0.05f)
+	{
+		Warn("Bone length differs from the target skeleton by " + std::to_string(static_cast<int>(WorstError * 100.0f)) + "% at '" + WorstBone + "'; check Uniform Scale");
+	}
+	if (Matched < Target.GetNum())
+	{
+		Warn(std::to_string(Target.GetNum() - Matched) + " target bones have no animation track; they keep the bind pose");
+	}
+	HTR_LOG(Info, "[Anim] target skeleton {}: {}/{} FBX bones matched, {} target bones", Options.TargetSkeletonKey, Matched, BoneCount, Target.GetNum());
 	return true;
 }
 
@@ -1142,6 +1215,20 @@ bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
 		}
 	}
 
+	// Target Skeleton 모드: 대상에 없는 본의 트랙은 버린다. 위 계산은 부모 글로벌이 필요해 모든 본으로 했다.
+	if (!Rig.TargetMask.empty())
+	{
+		TArray<FBoneAnimationTrack> Kept;
+		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+		{
+			if (Rig.TargetMask[Bone])
+			{
+				Kept.Add(Animation.Tracks[Bone]);
+			}
+		}
+		Animation.Tracks = std::move(Kept);
+	}
+
 	// 변하지 않는 성분은 키 1개로 줄인다. 위치는 엔진 단위, 회전은 쿼터니언 성분, 크기는 배율 기준 허용 오차다.
 	int32 AnimatedBones = 0;
 	for (auto& Track : Animation.Tracks)
@@ -1166,7 +1253,7 @@ bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
 		return false;
 	}
 	HTR_LOG(Info, "[Anim] {}: source {:.3f}s ~ {:.3f}s, {:.2f} fps, {} keys, {:.3f}s, {}/{} bones animated",
-		Key, Start, Start + Duration, Rate, Animation.NumberOfKeys, (Animation.NumberOfKeys - 1) / Rate, AnimatedBones, BoneCount);
+		Key, Start, Start + Duration, Rate, Animation.NumberOfKeys, (Animation.NumberOfKeys - 1) / Rate, AnimatedBones, Animation.Tracks.Num());
 	auto Asset = Data(EFbxAssetType::AnimSequence, Key, Identity);
 	Asset.SkeletonKey = Rig.Key;
 	Asset.Animation = std::move(Animation);
@@ -1516,9 +1603,13 @@ FString FImport::Material(FbxSurfaceMaterial* M)
 		const FbxDouble3 Color = Lambert->Diffuse.Get();
 		const double Factor = Lambert->DiffuseFactor.Get();
 		DiffuseFactor = static_cast<float>(Factor);
+		// 투명도는 TransparentColor × TransparencyFactor다(FBX SDK 정의). Maya/Mixamo는 색을 검정, 계수를 1로 써서 불투명을 나타내므로
+		// 계수만 보면 완전 투명으로 읽힌다. Blender는 색 (1,1,1)에 계수 1-알파를 쓰므로 이 식으로도 알파가 같다.
+		const FbxDouble3 TransparentColor = Lambert->TransparentColor.Get();
+		const double Transparency = std::clamp((TransparentColor[0] + TransparentColor[1] + TransparentColor[2]) / 3. * Lambert->TransparencyFactor.Get(), 0., 1.);
 		// Diffuse를 선형 색상으로 해석하는 임포트 기본값이다. 강도 계수도 선형 공간에서 곱한다.
 		Asset.Material.DiffuseOrFactor = FVector4(static_cast<float>(Color[0] * Factor), static_cast<float>(Color[1] * Factor),
-			static_cast<float>(Color[2] * Factor), static_cast<float>(std::clamp(1. - Lambert->TransparencyFactor.Get(), 0., 1.)));
+			static_cast<float>(Color[2] * Factor), static_cast<float>(1. - Transparency));
 		Asset.Material.ShadingModel = ELightingModel::Lambert;
 		Asset.Material.SpecularFactor = 0.f;
 		const FbxDouble3 Emissive = Lambert->Emissive.Get();
@@ -1610,6 +1701,21 @@ FString FImport::Material(FbxSurfaceMaterial* M)
 		{
 			SkippedOpacityTextures.insert(M);
 		}
+	}
+	{
+		// 원본 값과 변환 결과를 함께 남겨, 재질이 어긋났을 때 어느 단계에서 바뀌었는지 볼 수 있게 한다.
+		const auto& Out = Asset.Material;
+		const FbxProperty RawTransparent = M->FindProperty(FbxSurfaceMaterial::sTransparentColor);
+		const FbxProperty RawFactor = M->FindProperty(FbxSurfaceMaterial::sTransparencyFactor);
+		const FbxProperty RawOpacity = M->FindProperty("Opacity");
+		const FbxDouble3 RawColor = RawTransparent.IsValid() ? RawTransparent.Get<FbxDouble3>() : FbxDouble3();
+		HTR_LOG(Info, "[Material] {}: raw TransparentColor=({:.3f},{:.3f},{:.3f}) TransparencyFactor={:.3f} Opacity={:.3f}",
+			M->GetName(), RawColor[0], RawColor[1], RawColor[2], RawFactor.IsValid() ? RawFactor.Get<double>() : -1.0, RawOpacity.IsValid() ? RawOpacity.Get<double>() : -1.0);
+		HTR_LOG(Info, "[Material] {}: model={} diffuse=({:.3f},{:.3f},{:.3f}) alpha={:.3f} specular=({:.3f},{:.3f},{:.3f})x{:.3f} shininess={:.3f} emissive=({:.3f},{:.3f},{:.3f})x{:.3f} blend={} diffuseTex='{}' normalTex='{}'",
+			M->GetName(), Out.ShadingModel == ELightingModel::Phong ? "Phong" : "Lambert", Out.DiffuseOrFactor.X, Out.DiffuseOrFactor.Y, Out.DiffuseOrFactor.Z, Out.DiffuseOrFactor.W,
+			Out.SpecularColor.X, Out.SpecularColor.Y, Out.SpecularColor.Z, Out.SpecularFactor, Out.Shininess,
+			Out.EmissiveColor.X, Out.EmissiveColor.Y, Out.EmissiveColor.Z, Out.EmissiveFactor,
+			Out.BlendState == EBlendState::Opaque ? "Opaque" : "AlphaBlend", Out.DiffuseTexture, Out.NormalTexture);
 	}
 	Output.Add(std::move(Asset));
 	Materials[M] = Key;
@@ -2082,19 +2188,29 @@ bool FImport::Run()
 	//메시 모으기
 	Gather(Scene->GetRootNode(), true);
 
-	if (Meshes.empty())
+	if (!Options.TargetSkeletonKey.empty())
+	{
+		TargetSkeleton = UAssetManager::GetAssetByPath<USkeleton>(Options.TargetSkeletonKey);
+		if (!TargetSkeleton)
+		{
+			Error = "Target skeleton is not loaded: " + Options.TargetSkeletonKey;
+			return false;
+		}
+	}
+
+	if (Meshes.empty() && !TargetSkeleton)
 	{
 		Error = "No visible supported mesh geometry in FBX";
 		return false;
 	}
-	if (!Options.bImportStaticMeshes && !Options.bImportSkeletalMeshes)
+	if (!Options.bImportStaticMeshes && !Options.bImportSkeletalMeshes && !TargetSkeleton)
 	{
 		Error = "Select Static or Skeletal mesh import";
 		return false;
 	}
 
 	// 리그를 찾지 않으면 스킨 메시도 Static 경로로 들어간다.
-	if (Options.bImportSkeletalMeshes)
+	if (Options.bImportSkeletalMeshes || TargetSkeleton)
 	{
 		//본 찾기
 		FindRigs();
@@ -2106,12 +2222,12 @@ bool FImport::Run()
 	}
 	for (const auto& Item : Meshes)
 	{
-		if (!Item.Rig && MovesWithAnimation(Scene, Item.Node))
+		if (!TargetSkeleton && !Item.Rig && MovesWithAnimation(Scene, Item.Node))
 		{
 			Warn("Transform animation is ignored; enable Import Skeletal Meshes: " + NodePath(Item.Node));
 		}
 	}
-	if (!Options.bImportStaticMeshes)
+	if (!Options.bImportStaticMeshes && !TargetSkeleton)
 	{
 		std::erase_if(Meshes, [](const FMeshItem& Item)
 			{ return !Item.Rig; });
@@ -2134,10 +2250,15 @@ bool FImport::Run()
 	//메시가 쓰는 리그만 BuildRig로 만든다.
 	for (auto& [Path, Rig] : Rigs)
 	{
-		if (Used.contains(Rig.Root) && !BuildRig(Rig))
+		if ((TargetSkeleton || Used.contains(Rig.Root)) && !BuildRig(Rig))
 		{
 			return false;
 		}
+	}
+	// Target Skeleton 모드는 애니메이션만 만든다. 리그는 위에서 대상과 맞춰 봤으므로 메시는 더 쓰지 않는다.
+	if (TargetSkeleton)
+	{
+		Meshes.clear();
 	}
 	std::map<FString, FOutputGroup> Groups;
 	for (auto& Item : Meshes)
@@ -2159,14 +2280,30 @@ bool FImport::Run()
 		}
 	}
 	// 애니메이션은 출력된 Skeleton(메시가 쓰는 리그)마다 만든다.
-	if (Options.bImportSkeletalMeshes && Options.bImportAnimations)
+	if ((Options.bImportSkeletalMeshes && Options.bImportAnimations) || TargetSkeleton)
 	{
+		bool bMatchedRig = false;
 		for (const auto& [Path, Rig] : Rigs)
 		{
-			if (!Rig.Key.empty() && !CookAnimations(Rig))
+			if (Rig.Key.empty())
+			{
+				continue;
+			}
+			bMatchedRig = true;
+			if (!CookAnimations(Rig))
 			{
 				return false;
 			}
+		}
+		if (TargetSkeleton && !bMatchedRig)
+		{
+			Error = "No skeleton in the FBX matches the target skeleton: " + Options.TargetSkeletonKey;
+			return false;
+		}
+		if (TargetSkeleton && Output.IsEmpty())
+		{
+			Error = "The FBX has no animation that moves a bone of the target skeleton";
+			return false;
 		}
 	}
 	std::set<FString> ReferencedTextures;
@@ -2287,8 +2424,29 @@ bool FFbxAssetImporter::Cook(const FString& SourcePath, const FFbxImportOptions&
 		{
 			return false;
 		}
+		// 애니메이션은 대상 Skeleton을 만들 때와 같은 공간으로 읽어야 한다. 루트 로컬이 Bake 설정에, 본 이동이 스케일에, 축이 Front X에 따라 달라진다.
+		FFbxImportOptions Effective = Options;
+		if (!Options.TargetSkeletonKey.empty())
+		{
+			fs::path SkeletonFile;
+			FFbxAssetData SkeletonHeader;
+			if (!FbxPath::ResolveKey(Options.TargetSkeletonKey, SkeletonFile, Error) ||
+				!FFbxAssetBake::ReadHeader(FbxPath::ToString(SkeletonFile), SkeletonHeader, Error))
+			{
+				return false;
+			}
+			const auto& Made = SkeletonHeader.Options;
+			if (Made.bBakeSkeletalMeshes != Options.bBakeSkeletalMeshes || Made.bForceFrontX != Options.bForceFrontX || Made.UniformScale != Options.UniformScale)
+			{
+				Warnings.Add("Transform options follow the target skeleton's import (Bake Meshes, Force Front X Axis, Uniform Scale)");
+			}
+			Effective.bBakeSkeletalMeshes = Made.bBakeSkeletalMeshes;
+			Effective.bForceFrontX = Made.bForceFrontX;
+			Effective.UniformScale = Made.UniformScale;
+		}
 		FLoadedScene Loaded;
-		if (!LoadScene(Source, Options, &Extraction, Loaded, Error))
+		if (!LoadScene(Source, Effective, &Extraction, Loaded, Error))
+
 		{
 			return false;
 		}
@@ -2298,7 +2456,7 @@ bool FFbxAssetImporter::Cook(const FString& SourcePath, const FFbxImportOptions&
 			Error = "FBX SDK triangulation failed";
 			return false;
 		}
-		FImport Import(Loaded.Scene, Options, OwnerSource.empty() ? ActualKey : OwnerSource, Source, Destination, Out, Warnings, Error);
+		FImport Import(Loaded.Scene, Effective, OwnerSource.empty() ? ActualKey : OwnerSource, Source, Destination, Out, Warnings, Error);
 		Import.ActualSourceKey = ActualKey;
 		Import.SourceHash = FbxPath::FileHash(Source);
 		Import.UnitScale = Loaded.UnitScale;

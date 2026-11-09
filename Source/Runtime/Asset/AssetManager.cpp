@@ -192,10 +192,10 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 		if (Extension == ".fbx") FbxFiles.Add(Path);
 		else if (Extension == ".fbxbin")
 		{
-			// 실제로 로드된 메시 바이너리가 있어야 임포트된 FBX로 친다. 구버전이나 손상 파일은 다시 묻는다.
+			// 실제로 로드된 메시나 애니메이션 바이너리가 있어야 임포트된 FBX로 친다. 구버전이나 손상 파일은 다시 묻는다.
 			FFbxAssetData Header; FString Error;
 			if (FFbxAssetBake::ReadHeader(Path, Header, Error) &&
-				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh) &&
+				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh || Header.Type == EFbxAssetType::AnimSequence) &&
 				GetAssetByPath<URenderAsset>(Path))
 				MarkFbxImported(Header.SourcePath);
 		}

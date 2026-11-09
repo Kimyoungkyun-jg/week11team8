@@ -385,7 +385,7 @@ void FContentDrawerPanel::RefreshFbxFolderCache()
 		{
 			FFbxAssetData Header; FString HeaderError;
 			if (FFbxAssetBake::ReadHeader(FbxPath::ToString(Path), Header, HeaderError) &&
-				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh))
+				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh || Header.Type == EFbxAssetType::AnimSequence))
 				FolderSources.insert(Lower(Header.SourcePath));
 		}
 	}
@@ -404,9 +404,11 @@ void FContentDrawerPanel::DrawFbxBinaryMenu(const FString& Path)
 	{
 		FFbxAssetData Header; FString Error;
 		bFbxMenuHasSource = false;
+		bFbxMenuIsAnimSequence = false;
 		if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) FbxMenuStatus = "Binary is outdated or unreadable";
 		else
 		{
+			bFbxMenuIsAnimSequence = Header.Type == EFbxAssetType::AnimSequence;
 			const fs::path Source = FbxPath::SourceFile(Header.ActualSourcePath);
 			std::error_code FileError;
 			bFbxMenuHasSource = fs::is_regular_file(Source, FileError);
@@ -417,6 +419,13 @@ void FContentDrawerPanel::DrawFbxBinaryMenu(const FString& Path)
 	}
 	ImGui::TextDisabled("%s", FbxMenuStatus.c_str());
 	ImGui::Separator();
+	// 애니메이션은 대상 Skeleton을 골라 FBX를 다시 임포트한다. 이 메뉴는 메시 기준이라 쓰지 않는다.
+	if (bFbxMenuIsAnimSequence)
+	{
+		ImGui::TextDisabled("Import the FBX again with a Target Skeleton.");
+		ImGui::Separator();
+		return;
+	}
 	if (OnImportFbx && ImGui::MenuItem("Reimport...", nullptr, false, bFbxMenuHasSource)) OnImportFbx(Path, true);
 	if (OnReimportFromFile && ImGui::MenuItem("Reimport From File...")) OnReimportFromFile(Path);
 	ImGui::Separator();

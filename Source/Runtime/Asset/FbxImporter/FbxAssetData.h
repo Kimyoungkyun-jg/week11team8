@@ -40,8 +40,11 @@ struct FFbxImportOptions
 	// Static만 켜면 스킨을 무시하고, Skeletal만 켜면 스킨 없는 메시도 노드를 본으로 삼아 스켈레탈로 만든다.
 	bool bImportStaticMeshes = true;
 	bool bImportSkeletalMeshes = true;
-	// 스켈레탈 메시의 리그마다 AnimStack 하나를 AnimSequence 하나로 만든다. 메시가 없는 FBX는 아직 지원하지 않는다.
+	// 스켈레탈 메시의 리그마다 AnimStack 하나를 AnimSequence 하나로 만든다. 메시가 없는 FBX는 TargetSkeletonKey를 지정해야 받는다.
 	bool bImportAnimations = true;
+	// 비어 있지 않으면 이 Skeleton(애셋 키)에 맞춰 애니메이션만 만든다. 메시와 새 Skeleton은 만들지 않고, 메시 없는 FBX도 받는다.
+	// 임포트 요청에만 쓰이며 .fbxbin에는 저장하지 않는다. AnimSequence는 SkeletonKey로 대상을 기억한다.
+	FString TargetSkeletonKey;
 	bool bForceFrontX = true;
 	float UniformScale = 1.f; // 정점과 본 이동에 곱한다.
 };

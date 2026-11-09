@@ -4,6 +4,9 @@
 #include "Asset/FbxImporter/FbxAssetImporter.h"
 #include "Asset/FbxImporter/FbxAssetLoader.h"
 #include "Asset/FbxImporter/FbxPath.h"
+#include "Animation/Skeleton.h"
+#include "UObject/UObjectIterator.h"
+#include "Editor/EditorUI/EditorSort.h"
 #include <commdlg.h>
 #include <cwchar>
 #include <shobjidl.h>
@@ -389,12 +392,79 @@ void FEditorUI::DrawFbxImportBody()
 	ImGui::EndDisabled();
 
 	ImGui::SeparatorText("Transform");
+	// 대상 Skeleton을 고르면 Skeleton을 만들 때의 변환 설정을 따른다.
+	ImGui::BeginDisabled(!FbxOptions.TargetSkeletonKey.empty());
 	ImGui::SetNextItemWidth(EditorUIScale::Px(160.0f));
 	ImGui::DragFloat("Uniform Scale", &FbxOptions.UniformScale, 0.01f, 0.0001f, 100000.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SetItemTooltip("Multiplies vertices and bone translations.");
 	ImGui::Checkbox("Force Front X Axis", &FbxOptions.bForceFrontX);
 	ImGui::SetItemTooltip("On: the model faces +X (actor forward).\nOff: the model keeps the Unreal default front.");
+	ImGui::EndDisabled();
 
+	// 대상 Skeleton을 고르면 메시와 새 Skeleton은 만들지 않고, 그 Skeleton에 맞춘 AnimSequence만 만든다.
+	const bool bTargetSkeleton = !FbxOptions.TargetSkeletonKey.empty();
+	ImGui::SeparatorText("Target Skeleton");
+	ImGui::PushID("TargetSkeleton");
+	// 다시 가져오기는 원래 메시를 되살리는 작업이라 대상 Skeleton을 쓰지 않는다.
+	ImGui::BeginDisabled(Request.bReimport);
+	{
+		const auto DisplayName = [](const FString& Key)
+		{
+			return FbxPath::ToString(FbxPath::FromString(Key).stem());
+		};
+		const FString CurrentLabel = bTargetSkeleton ? DisplayName(FbxOptions.TargetSkeletonKey) : FString("None");
+		const float ClearWidth = EditorUIScale::ButtonWidth("Clear") + ImGui::GetStyle().ItemSpacing.x;
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ClearWidth);
+		EditorUIScale::LimitNextComboPopupWidth();
+		const bool bOpen = ImGui::BeginCombo("##TargetSkeletonCombo", CurrentLabel.c_str());
+		if (ImGui::IsItemHovered() && bTargetSkeleton)
+		{
+			ImGui::SetTooltip("%s", FbxOptions.TargetSkeletonKey.c_str());
+		}
+		if (bOpen)
+		{
+			// 로드된 Skeleton 애셋(Content Drawer에 보이는 .fbxbin)을 이름순으로 보여 준다.
+			const TArray<USkeleton*> Skeletons = EditorSort::CollectSorted<USkeleton>(
+				TObjectIterator<USkeleton>(),
+				[&](const USkeleton* S) { return DisplayName(S->GetPath()); },
+				[](const USkeleton* S) { return !S->IsRetired() && !S->GetPath().empty(); });
+			if (Skeletons.IsEmpty())
+			{
+				ImGui::TextDisabled("No Skeleton asset");
+			}
+			for (USkeleton* Item : Skeletons)
+			{
+				ImGui::PushID(Item);
+				if (ImGui::Selectable(DisplayName(Item->GetPath()).c_str(), Item->GetPath() == FbxOptions.TargetSkeletonKey))
+				{
+					FbxOptions.TargetSkeletonKey = Item->GetPath();
+					FbxResult = {};
+				}
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip("%s", Item->GetPath().c_str());
+				}
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SameLine();
+		ImGui::BeginDisabled(!bTargetSkeleton);
+		if (ImGui::Button("Clear"))
+		{
+			FbxOptions.TargetSkeletonKey.clear();
+			FbxResult = {};
+		}
+		ImGui::EndDisabled();
+	}
+	ImGui::EndDisabled();
+	if (bTargetSkeleton)
+	{
+		ImGui::TextDisabled("Only animations are imported for this skeleton. Meshes and a new skeleton are not created.");
+	}
+	ImGui::PopID();
+
+	ImGui::BeginDisabled(bTargetSkeleton);
 	ImGui::SeparatorText("Static Meshes");
 	ImGui::PushID("StaticFbx");
 	// 메시 종류를 바꾸면 파일 이름이 달라져 기존 바이너리를 덮어쓸 수 없다.
@@ -429,8 +499,10 @@ void FEditorUI::DrawFbxImportBody()
 	ImGui::BeginDisabled(!FbxOptions.bImportSkeletalMeshes);
 	ImGui::Checkbox("Import Animations", &FbxOptions.bImportAnimations);
 	ImGui::EndDisabled();
-	ImGui::SetItemTooltip("Each animation take becomes an AnimSequence for the imported skeleton, sampled every frame.\nTakes in which no bone moves are skipped. Requires a skeletal mesh in the same FBX.");
+	ImGui::SetItemTooltip("Each animation take becomes an AnimSequence for the imported skeleton, sampled every frame.\nTakes in which no bone moves are skipped. Requires a skeletal mesh in the same FBX, or a Target Skeleton.");
 	ImGui::PopID();
+
+	ImGui::EndDisabled();
 
 	if (!FFbxAssetImporter::IsAvailable())
 	{
@@ -447,7 +519,7 @@ void FEditorUI::DrawFbxImportBody()
 	const bool bBlocked = IsFbxImportBlocked && IsFbxImportBlocked();
 	const bool bHasOthers = FbxQueue.Num() > 1;
 	ImGui::BeginDisabled(bBlocked || !FFbxAssetImporter::IsAvailable() || FbxSourcePath[0] == '\0' || FbxOutputDirectory[0] == '\0' ||
-		(!FbxOptions.bImportStaticMeshes && !FbxOptions.bImportSkeletalMeshes));
+		(!FbxOptions.bImportStaticMeshes && !FbxOptions.bImportSkeletalMeshes && !bTargetSkeleton));
 	if (ImGui::Button(Request.bReimport ? "Reimport" : "Import", ButtonSize))
 	{
 		bFbxImporting = true;

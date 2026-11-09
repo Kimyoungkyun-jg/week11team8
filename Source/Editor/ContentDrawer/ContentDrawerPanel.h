@@ -50,6 +50,7 @@ private:
 	std::set<fs::path> UnimportedFbxFiles;  // 어느 폴더에도 바이너리가 없다
 	FString FbxMenuStatus;
 	bool bFbxMenuHasSource = false;
+	bool bFbxMenuIsAnimSequence = false;
 	std::function<void(const FString&)> OnOpenAsset;
 	std::function<void(const FString&, bool)> OnImportFbx;
 	std::function<void(const FString&)> OnOpenWidget;
