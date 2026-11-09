@@ -10,6 +10,8 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/ParticleSubUVComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Animation/AnimInstance.h"
 #include "Core/EngineTimer.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -233,6 +235,15 @@ namespace
 		throw sol::error("Actor does not have a ParticleSubUVComponent.");
 	}
 
+	// 액터의 첫 SkeletalMeshComponent가 가진 애니메이션 인스턴스. 컴포넌트가 없거나 인스턴스가 아직 없으면(첫 틱 전, AnimToPlay 없음) nullptr
+	UAnimInstance* FindAnimInstance(AActor& Actor)
+	{
+		for (UActorComponent* Comp : Actor.GetComponents())
+			if (auto* Skeletal = Cast<USkeletalMeshComponent>(Comp))
+				if (UAnimInstance* Instance = Skeletal->GetAnimInstance()) return Instance;
+		return nullptr;
+	}
+
 	USpringArmComponent& CameraArm(const FLuaActorRef& Ref)
 	{
 		for (UActorComponent* Comp : Deref(Ref).GetComponents())
@@ -244,6 +255,32 @@ namespace
 	{
 		Lua.new_usertype<FLuaActorRef>("Actor",
 			sol::no_constructor, // 액터는 Lua에서 생성할 수 없음
+
+			// 애니메이션 변수. 인스턴스가 아직 없으면 SetAnimFloat는 false, GetAnimFloat는 기본값을 돌려준다.
+			"SetAnimFloat", [](const FLuaActorRef& Ref, const FString& Name, float Value) -> bool
+			{
+				UAnimInstance* Instance = FindAnimInstance(Deref(Ref));
+				if (!Instance || !std::isfinite(Value)) return false;
+				Instance->SetFloat(Name, Value);
+				return true;
+			},
+			"GetAnimFloat", [](const FLuaActorRef& Ref, const FString& Name, sol::optional<float> Default) -> float
+			{
+				UAnimInstance* Instance = FindAnimInstance(Deref(Ref));
+				return Instance ? Instance->GetFloat(Name, Default.value_or(0.0f)) : Default.value_or(0.0f);
+			},
+			"SetAnimBool", [](const FLuaActorRef& Ref, const FString& Name, bool bValue) -> bool
+			{
+				UAnimInstance* Instance = FindAnimInstance(Deref(Ref));
+				if (!Instance) return false;
+				Instance->SetBool(Name, bValue);
+				return true;
+			},
+			"GetAnimBool", [](const FLuaActorRef& Ref, const FString& Name, sol::optional<bool> Default) -> bool
+			{
+				UAnimInstance* Instance = FindAnimInstance(Deref(Ref));
+				return Instance ? Instance->GetBool(Name, Default.value_or(false)) : Default.value_or(false);
+			},
 
 			"PlaySequence", [](const FLuaActorRef& Ref) { if (ULevelSequencePlayer* P = SequencePlayerOf(Ref)) P->Play(); },
 			"PauseSequence", [](const FLuaActorRef& Ref) { if (ULevelSequencePlayer* P = SequencePlayerOf(Ref)) P->Pause(); },

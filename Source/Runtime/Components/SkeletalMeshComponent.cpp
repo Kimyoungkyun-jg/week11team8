@@ -120,6 +120,15 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	UpdateSkinning();
 }
 
+void USkeletalMeshComponent::ResetAnimInstance()
+{
+	AnimInstance.reset();
+	SingleInstance = nullptr;
+	BlendInstance = nullptr;
+	AnimInstanceMesh = nullptr;
+	PushedBlendAlpha = std::numeric_limits<float>::quiet_NaN();
+}
+
 void USkeletalMeshComponent::TickAnimation(float DeltaTime)
 {
 	if (!AnimToPlay)
@@ -127,8 +136,7 @@ void USkeletalMeshComponent::TickAnimation(float DeltaTime)
 		// 애니메이션을 껐으면 마지막 자세에 멈추지 않고 바인드 포즈로 돌린다. 켠 적이 없으면 아무것도 하지 않는다.
 		if (AnimInstance)
 		{
-			AnimInstance.reset();
-			AnimInstanceMesh = nullptr;
+			ResetAnimInstance();
 			if (SkeletalMesh)
 			{
 				SetLocalPose(SkeletalMesh->RefSkeleton.RefBonePose);
@@ -143,29 +151,76 @@ void USkeletalMeshComponent::TickAnimation(float DeltaTime)
 		return;
 	}
 
-	// 시퀀스나 메시가 바뀌었으면 인스턴스를 새로 맞춘다. 트랙 연결표는 이때만 만든다.
-	if (!AnimInstance || AnimInstanceMesh != SkeletalMesh || AnimInstance->GetAnimationAsset() != AnimToPlay)
+	// 애니메이션은 Skeleton에 맞춰 만들어진다. 지금은 포인터로 비교한다(부분 재임포트 뒤에는 옛 포인터가 남을 수 있다).
+	if (AnimToPlay->GetSkeleton() != SkeletalMesh->Skeleton)
 	{
-		// 애니메이션은 Skeleton에 맞춰 만들어진다. 지금은 포인터로 비교한다(부분 재임포트 뒤에는 옛 포인터가 남을 수 있다).
-		if (AnimToPlay->GetSkeleton() != SkeletalMesh->Skeleton)
-		{
-			HTR_LOG(Warning, "[Anim] {}: Skeleton does not match mesh {}; animation cleared",
-				AnimToPlay->GetPath(), SkeletalMesh->GetPath());
-			AnimToPlay = nullptr;
-			return;
-		}
-		if (!AnimInstance)
-		{
-			AnimInstance.reset(NewObject<UAnimSingleNodeInstance>(this, FName("AnimInstance")));
-			AnimInstance->Initialize(this);
-		}
-		AnimInstanceMesh = SkeletalMesh;
-		AnimInstance->SetAnimationAsset(AnimToPlay);
+		HTR_LOG(Warning, "[Anim] {}: Skeleton does not match mesh {}; animation cleared",
+			AnimToPlay->GetPath(), SkeletalMesh->GetPath());
+		AnimToPlay = nullptr;
+		return;
+	}
+	if (AnimToBlend && AnimToBlend->GetSkeleton() != SkeletalMesh->Skeleton)
+	{
+		HTR_LOG(Warning, "[Anim] {}: Skeleton does not match mesh {}; blend animation cleared",
+			AnimToBlend->GetPath(), SkeletalMesh->GetPath());
+		AnimToBlend = nullptr;
 	}
 
-	// 설정은 프로퍼티가 진실이다. 매 틱 넘겨 두면 Details에서 바꾼 값이 바로 반영된다.
-	AnimInstance->SetLooping(bLoopAnimation);
-	AnimInstance->SetPlayRate(AnimPlayRate);
+	// 인스턴스 종류가 달라졌으면(AnimToBlend를 넣거나 뺌) 새로 만든다. 변수는 새 인스턴스에서 처음부터 시작한다.
+	const bool bWantBlend = AnimToBlend != nullptr;
+	if (AnimInstance && (bWantBlend ? BlendInstance == nullptr : SingleInstance == nullptr))
+	{
+		ResetAnimInstance();
+	}
+	if (!AnimInstance)
+	{
+		if (bWantBlend)
+		{
+			BlendInstance = NewObject<UAnimTwoWayBlendInstance>(this, FName("AnimInstance"));
+			AnimInstance.reset(BlendInstance);
+		}
+		else
+		{
+			SingleInstance = NewObject<UAnimSingleNodeInstance>(this, FName("AnimInstance"));
+			AnimInstance.reset(SingleInstance);
+		}
+		AnimInstance->Initialize(this);
+	}
+
+	// 시퀀스나 메시가 바뀐 쪽만 다시 맞춘다. 트랙 연결표는 이때만 만든다.
+	const bool bMeshChanged = AnimInstanceMesh != SkeletalMesh;
+	AnimInstanceMesh = SkeletalMesh;
+	if (SingleInstance)
+	{
+		if (bMeshChanged || SingleInstance->GetAnimationAsset() != AnimToPlay)
+		{
+			SingleInstance->SetAnimationAsset(AnimToPlay);
+		}
+		// 재생 설정은 프로퍼티가 진실이다. 매 틱 넘겨 두면 Details에서 바꾼 값이 바로 반영된다.
+		SingleInstance->SetLooping(bLoopAnimation);
+		SingleInstance->SetPlayRate(AnimPlayRate);
+	}
+	else
+	{
+		if (bMeshChanged || BlendInstance->GetAnimationA() != AnimToPlay)
+		{
+			BlendInstance->SetAnimationA(AnimToPlay);
+		}
+		if (bMeshChanged || BlendInstance->GetAnimationB() != AnimToBlend)
+		{
+			BlendInstance->SetAnimationB(AnimToBlend);
+		}
+		BlendInstance->SetLooping(bLoopAnimation);
+		BlendInstance->SetPlayRate(AnimPlayRate);
+
+		// 알파는 프로퍼티 값이 바뀐 틱에만 인스턴스 변수로 넘긴다. 매 틱 넘기면 게임플레이가 쓴 값을 덮어쓴다.
+		if (BlendAlpha != PushedBlendAlpha)
+		{
+			BlendInstance->SetFloat(UAnimTwoWayBlendInstance::BlendAlphaName(), BlendAlpha);
+			PushedBlendAlpha = BlendAlpha;
+		}
+	}
+
 	AnimInstance->UpdateAnimation(DeltaTime);
 	if (AnimInstance->EvaluateAnimation(AnimPose))
 	{

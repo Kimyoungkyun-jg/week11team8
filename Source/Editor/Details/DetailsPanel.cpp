@@ -687,6 +687,8 @@ namespace
 
 		ImGui::SetNextItemWidth(-1.0f);
 
+		// 같은 컴포넌트에 AnimSequence 프로퍼티가 둘 이상(AnimToPlay, AnimToBlend)일 수 있어 슬롯 주소로 ID를 나눈다.
+		ImGui::PushID(AnimSequencePtr);
 		EditorUIScale::LimitNextComboPopupWidth();
 		bool bOpen = ImGui::BeginCombo("##AnimSequence", CurrentFileName.c_str());
 		if (ImGui::IsItemHovered() && Current)
@@ -696,13 +698,11 @@ namespace
 
 		if (bOpen)
 		{
-			// 해제하면 컴포넌트가 바인드 포즈로 돌아간다.
+			// AnimToPlay를 해제하면 컴포넌트가 바인드 포즈로 돌아가고, AnimToBlend를 해제하면 단일 재생으로 돌아간다.
+			// 슬롯이 둘 이상이므로 항상 이 슬롯 포인터에 쓴다. 인스턴스는 다음 틱에 값을 보고 맞춰진다.
 			if (ImGui::Selectable("None", Current == nullptr))
 			{
-				if (SkeletalComponent)
-					SkeletalComponent->SetAnimToPlay(nullptr);
-				else
-					*AnimSequencePtr = nullptr;
+				*AnimSequencePtr = nullptr;
 			}
 
 			const TArray<UAnimSequence*> Sequences = EditorSort::CollectSorted<UAnimSequence>(
@@ -718,11 +718,7 @@ namespace
 				ImGui::PushID(Item);
 				if (ImGui::Selectable(DisplayName(Item).c_str(), bSelected))
 				{
-					// 메모리를 직접 바꾸지 않고 SetAnimToPlay를 거친다. 인스턴스는 다음 틱에 이 값을 보고 맞춰진다.
-					if (SkeletalComponent)
-						SkeletalComponent->SetAnimToPlay(Item);
-					else
-						*AnimSequencePtr = Item;
+					*AnimSequencePtr = Item;
 				}
 				if (ImGui::IsItemHovered())
 				{
@@ -734,6 +730,7 @@ namespace
 			}
 			ImGui::EndCombo();
 		}
+		ImGui::PopID();
 	}
 
 	UMaterial* EnsureMaterialOverride(UMeshComponent* MeshComponent, int32 Slot, UMaterial* Effective, UMaterial* Override)

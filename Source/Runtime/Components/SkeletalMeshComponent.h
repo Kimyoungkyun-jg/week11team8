@@ -1,7 +1,10 @@
 #pragma once
 
+#include <limits>
+
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimTwoWayBlendInstance.h"
 #include "Animation/BoneTransform.h"
 #include "Components/SkinnedMeshComponent.h"
 #include "Render/RenderEnums.h"
@@ -34,6 +37,16 @@ public:
 	// Skeleton이 메시와 맞지 않으면 다음 틱에 경고를 남기고 해제한다.
 	void SetAnimToPlay(UAnimSequence* InSequence) { AnimToPlay = InSequence; }
 	UAnimSequence* GetAnimToPlay() const { return AnimToPlay; }
+	// 두 번째 애니메이션과 블렌드 알파. AnimToBlend가 있으면 AnimToPlay(A)와 AnimToBlend(B)를 BlendAlpha로 섞는다(0이면 A, 1이면 B).
+	// 프로퍼티는 초기값·미리보기용이다. 알파는 값이 바뀐 틱에만 인스턴스 변수에 넘기므로, 그 뒤에 게임플레이가 인스턴스 변수를 바꾼 값을 덮어쓰지 않는다.
+	void SetAnimToBlend(UAnimSequence* InSequence) { AnimToBlend = InSequence; }
+	UAnimSequence* GetAnimToBlend() const { return AnimToBlend; }
+	void SetBlendAlpha(float InAlpha) { BlendAlpha = InAlpha; }
+	float GetBlendAlpha() const { return BlendAlpha; }
+
+	// 지금 이 컴포넌트의 애니메이션 인스턴스. AnimToPlay가 없거나 첫 틱 전이면 nullptr이다.
+	// 게임플레이는 여기서 SetFloat/GetFloat로 변수를 읽고 쓴다. 인스턴스는 애니메이션 종류가 바뀌거나 꺼지면 새로 만들어지므로 포인터를 오래 들고 있지 않는다.
+	UAnimInstance* GetAnimInstance() const { return AnimInstance.get(); }
 	const TArray<FMatrix>& GetBoneTransforms() const { return LocalBoneTransforms; }
 
 	void PerformCPUSkinning();
@@ -59,11 +72,21 @@ protected:
 	bool bLoopAnimation = true;
 	UPROPERTY(EditAnywhere)
 	float AnimPlayRate = 1.0f;
+	UPROPERTY(EditAnywhere)
+	UAnimSequence* AnimToBlend = nullptr;
+	UPROPERTY(EditAnywhere)
+	float BlendAlpha = 0.0f;
 
 private:
 	// 애니메이션 인스턴스는 프로퍼티가 아니라서 씬 저장·PIE 복제에 따라가지 않는다. 틱에서 AnimToPlay를 보고 만든다.
 	void TickAnimation(float DeltaTime);
-	TUniquePtr<UAnimSingleNodeInstance> AnimInstance;
+	// 인스턴스 종류는 AnimToBlend 유무로 정해진다. 아래 두 포인터는 AnimInstance를 종류별로 가리키며 둘 중 하나만 채워진다.
+	TUniquePtr<UAnimInstance> AnimInstance;
+	UAnimSingleNodeInstance* SingleInstance = nullptr;
+	UAnimTwoWayBlendInstance* BlendInstance = nullptr;
+	void ResetAnimInstance();
+	// 마지막으로 인스턴스 변수에 넘긴 BlendAlpha. NaN이면 아직 넘기지 않은 것이다(새 인스턴스는 첫 틱에 넘긴다).
+	float PushedBlendAlpha = std::numeric_limits<float>::quiet_NaN();
 	USkeletalMesh* AnimInstanceMesh = nullptr;
 	TArray<FBoneTransform> AnimPose;
 
