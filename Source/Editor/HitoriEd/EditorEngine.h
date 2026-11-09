@@ -242,6 +242,9 @@ private:
 	FEditorCommand Resume;
 	FEditorCommand StepFrame;
 	FEditorCommand Stop;
+	// UE의 Eject / Possess. 폰에서 빠져나와 에디터 카메라로 보거나(SIE) 다시 폰으로 돌아간다. 키는 F8이다.
+	FEditorCommand Eject;
+	FEditorCommand Possess;
 
 	bool bIsStep = false;
 

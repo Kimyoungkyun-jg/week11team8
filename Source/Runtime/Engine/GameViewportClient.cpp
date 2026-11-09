@@ -311,8 +311,14 @@ bool FGameViewportClient::BeginSIEMode()
 
 	UCameraComponent* MainCamera = World->GetMainCamera()->GetCameraComponent();
 	if (!MainCamera || MainCamera == CameraComponent) return false;
-	if (!SetCameraWorldPose(*MainCamera, CameraComponent->GetWorldLocation(),
-		CameraComponent->GetWorldRotation())) return false;
+
+	// 폰 카메라의 월드 회전을 오일러 각으로 그대로 뽑지 않는다. 쿼터니언 → 오일러 변환은 피치를 [-90, 90]으로만 돌려주므로,
+	// 폰 피치에 카메라의 아래 방향 오프셋이 더해져 90°를 넘으면 (Pitch 180-p, Roll 180, Yaw 180+y)가 되어 에디터 카메라에서
+	// 마우스 위아래가 뒤집힌다. 바라보는 방향만 가져와 롤 없는 회전으로 만들고, 에디터 카메라처럼 피치를 ±89°로 제한한다.
+	FRotator ViewRotation;
+	ViewRotation.LookDirection(CameraComponent->GetWorldRotationQuat().GetForwardVector());
+	ViewRotation.Pitch = FMath::Clamp(ViewRotation.Pitch, -89.0f, 89.0f);
+	if (!SetCameraWorldPose(*MainCamera, CameraComponent->GetWorldLocation(), ViewRotation)) return false;
 
 	MainCamera->SetFieldOfView(CameraComponent->GetFieldOfView());
 	MainCamera->SetNearZ(CameraComponent->GetNearZ());

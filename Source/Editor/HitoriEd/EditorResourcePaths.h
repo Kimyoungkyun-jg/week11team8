@@ -17,6 +17,7 @@ namespace EditorResourcePaths
 	constexpr const char* ToolbarPauseIcon = "Resources/Icons/Toolbar/Pause.png";
 	constexpr const char* ToolbarStepIcon = "Resources/Icons/Toolbar/Step.png";
 	constexpr const char* ToolbarStopIcon = "Resources/Icons/Toolbar/Stop.png";
+	constexpr const char* ToolbarEjectIcon = "Resources/Icons/Toolbar/Eject.png";
 
 	// 스켈레탈 메시 뷰어와 Content Drawer 썸네일의 배경 하늘
 	constexpr const char* AssetViewerSkyPanorama = "Resources/SkySphere/AssetViewerSky.hdr";
