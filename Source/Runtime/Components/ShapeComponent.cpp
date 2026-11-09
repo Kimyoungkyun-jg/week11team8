@@ -36,6 +36,16 @@ void UShapeComponent::AddWireArc(FLineBatcher* LineBatcher, const FVector& Cente
 	}
 }
 
+void UShapeComponent::AddWireQuad(FLineBatcher* LineBatcher, const FVector& A, const FVector& B,
+	const FVector& C, const FVector& D, const FVector4& Color)
+{
+	LineBatcher->AddLine(A, B, Color);
+	LineBatcher->AddLine(B, C, Color);
+	LineBatcher->AddLine(C, D, Color);
+	LineBatcher->AddLine(D, A, Color);
+	LineBatcher->AddLine(A, C, Color);
+}
+
 void DrawCollisionShapes(UWorld* World, FLineBatcher* LineBatcher, const AActor* Selected)
 {
 	if (!World || !LineBatcher) return;

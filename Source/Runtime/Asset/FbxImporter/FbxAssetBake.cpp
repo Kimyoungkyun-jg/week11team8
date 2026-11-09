@@ -1,7 +1,10 @@
 #include "EnginePCH.h"
 #include "FbxAssetBake.h"
 #include "FbxPath.h"
+#include "Asset/AnimSequence.h"
+#include "Animation/Skeleton.h"
 #include "Render/Texture.h"
+#include "UObject/UObjectGlobals.h"
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -19,6 +22,12 @@ struct FFbxBakeHeader
 	char Magic[4]{ 'F', 'B', 'X', 'B' };
 	uint32 Version = FbxBakeVersion;
 	uint32 Type = 0;
+};
+
+struct FAnimationBakeHeader
+{
+	char Magic[4]{ 'A', 'N', 'T', 'R' };
+	uint32 Version = 5;
 };
 
 // 고정 크기 필드·배열·문자열을 순서대로 직렬화한다.
@@ -64,6 +73,24 @@ public:
 		else bGood = static_cast<bool>(Out->write(reinterpret_cast<const char*>(Values.GetData()), Bytes));
 	}
 };
+
+bool ValidAnimTrack(const FRawAnimSequenceTrack& Track, int32 KeyCount)
+{
+	if ((Track.PosKeys.Num() != 1 && Track.PosKeys.Num() != KeyCount) ||
+		(Track.RotKeys.Num() != 1 && Track.RotKeys.Num() != KeyCount) ||
+		(Track.ScaleKeys.Num() != 1 && Track.ScaleKeys.Num() != KeyCount)) return false;
+	for (const FVector3f& Value : Track.PosKeys)
+		if (!std::isfinite(Value.X) || !std::isfinite(Value.Y) || !std::isfinite(Value.Z)) return false;
+	for (const FVector3f& Value : Track.ScaleKeys)
+		if (!std::isfinite(Value.X) || !std::isfinite(Value.Y) || !std::isfinite(Value.Z)) return false;
+	for (const FQuat4f& Value : Track.RotKeys)
+	{
+		const float LengthSquared = Value.X * Value.X + Value.Y * Value.Y +
+			Value.Z * Value.Z + Value.W * Value.W;
+		if (!std::isfinite(LengthSquared) || std::abs(LengthSquared - 1.0f) > 0.01f) return false;
+	}
+	return true;
+}
 
 void Skeleton(FBinary& Ar, FReferenceSkeleton& Ref)
 {
@@ -307,4 +334,156 @@ bool FFbxAssetBake::WriteBaked(const FString& Path, const FFbxAssetData& Input, 
 	FBinary Ar; Ar.Out = &Out; Serialize(Ar, Data); Out.flush();
 	if (!Ar.bGood || !Out) { Error = "Cannot write FBX binary: " + Path; return false; }
 	return true;
+}
+
+bool FFbxAssetBake::WriteAnimationSequence(const FString& Path, const UAnimSequence& Sequence)
+{
+	const UAnimDataModel* Model = Sequence.GetDataModel();
+	if (!Sequence.Skeleton || !Model || Model->FrameRate.Numerator <= 0 ||
+		Model->FrameRate.Denominator <= 0 || Model->NumberOfKeys <= 0 ||
+		Model->NumberOfKeys > 100000 || Model->NumberOfFrames != Model->NumberOfKeys - 1 ||
+		!std::isfinite(Model->PlayLength) || Model->PlayLength <= 0.0f ||
+		std::abs(Model->PlayLength - static_cast<float>(Model->NumberOfFrames) /
+			Model->FrameRate.AsDecimal()) > 0.001f ||
+		Model->BoneAnimationTracks.Num() != Sequence.Skeleton->RefSkeleton.GetNum()) return false;
+	for (int32 BoneIndex = 0; BoneIndex < Model->BoneAnimationTracks.Num(); ++BoneIndex)
+	{
+		const FBoneAnimationTrack& Bone = Model->BoneAnimationTracks[BoneIndex];
+		const FRawAnimSequenceTrack& Track = Bone.InternalTrack;
+		if (Bone.Name != FName(Sequence.Skeleton->RefSkeleton.RefBoneInfo[BoneIndex].Name) ||
+			!ValidAnimTrack(Track, Model->NumberOfKeys)) return false;
+	}
+	std::ofstream Out(FbxPath::FromString(Path), std::ios::binary | std::ios::trunc);
+	if (!Out) return false;
+	FAnimationBakeHeader Header;
+	FBinary Ar; Ar.Out = &Out;
+	Ar.Pod(Header);
+	FString Name = Sequence.Name;
+	FString SkeletonPath = Sequence.Skeleton->GetPath();
+	int32 Numerator = Model->FrameRate.Numerator;
+	int32 Denominator = Model->FrameRate.Denominator;
+	float PlayLength = Model->PlayLength;
+	int32 NumberOfFrames = Model->NumberOfFrames;
+	int32 NumberOfKeys = Model->NumberOfKeys;
+	uint32 TrackCount = static_cast<uint32>(Model->BoneAnimationTracks.Num());
+	Ar.String(Name);
+	Ar.String(SkeletonPath);
+	Ar.Pod(Numerator);
+	Ar.Pod(Denominator);
+	Ar.Pod(PlayLength);
+	Ar.Pod(NumberOfFrames);
+	Ar.Pod(NumberOfKeys);
+	Ar.Pod(TrackCount);
+	for (const FBoneAnimationTrack& Bone : Model->BoneAnimationTracks)
+	{
+		FString BoneName = Bone.Name.ToString();
+		TArray<FVector3f> PosKeys = Bone.InternalTrack.PosKeys;
+		TArray<FQuat4f> RotKeys = Bone.InternalTrack.RotKeys;
+		TArray<FVector3f> ScaleKeys = Bone.InternalTrack.ScaleKeys;
+		Ar.String(BoneName);
+		Ar.Array(PosKeys);
+		Ar.Array(RotKeys);
+		Ar.Array(ScaleKeys);
+	}
+	uint32 CurveCount = 0;
+	Ar.Pod(CurveCount);
+	uint8 EnableRootMotion = Sequence.bEnableRootMotion ? 1 : 0;
+	uint8 ForceRootLock = Sequence.bForceRootLock ? 1 : 0;
+	uint8 NormalizedScale = Sequence.bUseNormalizedRootMotionScale ? 1 : 0;
+	uint8 RootLock = static_cast<uint8>(Sequence.RootMotionRootLock);
+	Ar.Pod(EnableRootMotion);
+	Ar.Pod(ForceRootLock);
+	Ar.Pod(NormalizedScale);
+	Ar.Pod(RootLock);
+	Out.flush();
+	return Ar.bGood && static_cast<bool>(Out);
+}
+
+bool FFbxAssetBake::ReadAnimationSequence(const FString& Path, USkeleton& Skeleton, UAnimSequence& OutSequence)
+{
+	std::ifstream In(FbxPath::FromString(Path), std::ios::binary);
+	if (!In) return false;
+	FAnimationBakeHeader Header, Expected;
+	FBinary Ar; Ar.In = &In;
+	Ar.Pod(Header);
+	if (!Ar.bGood || std::memcmp(Header.Magic, Expected.Magic, sizeof(Header.Magic)) != 0 ||
+		(Header.Version != 4 && Header.Version != Expected.Version)) return false;
+	FString Name;
+	FString SkeletonPath;
+	FAnimFrameRate FrameRate;
+	float PlayLength = 0.0f;
+	int32 NumberOfFrames = 0;
+	int32 NumberOfKeys = 0;
+	uint32 BoneCount = 0;
+	Ar.String(Name);
+	Ar.String(SkeletonPath);
+	Ar.Pod(FrameRate.Numerator);
+	Ar.Pod(FrameRate.Denominator);
+	Ar.Pod(PlayLength);
+	Ar.Pod(NumberOfFrames);
+	Ar.Pod(NumberOfKeys);
+	Ar.Pod(BoneCount);
+	if (!Ar.bGood || SkeletonPath != Skeleton.GetPath() ||
+		FrameRate.Numerator <= 0 || FrameRate.Denominator <= 0 ||
+		!std::isfinite(PlayLength) || PlayLength <= 0.0f || NumberOfKeys <= 0 ||
+		NumberOfKeys > 100000 || NumberOfFrames != NumberOfKeys - 1 ||
+		std::abs(PlayLength - static_cast<float>(NumberOfFrames) / FrameRate.AsDecimal()) > 0.001f ||
+		BoneCount != static_cast<uint32>(Skeleton.RefSkeleton.GetNum()) ||
+		static_cast<uint64>(NumberOfKeys) * BoneCount > 50000000) return false;
+	TArray<FBoneAnimationTrack> Tracks;
+	Tracks.Reserve(BoneCount);
+	for (uint32 BoneIndex = 0; BoneIndex < BoneCount; ++BoneIndex)
+	{
+		FString BoneName;
+		FBoneAnimationTrack Bone;
+		Ar.String(BoneName);
+		Ar.Array(Bone.InternalTrack.PosKeys, static_cast<uint32>(NumberOfKeys));
+		Ar.Array(Bone.InternalTrack.RotKeys, static_cast<uint32>(NumberOfKeys));
+		Ar.Array(Bone.InternalTrack.ScaleKeys, static_cast<uint32>(NumberOfKeys));
+		if (!Ar.bGood || BoneName != Skeleton.RefSkeleton.RefBoneInfo[BoneIndex].Name ||
+			!ValidAnimTrack(Bone.InternalTrack, NumberOfKeys)) return false;
+		Bone.Name = FName(BoneName);
+		Tracks.Add(std::move(Bone));
+	}
+	uint32 CurveCount = 0;
+	Ar.Pod(CurveCount);
+	if (!Ar.bGood || CurveCount != 0) return false;
+	uint8 EnableRootMotion = 0, ForceRootLock = 0, NormalizedScale = 0, RootLock = 0;
+	if (Header.Version >= 5)
+	{
+		Ar.Pod(EnableRootMotion);
+		Ar.Pod(ForceRootLock);
+		Ar.Pod(NormalizedScale);
+		Ar.Pod(RootLock);
+		if (!Ar.bGood || RootLock > static_cast<uint8>(ERootMotionRootLock::Zero)) return false;
+	}
+	UAnimDataModel* Model = OutSequence.DataModel ? OutSequence.DataModel : NewObject<UAnimDataModel>(&OutSequence);
+	Model->BoneAnimationTracks = std::move(Tracks);
+	Model->FrameRate = FrameRate;
+	Model->PlayLength = PlayLength;
+	Model->NumberOfFrames = NumberOfFrames;
+	Model->NumberOfKeys = NumberOfKeys;
+	OutSequence.Name = std::move(Name);
+	OutSequence.Skeleton = &Skeleton;
+	OutSequence.DataModel = Model;
+	OutSequence.bEnableRootMotion = EnableRootMotion != 0;
+	OutSequence.bForceRootLock = ForceRootLock != 0;
+	OutSequence.bUseNormalizedRootMotionScale = NormalizedScale != 0;
+	OutSequence.RootMotionRootLock = static_cast<ERootMotionRootLock>(RootLock);
+	return true;
+}
+
+bool FFbxAssetBake::ReadAnimationSequenceSkeletonPath(const FString& Path, FString& OutSkeletonPath)
+{
+	std::ifstream In(FbxPath::FromString(Path), std::ios::binary);
+	if (!In) return false;
+	FAnimationBakeHeader Header, Expected;
+	FString Name;
+	FBinary Ar; Ar.In = &In;
+	Ar.Pod(Header);
+	Ar.String(Name);
+	Ar.String(OutSkeletonPath);
+	if (!Ar.bGood || std::memcmp(Header.Magic, Expected.Magic, sizeof(Header.Magic)) != 0 ||
+		(Header.Version != 4 && Header.Version != Expected.Version)) return false;
+	return !OutSkeletonPath.empty();
 }

@@ -37,6 +37,8 @@ protected:
 	// 중심, 원이 놓일 평면의 두 축, 반지름, 시작~끝 각도(라디안)
 	static void AddWireArc(FLineBatcher* LineBatcher, const FVector& Center, const FVector& AxisA, const FVector& AxisB,
 		float Radius, float StartRad, float EndRad, const FVector4& Color, int32 Segments = 24);
+	static void AddWireQuad(FLineBatcher* LineBatcher, const FVector& A, const FVector& B,
+		const FVector& C, const FVector& D, const FVector4& Color);
 };
 
 

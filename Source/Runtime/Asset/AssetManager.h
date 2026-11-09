@@ -4,7 +4,8 @@
 #include "UObject/Property.h"
 #include "Render/Renderer.h"
 #include "Asset/LOD/StaticMeshLODGenerator.h"
-#include "Asset/FbxImporter/AnimationData.h"
+#include "Asset/AnimSequence.h"
+#include "Asset/BlendSpace.h"
 
 #include <filesystem>
 #include <functional>
@@ -19,6 +20,8 @@ enum class EAssetType
 
 class UStaticMesh;
 class USkeletalMesh;
+class USkeleton;
+class UBlendSpace1D;
 class USoundWave;
 
 namespace fs = std::filesystem;
@@ -89,9 +92,15 @@ public:
 	UFont* LoadFontAtlas(const FString& JsonPath, const FString& AtlasTexturePath);
 	USoundWave* LoadSound(const FString& Path);
 	static UStaticMesh* LoadObjStaticMesh(const FString& Path);
+	static USkeleton* LoadSkeleton(const FString& AssetPath);
+	static UAnimSequence* LoadAnimSequence(const FString& AssetPath);
+	static bool SaveAnimSequence(const UAnimSequence& Sequence);
+	static UBlendSpace* LoadBlendSpace(const FString& AssetPath);
+	static bool SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& BlendSpace);
+	static void GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArray<UAnimSequence*>& OutSequences);
 	static USkeletalMesh* LoadFbxSkeletalMesh(const FString& Path);
-	static const TArray<FAnimationClip>* LoadFbxAnimations(const FString& Path);
-	static const TArray<FAnimationClip>* GetFbxAnimations(const FString& AssetKey);
+	static const TArray<UAnimSequence*>* LoadFbxAnimSequences(const FString& Path, USkeleton& Skeleton);
+	static const TArray<UAnimSequence*>* GetFbxAnimSequences(const FString& AssetKey);
 
 	// 시작 스캔에서 바이너리를 찾지 못한 FBX 경로. 에디터가 임포트 창으로 넘긴다.
 	const TArray<FString>& GetFbxImportCandidates() const { return FbxImportCandidates; }
@@ -111,7 +120,7 @@ private:
 	TMap<FString, FString> AssetPathMap;
 	TMap<FString, URenderAsset*> AssetMap;
 	TMap<FString, USoundWave*> SoundMap;
-	TMap<FString, TArray<FAnimationClip>> AnimationMap;
+	TMap<FString, TArray<UAnimSequence*>> AnimationSequencesByFbx;
 	TArray<FString> FbxImportCandidates;
 	std::set<FString> ImportedFbxSources; // 소유 FBX 식별자, 대소문자 무시
 

@@ -9,6 +9,7 @@ struct FViewShowFlags
 	// 원근 뷰는 픽셀 셰이더 그리드, 직교 뷰는 라인 그리드로 그린다 (UE 방식).
 	bool bGrid = true;
 	bool bBounds = false;
+	bool bShapes = false;
 	bool bCascadeBounds = false;
 	bool bUUID = false;
 	bool bFXAA = false;
@@ -31,6 +32,7 @@ inline constexpr FViewShowFlagInfo ViewShowFlagInfos[] = {
 	{ "Fog",           "Exponential Height Fog",  "Common",       &FViewShowFlags::bFog },
 	{ "Grid",          "Grid",                    "Editor",       &FViewShowFlags::bGrid },
 	{ "Bounds",        "Bounding Box",            "Editor",       &FViewShowFlags::bBounds },
+	{ "Shapes",        "Shape Components",        "Editor",       &FViewShowFlags::bShapes },
 	{ "CascadeBounds", "Shadow Cascade Bounds",   "Editor",       &FViewShowFlags::bCascadeBounds },
 	{ "UUID",          "Object UUID",             "Editor",       &FViewShowFlags::bUUID },
 	{ "FXAA",          "Anti-Aliasing (FXAA)",    "Post Process", &FViewShowFlags::bFXAA },

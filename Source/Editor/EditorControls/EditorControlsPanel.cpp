@@ -27,6 +27,7 @@
 #include "GameFramework/Actor/SkeletalMeshActor.h"
 #include "GameFramework/Actor/DecalActor.h"
 #include "GameFramework/Actor/FakeSpotLightActor.h"
+#include "GameFramework/Actor/PlayerStart.h"
 
 namespace
 {
@@ -53,6 +54,7 @@ namespace
 		{ "Effects",  "Particle",          &AParticleActor::StaticClass },
 		{ "Effects",  "Height Fog",        &AExponentialHeightFogActor::StaticClass },
 		{ "Gameplay", "Projectile",        &AProjectileActor::StaticClass },
+		{ "Gameplay", "Player Start",      &APlayerStart::StaticClass },
 		{ "Gameplay", "Level Sequence",    &ALevelSequenceActor::StaticClass },
 	};
 
@@ -135,6 +137,11 @@ void FEditorControlsPanel::DrawToolbar()
 	const ImVec2 ButtonSize{ GetToolbarButtonWidth(), ImGui::GetFrameHeight() };
 	LevelEditorToolbarUI::BeginGroup();
 	DrawAddActorMenu(ButtonSize);
+	ImGui::SameLine();
+	ImGui::BeginDisabled(IsPlayingQuery && IsPlayingQuery());
+	if (ImGui::Button("Player Start", ImVec2(EditorUIScale::ButtonWidth("Player Start"), ButtonSize.y)))
+		SpawnInFrontOfCamera(APlayerStart::StaticClass());
+	ImGui::EndDisabled();
 	LevelEditorToolbarUI::EndGroup();
 	if (Gizmo)
 	{

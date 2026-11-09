@@ -2,11 +2,12 @@
 
 #include "Editor/EditorUI/EditorPanel.h"
 #include "Editor/Viewports/EditorViewportClient.h"
-#include "Asset/FbxImporter/AnimationData.h"
+#include "Math/Matrix.h"
 
 class UWorld;
 class USkeletalMesh;
 class USkeletalMeshComponent;
+class UAnimSequence;
 class FLineBatcher;
 
 class FPoseRetargetPanel : public IEditorPanel
@@ -41,7 +42,8 @@ private:
 	USkeletalMesh* TargetMesh = nullptr;
 	TArray<int32> TargetToSource;
 	TArray<int32> TargetAimChild;
-	FAnimationClip AlignedSourceClip;
+	UAnimSequence* SelectedSequence = nullptr;
+	TArray<FMatrix> RootCorrections;
 	TArray<FString> AvailableFbxPaths;
 	char ProfileName[128] = "DragonToHuman";
 	FString Message;

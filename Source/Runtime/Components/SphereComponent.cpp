@@ -23,4 +23,21 @@ void USphereComponent::DrawDebug(FLineBatcher* LineBatcher, const FVector4& Colo
 	AddWireArc(LineBatcher, C, FVector(1, 0, 0), FVector(0, 1, 0), R, 0, TwoPi, Color);
 	AddWireArc(LineBatcher, C, FVector(1, 0, 0), FVector(0, 0, 1), R, 0, TwoPi, Color);
 	AddWireArc(LineBatcher, C, FVector(0, 1, 0), FVector(0, 0, 1), R, 0, TwoPi, Color);
+	constexpr int Latitudes = 6;
+	constexpr int Longitudes = 12;
+	const auto Point = [&](float Latitude, float Longitude)
+	{
+		const float Ring = std::cos(Latitude);
+		return C + FVector(Ring * std::cos(Longitude), Ring * std::sin(Longitude), std::sin(Latitude)) * R;
+	};
+	for (int Lat = 0; Lat < Latitudes; ++Lat)
+		for (int Lon = 0; Lon < Longitudes; ++Lon)
+		{
+			const float Lat0 = -PI * 0.5f + PI * Lat / Latitudes;
+			const float Lat1 = -PI * 0.5f + PI * (Lat + 1) / Latitudes;
+			const float Lon0 = TwoPi * Lon / Longitudes;
+			const float Lon1 = TwoPi * (Lon + 1) / Longitudes;
+			AddWireQuad(LineBatcher, Point(Lat0, Lon0), Point(Lat0, Lon1),
+				Point(Lat1, Lon1), Point(Lat1, Lon0), Color);
+		}
 }

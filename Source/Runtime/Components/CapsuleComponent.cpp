@@ -43,4 +43,30 @@ void UCapsuleComponent::DrawDebug(FLineBatcher* LineBatcher, const FVector4& Col
 	// 옆선 4개
 	for (const FVector& Side : { X, X * -1.0f, Y, Y * -1.0f })
 		LineBatcher->AddLine(Cap.A + Side * R, Cap.B + Side * R, Color);
+	constexpr int Longitudes = 12;
+	constexpr int HemisphereRings = 4;
+	const auto RingPoint = [&](const FVector& Center, float Radius, float Angle)
+	{
+		return Center + (X * std::cos(Angle) + Y * std::sin(Angle)) * Radius;
+	};
+	const auto DrawStrip = [&](const FVector& Upper, float UpperRadius, const FVector& Lower, float LowerRadius)
+	{
+		for (int Lon = 0; Lon < Longitudes; ++Lon)
+		{
+			const float Angle0 = 2.0f * PI * Lon / Longitudes;
+			const float Angle1 = 2.0f * PI * (Lon + 1) / Longitudes;
+			AddWireQuad(LineBatcher, RingPoint(Upper, UpperRadius, Angle0), RingPoint(Upper, UpperRadius, Angle1),
+				RingPoint(Lower, LowerRadius, Angle1), RingPoint(Lower, LowerRadius, Angle0), Color);
+		}
+	};
+	for (int Ring = 0; Ring < HemisphereRings; ++Ring)
+	{
+		const float Angle0 = PI * 0.5f * Ring / HemisphereRings;
+		const float Angle1 = PI * 0.5f * (Ring + 1) / HemisphereRings;
+		DrawStrip(Cap.A + Up * (R * std::cos(Angle0)), R * std::sin(Angle0),
+			Cap.A + Up * (R * std::cos(Angle1)), R * std::sin(Angle1));
+		DrawStrip(Cap.B - Up * (R * std::sin(Angle0)), R * std::cos(Angle0),
+			Cap.B - Up * (R * std::sin(Angle1)), R * std::cos(Angle1));
+	}
+	DrawStrip(Cap.A, R, Cap.B, R);
 }

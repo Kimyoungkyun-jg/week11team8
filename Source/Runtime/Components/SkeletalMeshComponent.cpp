@@ -5,6 +5,12 @@
 #include "Collision/Ray.h"
 #include "Engine/PrimitiveSceneProxy.h"
 #include "Asset/LOD/StaticMeshLODSelector.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/UObjectHash.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Asset/AssetManager.h"
+#include "Components/CharacterMovementComponent.h"
+#include "GameFramework/Character.h"
 
 namespace
 {
@@ -35,17 +41,40 @@ namespace
 
 USkeletalMeshComponent::USkeletalMeshComponent()
 {
+	PrimaryComponentTick.bCanEverTick = true;
+}
+
+USkeletalMeshComponent::~USkeletalMeshComponent()
+{
+	delete AnimScriptInstance;
 }
 
 void USkeletalMeshComponent::BeginPlay()
 {
-    Super::BeginPlay();
-    InitBoneTransforms();
+	Super::BeginPlay();
+	InitBoneTransforms();
 }
 
 void USkeletalMeshComponent::TickComponent(float DeltaTime)
 {
 	Super::TickComponent(DeltaTime);
+	EnsureBoneState();
+	if (AnimScriptInstance && SkeletalMesh)
+	{
+		AnimScriptInstance->UpdateAnimation(DeltaTime);
+		TArray<FMatrix> Pose;
+		if (AnimScriptInstance->EvaluatePose(Pose) && Pose.Num() == LocalBoneTransforms.Num())
+		{
+			LocalBoneTransforms = std::move(Pose);
+			bGlobalBoneTransformsOverridden = false;
+			bSkinningMatricesDirty = true;
+			FMatrix RootMotion;
+			if (AnimScriptInstance->ConsumeRootMotion(RootMotion))
+				if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
+					if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+						Movement->AddRootMotion(RootMotion);
+		}
+	}
 
 	if (!SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode))
 	{
@@ -53,10 +82,75 @@ void USkeletalMeshComponent::TickComponent(float DeltaTime)
 	}
 }
 
+void USkeletalMeshComponent::Serialize(FStructuredArchive::FRecord Record)
+{
+	Super::Serialize(Record);
+	FString AnimClassName = AnimClass ? AnimClass->Name : FString{};
+	if (auto Slot = Record.TryEnterField("AnimClassName", true))
+	{
+		Slot.GetValue() << AnimClassName;
+		if (Record.GetUnderlyingArchive().IsLoading())
+			SetAnimInstanceClass(AnimClassName.empty() ? nullptr : FindClass(AnimClassName));
+	}
+	FString SequencePath = AnimSequence ? AnimSequence->GetPath() : FString{};
+	if (auto Slot = Record.TryEnterField("AnimSequencePath", true))
+	{
+		Slot.GetValue() << SequencePath;
+		if (Record.GetUnderlyingArchive().IsLoading())
+			SetAnimationSequence(SequencePath.empty() ? nullptr : UAssetManager::LoadAnimSequence(SequencePath));
+	}
+}
+
 void USkeletalMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkeletalMesh)
 {
 	Super::SetSkeletalMesh(InSkeletalMesh);
 	InitBoneTransforms();
+	if (SkeletalMesh && SkeletalMesh->Skeleton && !SkeletalMesh->GetPath().empty() &&
+		!UAssetManager::GetFbxAnimSequences(SkeletalMesh->GetPath()))
+	{
+		UAssetManager::LoadFbxAnimSequences(SkeletalMesh->GetPath(), *SkeletalMesh->Skeleton);
+	}
+	if (AnimSequence && (!SkeletalMesh || AnimSequence->Skeleton != SkeletalMesh->Skeleton))
+		SetAnimationSequence(nullptr);
+	if (AnimScriptInstance)
+	{
+		AnimScriptInstance->InitializeAnimation();
+		if (UAnimSingleNodeInstance* SingleNode = Cast<UAnimSingleNodeInstance>(AnimScriptInstance))
+		{
+			if (SingleNode->SetAnimationAsset(AnimSequence) && AnimSequence) SingleNode->Play();
+		}
+	}
+}
+
+bool USkeletalMeshComponent::SetAnimInstanceClass(UClass* InAnimClass)
+{
+	if (InAnimClass && (!InAnimClass->IsChildOf(UAnimInstance::StaticClass()) || !InAnimClass->Constructor))
+		return false;
+	if (AnimClass == InAnimClass && (!InAnimClass || AnimScriptInstance)) return true;
+	UAnimInstance* NewInstance = InAnimClass ? NewObject<UAnimInstance>(this, InAnimClass) : nullptr;
+	if (InAnimClass && !NewInstance) return false;
+	delete AnimScriptInstance;
+	AnimClass = InAnimClass;
+	AnimScriptInstance = NewInstance;
+	if (AnimScriptInstance) AnimScriptInstance->InitializeAnimation();
+	if (UAnimSingleNodeInstance* SingleNode = Cast<UAnimSingleNodeInstance>(AnimScriptInstance))
+	{
+		if (SingleNode->SetAnimationAsset(AnimSequence) && AnimSequence) SingleNode->Play();
+	}
+	return true;
+}
+
+bool USkeletalMeshComponent::SetAnimationSequence(UAnimSequence* InSequence)
+{
+	if (InSequence && (!SkeletalMesh || !SkeletalMesh->Skeleton ||
+		InSequence->Skeleton != SkeletalMesh->Skeleton || !InSequence->GetDataModel())) return false;
+	if (UAnimSingleNodeInstance* SingleNode = Cast<UAnimSingleNodeInstance>(AnimScriptInstance))
+	{
+		if (!SingleNode->SetAnimationAsset(InSequence)) return false;
+		if (InSequence) SingleNode->Play();
+	}
+	AnimSequence = InSequence;
+	return true;
 }
 
 void USkeletalMeshComponent::EnsureBoneState()

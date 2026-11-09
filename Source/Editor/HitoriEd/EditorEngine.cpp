@@ -538,7 +538,7 @@ void UEditorEngine::BeginFrame(const float DeltaTime)
 			EditorCommandUI::ProcessShortcuts({ &Save, &Play, &Pause, &Resume, &Copy, &Paste, &Duplicate });
 
 		// F: 선택한 액터로 포커스 (UE). 우클릭 비행 중이거나 글자 입력 중이면 받지 않는다.
-		if (!ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
+		if ((!IsPlaying() || IsSimulatingInEditor()) && !ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
 			FInputSystem::IsKeyPressed(EKeyCode::F) && !FInputSystem::IsKeyDown(EKeyCode::Control))
 		{
 			FocusViewportOnActor(OutlinerPanel ? OutlinerPanel->GetSelectedActor() : nullptr);
@@ -1160,10 +1160,10 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		// SIE에서는 에디터 카메라를 움직이므로 커서를 놓는다. 돌아오면 UpdatePIEMouseCapture가 다시 잠근다.
 		if (GameViewport.IsSIEMode())
 			FMouseCapture::Release();
-		OnActiveWorldChanged();
+		// SIE 전환은 월드를 바꾸지 않으므로 현재 선택과 기즈모를 유지한다.
 	}
 	constexpr EKeyCode Keys[] = { EKeyCode::W, EKeyCode::A, EKeyCode::S, EKeyCode::D,
-		EKeyCode::Q, EKeyCode::E, EKeyCode::Space, EKeyCode::Shift };
+		EKeyCode::Q, EKeyCode::E, EKeyCode::F, EKeyCode::Space, EKeyCode::Shift };
 	for (EKeyCode Key : Keys)
 	{
 		if (FInputSystem::IsKeyPressed(Key))
@@ -1278,6 +1278,20 @@ void UEditorEngine::UpdateGizmoAndPicking()
 	FEditorViewportClient* ViewClient = ViewportsPanel->GetViewportClient(ViewIndex);
 	if (!ViewClient || !ViewClient->IsActive())
 		return;
+	if (PlayWorld && IsSimulatingInEditor() && !IsPIEInWindow() && ViewIndex == PIEViewIndex)
+	{
+		if (FWorldContext* Context = GetPIEWorldContext())
+			if (Context->GameViewport)
+				if (UCameraComponent* Camera = Context->GameViewport->GetCameraComponent())
+				{
+					ViewClient->SetViewLocation(Camera->GetWorldLocation());
+					ViewClient->SetViewRotation(Camera->GetWorldRotation());
+					ViewClient->SetViewFOV(Camera->GetFieldOfView());
+					ViewClient->SetClipPlanes(Camera->GetNearZ(), Camera->GetFarZ());
+					ViewClient->SetOrthoWidth(Camera->GetOrthoWidth());
+					ViewClient->SetIsPerspective(!Camera->GetIsOrthogonal());
+				}
+	}
 
 	const FVector2 LocalMousePosition = ViewportsPanel->GetLocalMousePosition();
 	ViewClient->UpdateGizmoAndPicking(Gizmo.get(), LocalMousePosition, [this](AActor* SelectedActor) {
@@ -1376,7 +1390,10 @@ void UEditorEngine::RenderGameFrame(FGameViewportClient* GameClient, const FScen
 			Overlays.EditorLines = [this, &SceneView, GameClient]
 				{
 					LineBatcher->BeginFrame();
-					DrawCollisionShapes(GameClient->GetWorld(), LineBatcher.get(), nullptr);
+					const FEditorViewportClient* ActiveClient = ViewportsPanel ? ViewportsPanel->GetViewportClient(ViewportsPanel->GetActiveViewIndex()) : nullptr;
+					const AActor* SelectedActor = Gizmo->GetTarget() ? Gizmo->GetTarget()->GetOwner() : nullptr;
+					if (ActiveClient && ActiveClient->GetShowFlags().bShapes)
+						DrawCollisionShapes(GameClient->GetWorld(), LineBatcher.get(), SelectedActor);
 					DrawSpringArms(GameClient->GetWorld(), LineBatcher.get(), nullptr);
 					DrawDecalVolume(GameClient->GetWorld(), LineBatcher.get(), nullptr);
 					LineBatcher->OnRender(SceneView.ViewProjectionMatrix);
@@ -1525,10 +1542,11 @@ void UEditorEngine::RenderFrame(FEditorViewportClient* ViewClient,
 			if (bIsPIE)
 			{
 				// PIE에서는 그리드, 기즈모 없이 충돌 도형만 그린다
-				Overlays.EditorLines = [this, &SceneView, TargetWorld]
+				Overlays.EditorLines = [this, ViewClient, &SceneView, TargetWorld]
 					{
 						LineBatcher->BeginFrame();
-						DrawCollisionShapes(TargetWorld, LineBatcher.get(), nullptr);
+						if (ViewClient->GetShowFlags().bShapes)
+							DrawCollisionShapes(TargetWorld, LineBatcher.get(), nullptr);
 						DrawSpringArms(TargetWorld, LineBatcher.get(), nullptr);
 						LineBatcher->OnRender(SceneView.ViewProjectionMatrix);
 					};
@@ -1590,7 +1608,8 @@ void UEditorEngine::RenderFrame(FEditorViewportClient* ViewClient,
 						const AActor* SelectedActor =
 							Gizmo->GetTarget() ? Gizmo->GetTarget()->GetOwner() : nullptr;
 
-						DrawCollisionShapes(EditorWorld, LineBatcher.get(), SelectedActor);
+						if (ViewClient->GetShowFlags().bShapes)
+							DrawCollisionShapes(EditorWorld, LineBatcher.get(), SelectedActor);
 						DrawSpringArms(EditorWorld, LineBatcher.get(), SelectedActor);
 						DrawDecalVolume(EditorWorld, LineBatcher.get(), SelectedActor);
 
