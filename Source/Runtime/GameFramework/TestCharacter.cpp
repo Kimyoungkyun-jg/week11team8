@@ -1,38 +1,36 @@
 #include "EnginePCH.h"
 #include "GameFramework/TestCharacter.h"
-#include "GameFramework/SpringArmComponent.h"
-#include "Components/CapsuleComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Camera/CameraComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/CharacterMovementComponent.h"
+#include "Animation/TestAnimInstance.h"
 #include "Asset/AssetManager.h"
 
 ATestCharacter::ATestCharacter()
 {
-	StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>("StaticMeshComponent");
-	StaticMeshComponent->SetupAttachment(GetCapsuleComponent());
-	StaticMeshComponent->SetStaticMesh(UAssetManager::GetAssetByPath<UStaticMesh>("Models/OBJ/Hitori/Hitori.obj"));
-
-	SpringArmComponent = CreateDefaultSubobject<USpringArmComponent>("SpringArmComponent");
-	SpringArmComponent->SetupAttachment(GetCapsuleComponent());
-	SpringArmComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 0.7f));
-	GetCameraComponent()->SetupAttachment(SpringArmComponent);
-	GetCameraComponent()->SetRelativeLocation(FVector::ZeroVector);
-	GetCameraComponent()->SetRelativeRotation(FRotator(0.0f, 0.0f, 0.0f));
+	USkeletalMeshComponent* SkeletalMeshComponent = GetSkeletalMeshComponent();
+	USkeletalMesh* Mesh = UAssetManager::LoadFbxSkeletalMesh(
+		"Assets/Models/UnrealModel/SK_SKM_Quinn_Simple_root.fbxbin");
+	if (Mesh)
+	{
+		SkeletalMeshComponent->SetSkeletalMesh(Mesh);
+		if (!SkeletalMeshComponent->SetAnimGraphPath("Assets/Animations/Quinn.animgraph"))
+			HTR_LOG(Error, "Failed to assign Quinn.animgraph to ATestCharacter");
+	}
+	else HTR_LOG(Error, "Failed to load SK_SKM_Quinn_Simple_root.fbxbin for ATestCharacter");
+	GetCharacterMovement()->MaxWalkSpeed = 6.0f;
 }
 
-void ATestCharacter::BeginPlay()
+void ATestCharacter::Attack()
 {
-	Super::BeginPlay();
-	const float Pitch = GetCameraComponent()->GetRelativeRotation().Pitch;
-	SpringArmComponent->SetRelativeRotation(FRotator(Pitch, 0.0f, 0.0f));
-	GetCameraComponent()->SetRelativeRotation(FRotator(0.0f, 0.0f, 0.0f));
-	SpringArmComponent->ResetCameraLag();
+	UCharacterMovementComponent* Movement = GetCharacterMovement();
+	if (bJumpLocked || bAttackLocked || !Movement || !Movement->CanJump()) return;
+	if (UTestAnimInstance* Anim = Cast<UTestAnimInstance>(GetSkeletalMeshComponent()->GetAnimInstance());
+		Anim && Anim->HasAttackAnimation())
+		Anim->RequestAttack();
 }
 
-void ATestCharacter::AddControllerPitchInput(float Value)
+void ATestCharacter::Jump()
 {
-	if (!std::isfinite(Value)) return;
-	FRotator Rotation = SpringArmComponent->GetRelativeRotation();
-	Rotation.Pitch = FMath::Clamp(Rotation.Pitch + Value, -89.0f, 89.0f);
-	SpringArmComponent->SetRelativeRotation(Rotation);
+	UCharacterMovementComponent* Movement = GetCharacterMovement();
+	if (!bJumpLocked && !bAttackLocked && Movement && Movement->CanJump()) ACharacter::Jump();
 }

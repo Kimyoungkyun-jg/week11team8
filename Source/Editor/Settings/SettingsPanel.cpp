@@ -7,11 +7,10 @@
 #include "Engine/World.h"
 #include "Editor/Viewports/ViewportsPanel.h"
 #include "Editor/Viewports/EditorViewportClient.h"
-#include "GameFramework/DefaultPawn.h"
+#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/GameMode.h"
 #include "GameFramework/GameHUD.h"
-#include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Editor/EditorUI/EditorUIScale.h"
 #include "Editor/EditorUI/EditorSort.h"
@@ -137,7 +136,6 @@ void FSettingsPanel::OnRender()
 	//////////////////////////////////////////////////////////
 
 	//////////////////////////////////////////////////////////
-	DrawDefaultPawnSettings();
 	DrawGameFrameworkSettings();
 
 	//////////////////////////////////////////////////////////
@@ -582,69 +580,6 @@ void FSettingsPanel::ApplyViewportSettings()
 		Client->GetShowFlags() = Settings.ViewShowFlags[Index];
 	}
 	ViewportsPanel->SetRenderingPath(Settings.RenderingPath);
-}
-
-void FSettingsPanel::DrawDefaultPawnSettings()
-{
-    ImGui::Dummy(ImVec2(0.0f, EditorUIScale::Px(SectionGap)));
-    ImGui::SeparatorText("DefaultPawn Settings");
-    ADefaultPawn* Pawn = World ? Cast<ADefaultPawn>(World->GetPlayerPawn()) : nullptr;
-    if (!Pawn)
-    {
-        ImGui::TextDisabled("Start PIE with a DefaultPawn to edit these settings.");
-        return;
-    }
-
-    const auto DrawMeshPicker = [](const char* Label, UStaticMesh*& SelectedMesh)
-    {
-        const auto GetMeshDisplayName = [](const UStaticMesh* Mesh) -> FString
-        {
-            if (!Mesh) return "None";
-            const fs::path Path(Mesh->GetPath());
-            return Path.stem() == "Atlas"
-                ? Path.parent_path().filename().string()
-                : Path.stem().string();
-        };
-        const FString Preview = GetMeshDisplayName(SelectedMesh);
-        bool bChanged = false;
-        const bool bOpen = ImGui::BeginCombo(Label, Preview.c_str());
-        if (SelectedMesh && ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", SelectedMesh->GetPath().c_str());
-        if (bOpen)
-        {
-            if (ImGui::Selectable("None", SelectedMesh == nullptr))
-            {
-                SelectedMesh = nullptr;
-                bChanged = true;
-            }
-            const TArray<UStaticMesh*> Meshes = EditorSort::CollectSorted<UStaticMesh>(
-                TObjectIterator<UStaticMesh>(), GetMeshDisplayName,
-                [](const UStaticMesh* M) { return !M->IsRetired(); });
-            for (UStaticMesh* Mesh : Meshes)
-            {
-                const FString Name = GetMeshDisplayName(Mesh);
-                const bool bSelected = Mesh == SelectedMesh;
-                ImGui::PushID(Mesh);
-                if (ImGui::Selectable(Name.c_str(), bSelected))
-                {
-                    SelectedMesh = Mesh;
-                    bChanged = true;
-                }
-                if (bSelected) ImGui::SetItemDefaultFocus();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Mesh->GetPath().c_str());
-                ImGui::PopID();
-            }
-            ImGui::EndCombo();
-        }
-        return bChanged;
-    };
-
-    UStaticMeshComponent* PawnMesh = Pawn->GetStaticMeshComponent();
-    if (PawnMesh)
-    {
-        UStaticMesh* Mesh = PawnMesh->GetStaticMesh();
-        if (DrawMeshPicker("Pawn Mesh", Mesh)) PawnMesh->SetStaticMesh(Mesh);
-    }
 }
 
 void FSettingsPanel::DrawShadowMapSettings()

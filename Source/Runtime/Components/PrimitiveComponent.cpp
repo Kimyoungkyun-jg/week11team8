@@ -97,6 +97,9 @@ bool UPrimitiveComponent::MoveComponent(const FVector& Delta, const FRotator& Ne
 
 void UPrimitiveComponent::PostEditChangeProperty(const FProperty& Property)
 {
+	// USceneComponent가 Transform 변경 시 MarkTransformDirty로 프록시를 갱신한다
+	Super::PostEditChangeProperty(Property);
+
 	if (Property.Name == "bCastShadow" ||
 		Property.Name == "bReceiveShadow" ||
 		Property.Name == "bReceiveDecal")

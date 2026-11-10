@@ -4,7 +4,18 @@
 #include "Render/RenderPacket.h"
 #include "Collision/Ray.h"
 #include "Engine/PrimitiveSceneProxy.h"
+#include "Engine/World.h"
 #include "Asset/LOD/StaticMeshLODSelector.h"
+#include "Render/SkinningStats.h"
+#include "UObject/UObjectIterator.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/UObjectHash.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimGraphInstance.h"
+#include "Asset/AnimGraphAsset.h"
+#include "Asset/AssetManager.h"
+#include "Components/CharacterMovementComponent.h"
+#include "GameFramework/Character.h"
 
 namespace
 {
@@ -31,29 +42,93 @@ namespace
 		Out[1] = RY * InvLength;
 		Out[2] = RZ * InvLength;
 	}
+
+	// Bone Weight Heatmap: 정점이 Bone 하나에게서 받는 가중치. 4개 슬롯 중 그 본을 가리키는 슬롯의 값을 더한다.
+	// 선택된 본이 없으면(-1) 어느 슬롯과도 같지 않으므로 0이다.
+	inline float GetBoneWeight(const FSkeletalVertex& Vertex, int32 BoneIndex)
+	{
+		float Weight = 0.0f;
+		for (int32 i = 0; i < 4; ++i)
+			if (Vertex.BoneIndices[i] == BoneIndex) Weight += Vertex.BoneWeights[i];
+		return Weight;
+	}
+
+	// 가중치 0~1을 색으로 바꾼다. 0 파랑 → 0.25 하늘 → 0.5 초록 → 0.75 노랑 → 1 빨강
+	inline FVector4 WeightToHeatColor(float Weight)
+	{
+		const float W = std::clamp(Weight, 0.0f, 1.0f);
+		const float R = std::clamp(4.0f * W - 2.0f, 0.0f, 1.0f);
+		const float G = std::clamp(W < 0.5f ? 4.0f * W : 4.0f - 4.0f * W, 0.0f, 1.0f);
+		const float B = std::clamp(2.0f - 4.0f * W, 0.0f, 1.0f);
+		return FVector4(R, G, B, 1.0f);
+	}
 }
 
 USkeletalMeshComponent::USkeletalMeshComponent()
 {
-	PrimaryComponentTick.bCanEverTick = true;   // 애니메이션 재생. AnimToPlay가 비어 있으면 TickAnimation은 바로 끝난다.
+	PrimaryComponentTick.bCanEverTick = true;
+}
+
+USkeletalMeshComponent::~USkeletalMeshComponent()
+{
+	delete AnimScriptInstance;
 }
 
 void USkeletalMeshComponent::BeginPlay()
 {
-    Super::BeginPlay();
-    InitBoneTransforms();
+	Super::BeginPlay();
+	InitBoneTransforms();
 }
 
 void USkeletalMeshComponent::TickComponent(float DeltaTime)
 {
 	Super::TickComponent(DeltaTime);
+	EnsureBoneState();
+	if (AnimScriptInstance && SkeletalMesh)
+	{
+		AnimScriptInstance->UpdateAnimation(DeltaTime);
+		TArray<FMatrix> Pose;
+		if (AnimScriptInstance->EvaluatePose(Pose) && Pose.Num() == LocalBoneTransforms.Num())
+		{
+			LocalBoneTransforms = std::move(Pose);
+			bGlobalBoneTransformsOverridden = false;
+			bSkinningMatricesDirty = true;
+			FMatrix RootMotion;
+			if (AnimScriptInstance->ConsumeRootMotion(RootMotion) && GetWorld() && GetWorld()->IsGameWorld())
+				if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
+					if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+						Movement->AddRootMotion(RootMotion);
+		}
+	}
 
-	// 순서: 시간 진행 → 포즈 계산 → SetLocalPose(dirty) → 아래에서 스키닝. 같은 틱 안에서 끝나므로 한 프레임 늦지 않는다.
-	TickAnimation(DeltaTime);
-
-	if (!SkinningMatrices.IsEmpty() && bSkinningMatricesDirty)
+	if (NeedsSkinningUpdate())
 	{
 		UpdateSkinning();
+	}
+}
+
+void USkeletalMeshComponent::Serialize(FStructuredArchive::FRecord Record)
+{
+	Super::Serialize(Record);
+	FString AnimClassName = AnimClass ? AnimClass->Name : FString{};
+	if (auto Slot = Record.TryEnterField("AnimClassName", true))
+	{
+		Slot.GetValue() << AnimClassName;
+		if (Record.GetUnderlyingArchive().IsLoading())
+			SetAnimInstanceClass(AnimClassName.empty() ? nullptr : FindClass(AnimClassName));
+	}
+	FString GraphPath = AnimGraphPath;
+	if (auto Slot = Record.TryEnterField("AnimGraphPath", true))
+	{
+		Slot.GetValue() << GraphPath;
+		if (Record.GetUnderlyingArchive().IsLoading() && !GraphPath.empty()) SetAnimGraphPath(GraphPath);
+	}
+	FString SequencePath = AnimSequence ? AnimSequence->GetPath() : FString{};
+	if (auto Slot = Record.TryEnterField("AnimSequencePath", true))
+	{
+		Slot.GetValue() << SequencePath;
+		if (Record.GetUnderlyingArchive().IsLoading())
+			SetAnimationSequence(SequencePath.empty() ? nullptr : UAssetManager::LoadAnimSequence(SequencePath));
 	}
 }
 
@@ -61,6 +136,71 @@ void USkeletalMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkeletalMesh)
 {
 	Super::SetSkeletalMesh(InSkeletalMesh);
 	InitBoneTransforms();
+	if (AnimSequence && (!SkeletalMesh || AnimSequence->Skeleton != SkeletalMesh->Skeleton))
+		SetAnimationSequence(nullptr);
+	if (AnimScriptInstance)
+	{
+		AnimScriptInstance->InitializeAnimation();
+		if (UAnimSingleNodeInstance* SingleNode = Cast<UAnimSingleNodeInstance>(AnimScriptInstance))
+		{
+			if (SingleNode->SetAnimationAsset(AnimSequence) && AnimSequence) SingleNode->Play();
+		}
+	}
+}
+
+bool USkeletalMeshComponent::SetAnimInstanceClass(UClass* InAnimClass)
+{
+	if (InAnimClass && (!InAnimClass->IsChildOf(UAnimInstance::StaticClass()) || !InAnimClass->Constructor))
+		return false;
+	if (InAnimClass != UAnimGraphInstance::StaticClass()) AnimGraphPath.clear();
+	if (AnimClass == InAnimClass && (!InAnimClass || AnimScriptInstance)) return true;
+	UAnimInstance* NewInstance = InAnimClass ? NewObject<UAnimInstance>(this, InAnimClass) : nullptr;
+	if (InAnimClass && !NewInstance) return false;
+	delete AnimScriptInstance;
+	AnimClass = InAnimClass;
+	AnimScriptInstance = NewInstance;
+	if (AnimScriptInstance) AnimScriptInstance->InitializeAnimation();
+	if (UAnimSingleNodeInstance* SingleNode = Cast<UAnimSingleNodeInstance>(AnimScriptInstance))
+	{
+		if (SingleNode->SetAnimationAsset(AnimSequence) && AnimSequence) SingleNode->Play();
+	}
+	return true;
+}
+
+bool USkeletalMeshComponent::SetAnimGraphPath(const FString& InPath)
+{
+	if (!InPath.empty())
+	{
+		FAnimGraphAsset Graph;
+		FString Error;
+		if (!FAnimGraphAsset::Load(InPath, Graph, Error)) return false;
+		if (SkeletalMesh && SkeletalMesh->Skeleton && !Graph.SkeletonPath.empty() &&
+			Graph.SkeletonPath != SkeletalMesh->Skeleton->GetPath()) return false;
+	}
+	const FString PreviousPath = AnimGraphPath;
+	const bool bReuseInstance = AnimClass == UAnimGraphInstance::StaticClass() && AnimScriptInstance;
+	AnimGraphPath = InPath;
+	if (InPath.empty())
+	{
+		if (AnimClass == UAnimGraphInstance::StaticClass()) SetAnimInstanceClass(nullptr);
+		return true;
+	}
+	if (!SetAnimInstanceClass(UAnimGraphInstance::StaticClass())) { AnimGraphPath = PreviousPath; return false; }
+	if (bReuseInstance && AnimScriptInstance) AnimScriptInstance->InitializeAnimation();
+	return true;
+}
+
+bool USkeletalMeshComponent::SetAnimationSequence(UAnimSequence* InSequence)
+{
+	if (InSequence && (!SkeletalMesh || !SkeletalMesh->Skeleton ||
+		InSequence->Skeleton != SkeletalMesh->Skeleton || !InSequence->GetDataModel())) return false;
+	if (UAnimSingleNodeInstance* SingleNode = Cast<UAnimSingleNodeInstance>(AnimScriptInstance))
+	{
+		if (!SingleNode->SetAnimationAsset(InSequence)) return false;
+		if (InSequence) SingleNode->Play();
+	}
+	AnimSequence = InSequence;
+	return true;
 }
 
 void USkeletalMeshComponent::EnsureBoneState()
@@ -74,12 +214,14 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	SkinnedVertexBuffer.reset();
 	SkinnedLODs.Reset();
 	++PoseRevision;
+	SkinningMatricesBuffer.reset();
 	LocalBoneTransforms.Reset();
 	GlobalBoneTransforms.Reset();
 	SkinningMatrices.Reset();
 	SkinnedVertices.Reset();
 	bSkinningMatricesDirty = false;
 	bGlobalBoneTransformsOverridden = false;
+	AppliedMode = ESkinningMode::CPU;
 	if (!SkeletalMesh) return;
 	SkinnedLODs.SetNum(SkeletalMesh->AdditionalLODs.Num());
 
@@ -120,114 +262,6 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	UpdateSkinning();
 }
 
-void USkeletalMeshComponent::ResetAnimInstance()
-{
-	AnimInstance.reset();
-	SingleInstance = nullptr;
-	BlendInstance = nullptr;
-	AnimInstanceMesh = nullptr;
-	PushedBlendAlpha = std::numeric_limits<float>::quiet_NaN();
-}
-
-void USkeletalMeshComponent::TickAnimation(float DeltaTime)
-{
-	if (!AnimToPlay)
-	{
-		// 애니메이션을 껐으면 마지막 자세에 멈추지 않고 바인드 포즈로 돌린다. 켠 적이 없으면 아무것도 하지 않는다.
-		if (AnimInstance)
-		{
-			ResetAnimInstance();
-			if (SkeletalMesh)
-			{
-				SetLocalPose(SkeletalMesh->RefSkeleton.RefBonePose);
-			}
-		}
-		return;
-	}
-
-	EnsureBoneState();
-	if (!SkeletalMesh)
-	{
-		return;
-	}
-
-	// 애니메이션은 Skeleton에 맞춰 만들어진다. 지금은 포인터로 비교한다(부분 재임포트 뒤에는 옛 포인터가 남을 수 있다).
-	if (AnimToPlay->GetSkeleton() != SkeletalMesh->Skeleton)
-	{
-		HTR_LOG(Warning, "[Anim] {}: Skeleton does not match mesh {}; animation cleared",
-			AnimToPlay->GetPath(), SkeletalMesh->GetPath());
-		AnimToPlay = nullptr;
-		return;
-	}
-	if (AnimToBlend && AnimToBlend->GetSkeleton() != SkeletalMesh->Skeleton)
-	{
-		HTR_LOG(Warning, "[Anim] {}: Skeleton does not match mesh {}; blend animation cleared",
-			AnimToBlend->GetPath(), SkeletalMesh->GetPath());
-		AnimToBlend = nullptr;
-	}
-
-	// 인스턴스 종류가 달라졌으면(AnimToBlend를 넣거나 뺌) 새로 만든다. 변수는 새 인스턴스에서 처음부터 시작한다.
-	const bool bWantBlend = AnimToBlend != nullptr;
-	if (AnimInstance && (bWantBlend ? BlendInstance == nullptr : SingleInstance == nullptr))
-	{
-		ResetAnimInstance();
-	}
-	if (!AnimInstance)
-	{
-		if (bWantBlend)
-		{
-			BlendInstance = NewObject<UAnimTwoWayBlendInstance>(this, FName("AnimInstance"));
-			AnimInstance.reset(BlendInstance);
-		}
-		else
-		{
-			SingleInstance = NewObject<UAnimSingleNodeInstance>(this, FName("AnimInstance"));
-			AnimInstance.reset(SingleInstance);
-		}
-		AnimInstance->Initialize(this);
-	}
-
-	// 시퀀스나 메시가 바뀐 쪽만 다시 맞춘다. 트랙 연결표는 이때만 만든다.
-	const bool bMeshChanged = AnimInstanceMesh != SkeletalMesh;
-	AnimInstanceMesh = SkeletalMesh;
-	if (SingleInstance)
-	{
-		if (bMeshChanged || SingleInstance->GetAnimationAsset() != AnimToPlay)
-		{
-			SingleInstance->SetAnimationAsset(AnimToPlay);
-		}
-		// 재생 설정은 프로퍼티가 진실이다. 매 틱 넘겨 두면 Details에서 바꾼 값이 바로 반영된다.
-		SingleInstance->SetLooping(bLoopAnimation);
-		SingleInstance->SetPlayRate(AnimPlayRate);
-	}
-	else
-	{
-		if (bMeshChanged || BlendInstance->GetAnimationA() != AnimToPlay)
-		{
-			BlendInstance->SetAnimationA(AnimToPlay);
-		}
-		if (bMeshChanged || BlendInstance->GetAnimationB() != AnimToBlend)
-		{
-			BlendInstance->SetAnimationB(AnimToBlend);
-		}
-		BlendInstance->SetLooping(bLoopAnimation);
-		BlendInstance->SetPlayRate(AnimPlayRate);
-
-		// 알파는 프로퍼티 값이 바뀐 틱에만 인스턴스 변수로 넘긴다. 매 틱 넘기면 게임플레이가 쓴 값을 덮어쓴다.
-		if (BlendAlpha != PushedBlendAlpha)
-		{
-			BlendInstance->SetFloat(UAnimTwoWayBlendInstance::BlendAlphaName(), BlendAlpha);
-			PushedBlendAlpha = BlendAlpha;
-		}
-	}
-
-	AnimInstance->UpdateAnimation(DeltaTime);
-	if (AnimInstance->EvaluateAnimation(AnimPose))
-	{
-		SetLocalPose(AnimPose);
-	}
-}
-
 void USkeletalMeshComponent::SetBoneTransform(int32 BoneIndex, const FMatrix& LocalTransform)
 {
 	if (BoneIndex < 0 || BoneIndex >= LocalBoneTransforms.Num())
@@ -258,22 +292,13 @@ void USkeletalMeshComponent::SetGlobalBoneTransforms(const TArray<FMatrix>& InGl
 	bSkinningMatricesDirty = true;
 }
 
-bool USkeletalMeshComponent::SetLocalPose(const TArray<FBoneTransform>& Pose)
+void USkeletalMeshComponent::SetBoneWeightHeatmap(bool bEnable, int32 BoneIndex)
 {
-	EnsureBoneState();
-	if (!SkeletalMesh || Pose.IsEmpty() || Pose.Num() != LocalBoneTransforms.Num())
-	{
-		return false;
-	}
-	// 메시의 LocalBindPose도 FBoneTransform::ToMatrix로 만든 값이라 같은 규약이다.
-	for (int32 Index = 0; Index < Pose.Num(); ++Index)
-	{
-		LocalBoneTransforms[Index] = Pose[Index].ToMatrix();
-	}
-	// 로컬을 통째로 바꿨으므로 글로벌 직접 지정(리타게팅)은 해제하고, 글로벌은 UpdateBoneMatrices가 다시 계산한다.
-	bGlobalBoneTransformsOverridden = false;
-	bSkinningMatricesDirty = true;
-	return true;
+	if (bBoneWeightHeatmap == bEnable && HeatmapBone == BoneIndex) return;
+	// 꺼진 채로 본만 바뀌면 색이 그대로이므로 다시 스키닝하지 않는다.
+	if (bBoneWeightHeatmap || bEnable) bVertexColorsDirty = true;
+	bBoneWeightHeatmap = bEnable;
+	HeatmapBone = BoneIndex;
 }
 
 void USkeletalMeshComponent::UpdateBoneMatrices()
@@ -282,6 +307,10 @@ void USkeletalMeshComponent::UpdateBoneMatrices()
 	const auto& Bones = SkeletalMesh->MeshData.Bones;
 	int32 BoneCount = Bones.Num();
 	if (BoneCount == 0) return;
+
+	FSkinningFrameStats& Stats = FSkinningStats::Pending();
+	FSkinningCpuScope Timer(Stats.BoneMatrixCycles);
+	Stats.BoneMatrices += static_cast<uint64>(BoneCount);
 
 	for (int32 i = 0; i < BoneCount; ++i)
 	{
@@ -310,7 +339,32 @@ void USkeletalMeshComponent::UpdateSkinning()
 	if (!SkeletalMesh || SkinningMatrices.IsEmpty()) return;
 	++PoseRevision;
 	if (bSkinningMatricesDirty) UpdateBoneMatrices();
+	if (GetDesiredSkinningMode() == ESkinningMode::GPU)
+	{
+		if (!SkinningMatricesBuffer)
+			SkinningMatricesBuffer = RenderCommand::CreateDynamicStructuredBuffer(
+				static_cast<uint32>(SkinningMatrices.Num()), sizeof(FMatrix));
+		if (SkinningMatricesBuffer && SkinningMatricesBuffer->GetBuffer() && SkinningMatricesBuffer->GetSRV())
+		{
+			const uint32 MatrixBytes = static_cast<uint32>(SkinningMatrices.Num() * sizeof(FMatrix));
+			FSkinningFrameStats& Stats = FSkinningStats::Pending();
+			{
+				FSkinningCpuScope Timer(Stats.UploadCycles);
+				RenderCommand::UpdateBufferData(SkinningMatricesBuffer.get(), SkinningMatrices.GetData(), MatrixBytes);
+			}
+			++Stats.GpuSkinnedComponents;
+			Stats.MatrixUploadBytes += MatrixBytes;
+			if (AppliedMode != ESkinningMode::GPU)
+			{
+				SkinnedBounds = SkeletalMesh->MeshData.AABB;
+				MarkTransformDirty();
+			}
+			AppliedMode = ESkinningMode::GPU;
+			return;
+		}
+	}
 	PerformCPUSkinning();
+	AppliedMode = ESkinningMode::CPU;
 }
 
 void USkeletalMeshComponent::PerformCPUSkinning()
@@ -329,6 +383,11 @@ void USkeletalMeshComponent::PerformCPUSkinning()
 
 	FVector BoundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
 	FVector BoundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+	FSkinningFrameStats& Stats = FSkinningStats::Pending();
+	++Stats.CpuSkinnedComponents;
+	Stats.CpuSkinnedVertices += static_cast<uint64>(VertexCount);
+	std::optional<FSkinningCpuScope> SkinTimer(std::in_place, Stats.CpuSkinCycles);
 
 	for (int32 v = 0; v < VertexCount; ++v)
 	{
@@ -366,7 +425,7 @@ void USkeletalMeshComponent::PerformCPUSkinning()
 		TransformDirection(B, Src.Tangent.X, Src.Tangent.Y, Src.Tangent.Z, Dst.Tangent.V);
 		Dst.Tangent.W = Src.Tangent.W;
 		Dst.UV = Src.UV;
-		Dst.Color = Src.Color;
+		Dst.Color = bBoneWeightHeatmap ? WeightToHeatColor(GetBoneWeight(Src, HeatmapBone)) : Src.Color;
 
 		BoundsMin.X = std::min(BoundsMin.X, Dst.Position.X);
 		BoundsMin.Y = std::min(BoundsMin.Y, Dst.Position.Y);
@@ -376,24 +435,60 @@ void USkeletalMeshComponent::PerformCPUSkinning()
 		BoundsMax.Z = std::max(BoundsMax.Z, Dst.Position.Z);
 	}
 
+	SkinTimer.reset();   // 정점 변환까지만 CPU Skin 시간에 넣는다
+
 	SkinnedBounds.Min = BoundsMin;
 	SkinnedBounds.Max = BoundsMax;
 	MarkTransformDirty();
 
 	if (SkinnedVertexBuffer)
 	{
+		FSkinningCpuScope UploadTimer(Stats.UploadCycles);
 		RenderCommand::UpdateBufferData(
 			SkinnedVertexBuffer.get(),
 			SkinnedVertices.GetData(),
 			VertexCount * sizeof(FVertex)
 		);
+		Stats.VertexUploadBytes += static_cast<uint64>(VertexCount) * sizeof(FVertex);
 	}
+
+	bVertexColorsDirty = false;
+	AppliedMode = ESkinningMode::CPU;
+}
+
+void USkeletalMeshComponent::EndSkinningStatsFrame()
+{
+	FSkinningStats::NotifyModeChanged(SkinningMode);
+	const bool bCollecting = FSkinningStats::IsCollecting();
+	if (!bCollecting && !bForceSkinningUpdate)
+	{
+		FSkinningStats::EndFrame({});
+		return;
+	}
+
+	// 에셋 미리보기 창의 컴포넌트도 실제로 스키닝하므로 함께 센다.
+	FSkinningFrameStats Counts{};
+	for (TObjectIterator<USkeletalMeshComponent> It; It; ++It)
+	{
+		USkeletalMeshComponent* Component = *It;
+		if (!Component || !Component->IsRegistered() || !Component->SkeletalMesh) continue;
+		// 다음 프레임의 Tick/렌더 수집이 스키닝을 다시 하도록 더럽혀 둔다 (프레임당 한 번).
+		if (bForceSkinningUpdate && !Component->SkinningMatrices.IsEmpty())
+			Component->bSkinningMatricesDirty = true;
+		if (!bCollecting) continue;
+		++Counts.TotalComponents;
+		if (Component->AppliedMode == ESkinningMode::GPU) ++Counts.GpuModeComponents;
+		else ++Counts.CpuModeComponents;
+		Counts.TotalVertices += static_cast<uint64>(Component->SkeletalMesh->MeshData.SkinnedVertices.Num());
+		Counts.TotalBones += static_cast<uint64>(Component->SkeletalMesh->MeshData.Bones.Num());
+	}
+	FSkinningStats::EndFrame(bCollecting ? Counts : FSkinningFrameStats{});
 }
 
 FBox USkeletalMeshComponent::CalcLocalBounds() const
 {
 	const_cast<USkeletalMeshComponent*>(this)->EnsureBoneState();
-	if (SkeletalMesh && !SkinningMatrices.IsEmpty() && bSkinningMatricesDirty)
+	if (SkeletalMesh && NeedsSkinningUpdate())
 		const_cast<USkeletalMeshComponent*>(this)->UpdateSkinning();
 	return SkeletalMesh ? SkinnedBounds : Super::CalcLocalBounds();
 }
@@ -411,6 +506,9 @@ FVertexBuffer* USkeletalMeshComponent::GetSkinnedVertexBuffer(uint32 LOD)
 	if (Cached.Buffer && Cached.Revision == PoseRevision) return Cached.Buffer.get();
 	const auto& Data = SkeletalMesh->GetMeshData(LOD);
 	Cached.Vertices.SetNum(Data.SkinnedVertices.Num());
+	FSkinningFrameStats& Stats = FSkinningStats::Pending();
+	Stats.CpuSkinnedVertices += static_cast<uint64>(Data.SkinnedVertices.Num());
+	std::optional<FSkinningCpuScope> SkinTimer(std::in_place, Stats.CpuSkinCycles);
 	for (int32 V = 0; V < Data.SkinnedVertices.Num(); ++V)
 	{
 		const auto& Src = Data.SkinnedVertices[V]; auto& Dst = Cached.Vertices[V];
@@ -426,10 +524,18 @@ FVertexBuffer* USkeletalMeshComponent::GetSkinnedVertexBuffer(uint32 LOD)
 		TransformPoint(Blend, Src.Position, Dst.Position);
 		TransformDirection(Blend, Src.Normal.X, Src.Normal.Y, Src.Normal.Z, Dst.Normal.V);
 		TransformDirection(Blend, Src.Tangent.X, Src.Tangent.Y, Src.Tangent.Z, Dst.Tangent.V);
-		Dst.Tangent.W = Src.Tangent.W; Dst.Color = Src.Color; Dst.UV = Src.UV;
+		Dst.Tangent.W = Src.Tangent.W; Dst.UV = Src.UV;
+		Dst.Color = bBoneWeightHeatmap ? WeightToHeatColor(GetBoneWeight(Src, HeatmapBone)) : Src.Color;
 	}
+	SkinTimer.reset();
 	if (!Cached.Buffer) Cached.Buffer = RenderCommand::CreateDynamicVertexBuffer(static_cast<uint32>(Cached.Vertices.Num() * sizeof(FVertex)), sizeof(FVertex));
-	if (Cached.Buffer) RenderCommand::UpdateBufferData(Cached.Buffer.get(), Cached.Vertices.GetData(), static_cast<uint32>(Cached.Vertices.Num() * sizeof(FVertex)));
+	if (Cached.Buffer)
+	{
+		const uint32 VertexBytes = static_cast<uint32>(Cached.Vertices.Num() * sizeof(FVertex));
+		FSkinningCpuScope UploadTimer(Stats.UploadCycles);
+		RenderCommand::UpdateBufferData(Cached.Buffer.get(), Cached.Vertices.GetData(), VertexBytes);
+		Stats.VertexUploadBytes += VertexBytes;
+	}
 	Cached.Revision = PoseRevision;
 	return Cached.Buffer.get();
 }
@@ -438,24 +544,27 @@ void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, cons
 {
 	EnsureBoneState();
 	if (!SkeletalMesh) return;
-	if (!SkinningMatrices.IsEmpty() && bSkinningMatricesDirty) UpdateSkinning();
-	if (!SkinnedVertexBuffer) return;
+	if (NeedsSkinningUpdate()) UpdateSkinning();
+	if (!SkinnedVertexBuffer && AppliedMode == ESkinningMode::CPU) return;
 	FMeshRenderState State;
 	State.LODCount = static_cast<uint8>(SkeletalMesh->GetLODCount());
 	for (int I = 0; I < 3; ++I) State.LODThresholdSq[I] = SkeletalMesh->ScreenThresholds[I] * SkeletalMesh->ScreenThresholds[I];
 	const FLODSelectionInput Input{ SkeletalMesh->GetLocalLODSphere().Transform(GetWorldMatrix()), &State };
 	const uint32 LOD = ViewContext.bOrthographic ? SelectSphereLOD<true>(Input, ViewContext) : SelectSphereLOD<false>(Input, ViewContext);
 	const FSkeletalMeshData& MeshData = SkeletalMesh->GetMeshData(LOD);
+	// 히트맵은 텍스처 없는 흰 머티리얼로 모든 섹션을 덮는다. 그래야 UberLit이 정점 색(히트 색)을 표면 색으로 쓴다.
+	UMaterial* HeatmapMaterial = bBoneWeightHeatmap ? UAssetManager::GetAssetByPath<UMaterial>("BoneWeightHeatmapMaterial") : nullptr;
 
 	for (const FSkeletalMeshSection& Section : MeshData.Sections)
 	{
-		UMaterial* SectionMaterial = GetMaterial(static_cast<int32>(Section.MaterialSlotIndex));
+		UMaterial* SectionMaterial = HeatmapMaterial ? HeatmapMaterial : GetMaterial(static_cast<int32>(Section.MaterialSlotIndex));
 		if (!SectionMaterial) continue;
 
 		FRenderPacket Packet;
 		Packet.SkeletalMesh = SkeletalMesh;
-		Packet.SkeletalVertexBuffer = GetSkinnedVertexBuffer(LOD);
+		Packet.SkeletalVertexBuffer = AppliedMode == ESkinningMode::CPU ? GetSkinnedVertexBuffer(LOD) : nullptr;
 		Packet.LODIndex = static_cast<uint8>(LOD);
+		Packet.SkinningMatricesBuffer = AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr;
 		Packet.Model = RenderQueue.StoreWorldMatrix(GetWorldMatrix());
 		Packet.StartIndex = Section.StartIndex;
 		Packet.IndexCount = Section.IndexCount;

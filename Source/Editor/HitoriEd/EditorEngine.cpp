@@ -183,20 +183,34 @@ bool UEditorEngine::Init()
 	});
 	EditorUI->SetFbxImportBlockedQuery([this]() { return IsPlaying(); });
 	AssetEditorPanel = EditorUI->AddEditorPanel<FAssetEditorPanel>();
-	ContentDrawerPanel->SetImportFbxCallback([this](const FString& Path, bool Reimport)
+	// 다시 가져오기의 옵션은 바이너리 헤더에서 읽는다. Target Skeleton은 헤더에 없으므로,
+	// 다른 FBX의 Skeleton에 맞춘 AnimSequence면 그 Skeleton을 대상으로 다시 지정한다(메시 없는 FBX는 대상 없이 임포트되지 않는다).
+	const auto ReadReimportOptions = [](const FString& Path, FFbxAssetData& Data) -> bool
+	{
+		FString Error;
+		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return false; }
+		if (Data.Type != EFbxAssetType::AnimSequence) return true;
+		FFbxAssetData Full, SkeletonHeader; std::filesystem::path SkeletonFile;
+		if (FFbxAssetBake::ReadBaked(Path, Full, Error) && FbxPath::ResolveKey(Full.SkeletonKey, SkeletonFile, Error) &&
+			FFbxAssetBake::ReadHeader(FbxPath::ToString(SkeletonFile), SkeletonHeader, Error) &&
+			SkeletonHeader.SourcePath != Data.SourcePath)
+			Data.Options.TargetSkeletonKey = Full.SkeletonKey;
+		return true;
+	};
+	ContentDrawerPanel->SetImportFbxCallback([this, ReadReimportOptions](const FString& Path, bool Reimport)
 	{
 		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
 		if (!Reimport) { EditorUI->QueueFbxImports({ Path }); return; }
-		FFbxAssetData Data; FString Error;
-		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
+		FFbxAssetData Data;
+		if (!ReadReimportOptions(Path, Data)) return;
 		EditorUI->QueueFbxReimport(FbxPath::ToString(FbxPath::SourceFile(Data.ActualSourcePath)),
 			FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options, Data.SourcePath);
 	});
-	ContentDrawerPanel->SetReimportFromFileCallback([this](const FString& Path)
+	ContentDrawerPanel->SetReimportFromFileCallback([this, ReadReimportOptions](const FString& Path)
 	{
 		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
-		FFbxAssetData Data; FString Error;
-		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
+		FFbxAssetData Data;
+		if (!ReadReimportOptions(Path, Data)) return;
 		EditorUI->BrowseFbxReimportFile(FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options, Data.SourcePath);
 	});
 	ContentDrawerPanel->SetImportFbxFilesCallback([this](const FString& OutputDirectory)
@@ -253,6 +267,16 @@ bool UEditorEngine::Init()
 
 	SkeletalMeshViewerPanel = EditorUI->AddEditorPanel<FSkeletalMeshViewerPanel>();
 	ContentDrawerPanel->SetOpenSkeletalMeshCallback([this](const FString& Path) { SkeletalMeshViewerPanel->OpenFBX(Path); });
+	AnimSequenceViewerPanel = EditorUI->AddEditorPanel<FAnimSequenceViewerPanel>();
+	ContentDrawerPanel->SetOpenAnimSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimGraphEditorPanel = EditorUI->AddEditorPanel<FAnimGraphEditorPanel>();
+	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->NewAsset(Path); });
+	ContentDrawerPanel->SetOpenAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->OpenAsset(Path); });
+	BlendSpaceEditorPanel = EditorUI->AddEditorPanel<FBlendSpaceEditorPanel>();
+	AnimGraphEditorPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
+	BlendSpaceEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	ContentDrawerPanel->SetCreateBlendSpaceCallback([this](const FString& Path, bool b2D) { BlendSpaceEditorPanel->NewAsset(Path, b2D); });
+	ContentDrawerPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
 
 	Outline = MakeUnique<FOutline>();
 
@@ -555,7 +579,7 @@ void UEditorEngine::BeginFrame(const float DeltaTime)
 			EditorCommandUI::ProcessShortcuts({ &Save, &Play, &Pause, &Resume, &Copy, &Paste, &Duplicate });
 
 		// F: 선택한 액터로 포커스 (UE). 우클릭 비행 중이거나 글자 입력 중이면 받지 않는다.
-		if (!ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
+		if ((!IsPlaying() || IsSimulatingInEditor()) && !ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
 			FInputSystem::IsKeyPressed(EKeyCode::F) && !FInputSystem::IsKeyDown(EKeyCode::Control))
 		{
 			FocusViewportOnActor(OutlinerPanel ? OutlinerPanel->GetSelectedActor() : nullptr);
@@ -823,6 +847,10 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 // 월드를 한 번 Tick·Capture한 뒤 에디터와 피킹을 갱신한다.
 void UEditorEngine::TickWorldAndEditor(const float DeltaTime)
 {
+	const FEditorSettings& RenderSettings = SettingsPanel->GetSettings();
+	USkeletalMeshComponent::SetSkinningMode(RenderSettings.RenderingPath == ERenderingPath::Forward
+		? RenderSettings.SkinningMode : ESkinningMode::CPU);
+
 	// 게임 입력 처리
 	if (PlayWorld)
 	{
@@ -1011,6 +1039,9 @@ void UEditorEngine::RenderViewports()
 		}
 	}
 	AssetEditorPanel->RenderPreview(this);
+	AnimSequenceViewerPanel->RenderPreview(this);
+	AnimGraphEditorPanel->RenderPreview(this);
+	BlendSpaceEditorPanel->RenderPreview(this);
 }
 
 void UEditorEngine::UpdatePIEViewCamera()
@@ -1166,7 +1197,7 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		// SIE에서는 에디터 카메라를 움직이므로 커서를 놓는다. 돌아오면 UpdatePIEMouseCapture가 다시 잠근다.
 		if (GameViewport.IsSIEMode())
 			FMouseCapture::Release();
-		OnActiveWorldChanged();
+		// SIE 전환은 월드를 바꾸지 않으므로 현재 선택과 기즈모를 유지한다(dev/kim).
 	};
 	ProcessSIERequest();
 
@@ -1184,7 +1215,7 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		GameViewport.InputKey(nullptr, static_cast<int32>(EKeyCode::F8), true);
 	ProcessSIERequest();
 	constexpr EKeyCode Keys[] = { EKeyCode::W, EKeyCode::A, EKeyCode::S, EKeyCode::D,
-		EKeyCode::Q, EKeyCode::E, EKeyCode::Space, EKeyCode::Shift };
+		EKeyCode::Q, EKeyCode::E, EKeyCode::F, EKeyCode::Space, EKeyCode::Shift };
 	for (EKeyCode Key : Keys)
 	{
 		if (FInputSystem::IsKeyPressed(Key))
@@ -1258,6 +1289,7 @@ void UEditorEngine::EndFrame()
 	SettingsPanel->CaptureViewportSettings();
 	// 프로파일러 반영
 	FStatRegistry::EndFrame();
+	USkeletalMeshComponent::EndSkinningStatsFrame();
 }
 
 FWorldContext& UEditorEngine::GetEditorWorldContext()
@@ -1299,6 +1331,20 @@ void UEditorEngine::UpdateGizmoAndPicking()
 	FEditorViewportClient* ViewClient = ViewportsPanel->GetViewportClient(ViewIndex);
 	if (!ViewClient || !ViewClient->IsActive())
 		return;
+	if (PlayWorld && IsSimulatingInEditor() && !IsPIEInWindow() && ViewIndex == PIEViewIndex)
+	{
+		if (FWorldContext* Context = GetPIEWorldContext())
+			if (Context->GameViewport)
+				if (UCameraComponent* Camera = Context->GameViewport->GetCameraComponent())
+				{
+					ViewClient->SetViewLocation(Camera->GetWorldLocation());
+					ViewClient->SetViewRotation(Camera->GetWorldRotation());
+					ViewClient->SetViewFOV(Camera->GetFieldOfView());
+					ViewClient->SetClipPlanes(Camera->GetNearZ(), Camera->GetFarZ());
+					ViewClient->SetOrthoWidth(Camera->GetOrthoWidth());
+					ViewClient->SetIsPerspective(!Camera->GetIsOrthogonal());
+				}
+	}
 
 	const FVector2 LocalMousePosition = ViewportsPanel->GetLocalMousePosition();
 	ViewClient->UpdateGizmoAndPicking(Gizmo.get(), LocalMousePosition, [this](AActor* SelectedActor) {
@@ -1749,6 +1795,9 @@ void UEditorEngine::PreExit()
 	if (SequencerPanel) SequencerPanel->Shutdown();
 	if (PoseRetargetPanel) PoseRetargetPanel->Release();
 	if (SkeletalMeshViewerPanel) SkeletalMeshViewerPanel->Release();
+	if (AnimSequenceViewerPanel) AnimSequenceViewerPanel->Release();
+	if (AnimGraphEditorPanel) AnimGraphEditorPanel->Release();
+	if (BlendSpaceEditorPanel) BlendSpaceEditorPanel->Release();
 	if (ContentDrawerPanel) ContentDrawerPanel->Release();
 	if (AssetEditorPanel) AssetEditorPanel->Release();
 	EditorWorld->ClearWorld();

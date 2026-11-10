@@ -3,6 +3,8 @@
 #include "PoseRetargetPanel.h"
 #include "StaticPoseRetargeter.h"
 #include "Asset/AssetManager.h"
+#include "Asset/AnimSequence.h"
+#include "Asset/Skeleton.h"
 #include "Asset/FbxImporter/FbxAssetBake.h"
 #include "Asset/FbxImporter/FbxPath.h"
 #include "Engine/World.h"
@@ -155,7 +157,14 @@ void FPoseRetargetPanel::SetRig(int32 Index, USkeletalMesh* Mesh)
 		{
 			for (int32& Bone : TargetToSource) Bone = -1;
 			if (Components[2]) Components[2]->InitBoneTransforms(); // 다시 target fbx로 초기화
+			AnimationMessage.clear();
+			SelectedAnimation = -1;
+			LastAnimationFrame = -1;
+			AnimationTime = 0.0f;
+			bAnimationPlaying = false;
 			bResultPoseApplied = false;
+			SelectedSequence = nullptr;
+			RootCorrections.Reset();
 		}
 		SourceRig = Mesh;
 	}
@@ -182,6 +191,93 @@ void FPoseRetargetPanel::Tick(float DeltaTime)
 	if (!IsOpen()) return;
 	for (int32 Index = 0; Index < 3; ++Index)
 		if (PreviewWorlds[Index]) PreviewWorlds[Index]->Tick(DeltaTime);
+	if (bAnimationPlaying && SourceRig && SelectedAnimation >= 0)
+	{
+		const float Duration = SelectedSequence && SelectedSequence->GetDataModel() ? SelectedSequence->GetDataModel()->PlayLength : 0.0f;
+		if (Duration > 0.0f)
+		{
+			AnimationTime = std::fmod(AnimationTime + std::max(0.0f, DeltaTime), Duration);
+			ApplyAnimationFrame();
+		}
+	}
+}
+
+void FPoseRetargetPanel::SelectAnimation(int32 ClipIndex)
+{
+	bAnimationPlaying = false;
+	AnimationTime = 0.0f;
+	LastAnimationFrame = -1;
+	SelectedAnimation = -1;
+	SelectedSequence = nullptr;
+	RootCorrections.Reset();
+	if (!SourceRig || !Components[0]) return;
+	if (ClipIndex < 0)
+	{
+		Components[0]->InitBoneTransforms();
+		if (bResultPoseApplied && Components[2])
+			ApplyStaticRigPose(*SourceRig, *Components[2], TargetToSource, TargetAimChild, SourceYaw, Message);
+		return;
+	}
+	const TArray<UAnimSequence*>* Sequences = UAssetManager::GetFbxAnimSequences(SourceRig->GetPath());
+	if (!Sequences || ClipIndex >= Sequences->Num()) return;
+	UAnimSequence* Sequence = (*Sequences)[ClipIndex];
+	if (!Sequence || !Sequence->Skeleton || !Sequence->GetDataModel()) return;
+	const TArray<FBoneInfo>& Bones = SourceRig->MeshData.Bones;
+	const FReferenceSkeleton& Reference = Sequence->Skeleton->RefSkeleton;
+	TArray<FMatrix> FirstFrame;
+	if (Reference.GetNum() != Bones.Num() || !Sequence->EvaluateGlobalPose(0.0f, FirstFrame) || FirstFrame.Num() != Bones.Num())
+	{
+		Components[0]->InitBoneTransforms();
+		AnimationMessage = "Animation skeleton does not match Source FBX.";
+		return;
+	}
+	for (int32 Index = 0; Index < Bones.Num(); ++Index)
+		if (Reference.RefBoneInfo[Index].Name != Bones[Index].Name || Reference.RefBoneInfo[Index].ParentIndex != Bones[Index].ParentIndex)
+		{
+			Components[0]->InitBoneTransforms();
+			AnimationMessage = "Animation skeleton does not match Source FBX.";
+			return;
+		}
+	RootCorrections.SetNum(Bones.Num());
+	for (int32 Index = 0; Index < Bones.Num(); ++Index)
+	{
+		const int32 Parent = Bones[Index].ParentIndex;
+		RootCorrections[Index] = Parent < 0 ?
+			FirstFrame[Index].Inverse() * Bones[Index].GlobalBindPose : RootCorrections[Parent];
+	}
+	SelectedSequence = Sequence;
+	SelectedAnimation = ClipIndex;
+	AnimationMessage.clear();
+	ApplyAnimationFrame();
+}
+
+void FPoseRetargetPanel::ApplyAnimationFrame()
+{
+	if (!SourceRig || !Components[0] || SelectedAnimation < 0) return;
+	if (!SelectedSequence || !SelectedSequence->GetDataModel()) return;
+	const UAnimDataModel* Model = SelectedSequence->GetDataModel();
+	const float FrameRate = Model->FrameRate.AsDecimal();
+	if (Model->NumberOfKeys <= 0 || FrameRate <= 0.0f) return;
+	const int32 FrameIndex = AnimationTime >= Model->PlayLength ? Model->NumberOfKeys - 1 :
+		std::clamp(static_cast<int32>(AnimationTime * FrameRate), 0, Model->NumberOfKeys - 1);
+	if (FrameIndex == LastAnimationFrame) return;
+	TArray<FMatrix> GlobalPose;
+	if (!SelectedSequence->EvaluateGlobalPose(FrameIndex / FrameRate, GlobalPose) || GlobalPose.Num() != RootCorrections.Num()) return;
+	for (int32 BoneIndex = 0; BoneIndex < GlobalPose.Num(); ++BoneIndex)
+		GlobalPose[BoneIndex] = GlobalPose[BoneIndex] * RootCorrections[BoneIndex];
+	Components[0]->SetGlobalBoneTransforms(GlobalPose);
+	Components[0]->UpdateSkinning();
+	if (bResultPoseApplied && Components[2] && TargetMesh)
+	{
+		FString Error;
+		if (!ApplyAnimatedRigPose(*SourceRig, Components[0]->GetGlobalBoneTransforms(), *Components[2],
+			TargetToSource, TargetAimChild, SourceYaw, Error))
+		{
+			Message = Error;
+			bResultPoseApplied = false;
+		}
+	}
+	LastAnimationFrame = FrameIndex;
 }
 
 void FPoseRetargetPanel::DrawRigPicker(int32 Index)
@@ -290,6 +386,8 @@ void FPoseRetargetPanel::DrawMapping()
 					Used.insert(Candidate);
 				}
 			}
+		LastAnimationFrame = -1;
+		if (SelectedAnimation >= 0 && bResultPoseApplied) ApplyAnimationFrame();
 	}
 	float TargetColumnX = EditorUIScale::Px(220.0f);
 	float SourceWidth = EditorUIScale::Px(200.0f);
@@ -350,12 +448,20 @@ void FPoseRetargetPanel::DrawMapping()
 	}
 	ImGui::EndChild();
 	const char* YawLabels[] = { "0 degrees", "90 degrees", "180 degrees", "270 degrees" };
-	ImGui::Combo("Source forward yaw", &SourceYaw, YawLabels, 4);
+	if (ImGui::Combo("Source forward yaw", &SourceYaw, YawLabels, 4))
+	{
+		LastAnimationFrame = -1;
+		if (SelectedAnimation >= 0) ApplyAnimationFrame();
+	}
 	if (ImGui::Button("Apply source rest pose"))
 	{
 		bResultPoseApplied = ApplyStaticRigPose(*SourceRig, *Components[2], TargetToSource, TargetAimChild, SourceYaw, Message); // 실제로 맵핑된 정보로 target mesh를 source mesh pose 로 적용
 		if (bResultPoseApplied)
+		{
 			Message = "Source rest pose applied to the target mesh.";
+			LastAnimationFrame = -1;
+			if (SelectedAnimation >= 0) ApplyAnimationFrame();
+		}
 	}
 	ImGui::SameLine();
 	if (ImGui::Button("Reset target pose"))
@@ -459,6 +565,57 @@ void FPoseRetargetPanel::OnRender()
 	}
 	DrawRigPicker(0);
 	DrawRigPicker(1);
+	if (SourceRig)
+	{
+		if (ImGui::Button("Refresh source animations"))
+		{
+			SelectAnimation(-1);
+			const FString Path = (std::filesystem::path("Assets") / SourceRig->GetPath()).generic_string();
+			const TArray<UAnimSequence*>* Sequences = SourceRig->Skeleton ?
+				UAssetManager::LoadFbxAnimSequences(Path, *SourceRig->Skeleton) : nullptr;
+			AnimationMessage = !Sequences ? "No skeleton for source rig." :
+				Sequences->IsEmpty() ? "No AnimSequence uses this skeleton. Import animations with Target Skeleton." : "Animations listed.";
+		}
+		if (const TArray<UAnimSequence*>* Sequences = UAssetManager::GetFbxAnimSequences(SourceRig->GetPath()))
+		{
+			ImGui::SameLine();
+			ImGui::Text("%d clips", Sequences->Num());
+			if (!Sequences->IsEmpty())
+			{
+				// 테이크 이름은 모두 "Unreal Take"처럼 같을 수 있어 파일 이름(AS_...)으로 표시한다.
+				const FString CurrentLabel = SelectedAnimation >= 0 && SelectedAnimation < Sequences->Num()
+					? FbxPath::ToString(FbxPath::FromString((*Sequences)[SelectedAnimation]->GetPath()).stem()) : FString("Select animation");
+				const char* Current = CurrentLabel.c_str();
+				ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 150.0f));
+				if (ImGui::BeginCombo("Source animation", Current))
+				{
+					if (ImGui::Selectable("None", SelectedAnimation < 0)) SelectAnimation(-1);
+					for (int32 ClipIndex = 0; ClipIndex < Sequences->Num(); ++ClipIndex)
+					{
+						ImGui::PushID(ClipIndex);
+						if (ImGui::Selectable(FbxPath::ToString(FbxPath::FromString((*Sequences)[ClipIndex]->GetPath()).stem()).c_str(), SelectedAnimation == ClipIndex))
+							SelectAnimation(ClipIndex);
+						ImGui::PopID();
+					}
+					ImGui::EndCombo();
+				}
+				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Current);
+				if (SelectedAnimation >= 0 && SelectedAnimation < Sequences->Num())
+				{
+					const UAnimDataModel* Model = (*Sequences)[SelectedAnimation]->GetDataModel();
+					if (ImGui::Button(bAnimationPlaying ? "Pause" : "Play")) bAnimationPlaying = !bAnimationPlaying;
+					ImGui::SameLine();
+					ImGui::Text("%d frames, %d bones", Model->NumberOfKeys, Model->BoneAnimationTracks.Num());
+					if (ImGui::SliderFloat("Time", &AnimationTime, 0.0f, Model->PlayLength, "%.2f s"))
+					{
+						LastAnimationFrame = -1;
+						ApplyAnimationFrame();
+					}
+				}
+			}
+		}
+		if (!AnimationMessage.empty()) ImGui::TextWrapped("%s", AnimationMessage.c_str());
+	}
 	if (ImGui::Button("Refresh FBX list")) RefreshFbxFiles();
 	ImGui::Checkbox("Show bones", &bShowBones);
 	ImGui::SameLine();

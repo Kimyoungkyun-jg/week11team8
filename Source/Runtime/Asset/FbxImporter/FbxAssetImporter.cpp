@@ -572,7 +572,7 @@ public:
 	bool BuildRig(FRig& Rig);
 	bool MatchTargetSkeleton(FRig& Rig);
 	bool CookAnimations(const FRig& Rig);
-	bool CookAnimation(const FRig& Rig, FbxAnimStack* Stack);
+	bool CookAnimation(const FRig& Rig, FbxAnimStack* Stack, int StackIndex, int StackCount);
 	FString Material(FbxSurfaceMaterial* SourceMaterial);
 	FString Texture(FbxProperty Property);
 	FString OpacityTexture(FbxSurfaceMaterial* Material, const FString& DiffuseKey, const FString& OpacityKey, const FString& Identity, ESamplerState Sampler);
@@ -586,7 +586,7 @@ public:
 FString FImport::MakeKey(const char* Prefix, const FString& Label, const FString& Identity)
 {
 	// 이름은 소유 FBX 기준이다. Reimport From File도 기존 파일을 덮어쓴다.
-	const FString Base = FString(Prefix) + "_" + FbxPath::FileName(FbxPath::ToString(FbxPath::FromString(SourceKey).stem())) + "_" + FbxPath::FileName(Label);
+	const FString Base = FString(Prefix) + "_" + FbxPath::FileName(FbxPath::ToString(FbxPath::FromString(SourceKey).stem())) + (Label.empty() ? FString() : "_" + FbxPath::FileName(Label));
 	FString Candidate = FbxPath::ToString(Destination / FbxPath::FromString(Base + ".fbxbin"));
 	FString Key;
 	if (!FbxPath::GetAssetKey(Candidate, Key, Error, false))
@@ -920,7 +920,13 @@ FbxAMatrix FImport::Bind(FbxNode* Node)
 	}
 	if (!Found)
 	{
-		Result = Node->EvaluateGlobalTransform(FBXSDK_TIME_ZERO);
+		// BindPose에도 Cluster에도 없는 노드(웨이트 없는 _end 본 등)는 부모 바인드에 0초 로컬을 붙인다.
+		// 0초 글로벌을 그대로 쓰면 장면의 0초 자세가 바인드 자세와 다를 때 부모에서 떨어져 나간다.
+		FbxNode* Parent = Node->GetParent();
+		const FbxAMatrix Global = Node->EvaluateGlobalTransform(FBXSDK_TIME_ZERO);
+		Result = Parent && Parent != Scene->GetRootNode()
+			? Bind(Parent) * Parent->EvaluateGlobalTransform(FBXSDK_TIME_ZERO).Inverse() * Global
+			: Global;
 	}
 	BindCache.emplace(Node, Result);
 	return Result;
@@ -1073,6 +1079,14 @@ bool FImport::MatchTargetSkeleton(FRig& Rig)
 		Rig.TargetMask.clear();
 		return false;
 	}
+	const int32 Required = static_cast<int32>(std::ceil(Options.MinTargetBoneMatch * std::min(BoneCount, Target.GetNum())));
+	if (Matched < Required)
+	{
+		Warn("Only " + std::to_string(Matched) + " bones match the target skeleton (" + std::to_string(Required) + " required); rig '" +
+			FString(Rig.Root->GetName()) + "' is skipped");
+		Rig.TargetMask.clear();
+		return false;
+	}
 	if (WorstError > 0.05f)
 	{
 		Warn("Bone length differs from the target skeleton by " + std::to_string(static_cast<int>(WorstError * 100.0f)) + "% at '" + WorstBone + "'; check Uniform Scale");
@@ -1132,7 +1146,7 @@ bool FImport::CookAnimations(const FRig& Rig)
 	{
 		if (FbxAnimStack* Stack = Scene->GetSrcObject<FbxAnimStack>(S))
 		{
-			bResult = CookAnimation(Rig, Stack);
+			bResult = CookAnimation(Rig, Stack, S, Scene->GetSrcObjectCount<FbxAnimStack>());
 		}
 	}
 	if (Original)
@@ -1142,7 +1156,7 @@ bool FImport::CookAnimations(const FRig& Rig)
 	return bResult;
 }
 
-bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
+bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack, int StackIndex, int StackCount)
 {
 	const FString StackName = Stack->GetName();
 	// 길이는 애니메이터가 찍은 마지막 키가 아니라 스택의 시간 범위로 정한다. 범위가 없으면 씬 타임라인 범위를 쓴다.
@@ -1170,13 +1184,23 @@ bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
 	}
 
 	FFbxAnimationData Animation;
-	Animation.FrameRate = static_cast<float>(Rate);
+	// 런타임은 정수 비율로 프레임 레이트를 다룬다. 정수 fps는 n/1, 그 밖(29.97 등)은 1/1000 단위로 맞춘다.
+	if (std::abs(Rate - std::round(Rate)) < 1.e-4)
+	{
+		Animation.FrameRate = { static_cast<int32>(std::round(Rate)), 1 };
+	}
+	else
+	{
+		Animation.FrameRate = { static_cast<int32>(std::round(Rate * 1000.0)), 1000 };
+	}
+	Animation.Name = StackName;
+	Animation.SourceTakeIndex = StackIndex;
 	Animation.NumberOfKeys = static_cast<int32>(FrameCount) + 1;
 	Animation.Tracks.SetNum(BoneCount);
 	for (int32 Bone = 0; Bone < BoneCount; ++Bone)
 	{
 		auto& Track = Animation.Tracks[Bone];
-		Track.BoneName = FName(Rig.Reference.RefBoneInfo[Bone].Name);
+		Track.BoneName = Rig.Reference.RefBoneInfo[Bone].Name;
 		Track.InternalTrack.PosKeys.Reserve(Animation.NumberOfKeys);
 		Track.InternalTrack.RotKeys.Reserve(Animation.NumberOfKeys);
 		Track.InternalTrack.ScaleKeys.Reserve(Animation.NumberOfKeys);
@@ -1218,7 +1242,7 @@ bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
 	// Target Skeleton 모드: 대상에 없는 본의 트랙은 버린다. 위 계산은 부모 글로벌이 필요해 모든 본으로 했다.
 	if (!Rig.TargetMask.empty())
 	{
-		TArray<FBoneAnimationTrack> Kept;
+		TArray<FFbxBoneTrack> Kept;
 		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
 		{
 			if (Rig.TargetMask[Bone])
@@ -1247,7 +1271,8 @@ bool FImport::CookAnimation(const FRig& Rig, FbxAnimStack* Stack)
 		return true;
 	}
 
-	const FString Key = MakeKey("AS", StackName, Identity);
+	// 스택이 하나면 AS_<FBX 이름>, 여럿이면 AS_<FBX 이름>_<스택 이름>이다. JSON 애셋이 이 키를 참조하므로 규칙을 바꾸지 않는다.
+	const FString Key = MakeKey("AS", StackCount > 1 ? StackName : FString(), Identity);
 	if (Key.empty())
 	{
 		return false;

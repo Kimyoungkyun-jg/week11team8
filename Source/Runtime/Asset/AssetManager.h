@@ -4,6 +4,8 @@
 #include "UObject/Property.h"
 #include "Render/Renderer.h"
 #include "Asset/LOD/StaticMeshLODGenerator.h"
+#include "Asset/AnimSequence.h"
+#include "Asset/BlendSpace.h"
 
 #include <filesystem>
 #include <functional>
@@ -18,6 +20,9 @@ enum class EAssetType
 
 class UStaticMesh;
 class USkeletalMesh;
+class USkeleton;
+class UBlendSpace1D;
+class UBlendSpace2D;
 class USoundWave;
 
 namespace fs = std::filesystem;
@@ -47,6 +52,7 @@ public:
 	void CreateBillboardMaterial();
 	void CreateParticleMaterial();
 	void CreateEditorArrowMaterial();
+	void CreateBoneWeightHeatmapMaterial();
 
 	template <typename T>
 	static T* GetAssetByPath(const FString& InPath)
@@ -88,7 +94,19 @@ public:
 	UFont* LoadFontAtlas(const FString& JsonPath, const FString& AtlasTexturePath);
 	USoundWave* LoadSound(const FString& Path);
 	static UStaticMesh* LoadObjStaticMesh(const FString& Path);
+	static USkeleton* LoadSkeleton(const FString& AssetPath);
+	static UAnimSequence* LoadAnimSequence(const FString& AssetPath);
+	static bool SaveAnimSequence(const UAnimSequence& Sequence);
+	static UBlendSpace* LoadBlendSpace(const FString& AssetPath);
+	static bool SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& BlendSpace);
+	static bool SaveBlendSpace2D(const FString& AssetPath, UBlendSpace2D& BlendSpace);
+	static void GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArray<UAnimSequence*>& OutSequences);
+	static void GetAllAnimSequences(TArray<UAnimSequence*>& OutSequences);
+	static void GetSkeletalMeshesForSkeleton(const USkeleton* Skeleton, TArray<USkeletalMesh*>& OutMeshes);
 	static USkeletalMesh* LoadFbxSkeletalMesh(const FString& Path);
+	// 같은 Skeleton을 쓰는 로드된 시퀀스 목록(경로순). FBX를 다시 읽지 않는다.
+	static const TArray<UAnimSequence*>* LoadFbxAnimSequences(const FString& Path, USkeleton& Skeleton);
+	static const TArray<UAnimSequence*>* GetFbxAnimSequences(const FString& AssetKey);
 
 	// 시작 스캔에서 바이너리를 찾지 못한 FBX 경로. 에디터가 임포트 창으로 넘긴다.
 	const TArray<FString>& GetFbxImportCandidates() const { return FbxImportCandidates; }
@@ -108,6 +126,7 @@ private:
 	TMap<FString, FString> AssetPathMap;
 	TMap<FString, URenderAsset*> AssetMap;
 	TMap<FString, USoundWave*> SoundMap;
+	TMap<FString, TArray<UAnimSequence*>> AnimationSequencesByFbx;
 	TArray<FString> FbxImportCandidates;
 	std::set<FString> ImportedFbxSources; // 소유 FBX 식별자, 대소문자 무시
 

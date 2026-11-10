@@ -13,6 +13,8 @@
 #include <format>
 
 #include "Core/Stats/EditorStats.h"
+#include "Render/SkinningStats.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Editor/EditorUI/EditorUIScale.h"
 
 namespace {
@@ -596,6 +598,7 @@ void FViewportsPanel::OnRender() {
 		// 누적 통계가 있을 때만 오버레이 오른쪽 위에 초기화 버튼을 붙인다.
 		if (FStatOverlay::IsEnabled(EStatFlags::Profile) ||
 			FStatOverlay::IsEnabled(EStatFlags::Decal) ||
+			FStatOverlay::IsEnabled(EStatFlags::Skinning) ||
 			FStatRegistry::Find(EditorStats::STAT_PickingTime)) {
 			ImGui::SetCursorScreenPos({ OverlayMax.x + EditorUIScale::Px(4.0f), OverlayMin.y });
 			ImGui::PushID(300 + ViewIndex);
@@ -607,6 +610,8 @@ void FViewportsPanel::OnRender() {
 			{
 				FStatRegistry::Reset();
 				Client->GetRenderData().DecalStats.ResetHistory();
+				FSkinningStats::ResetHistory();
+				Client->GetRenderData().BasePassGpu = std::make_shared<FGpuTimingHistory>();
 			}
 			ImGui::PopStyleVar(3);
 			ImGui::SetItemTooltip("Reset accumulated stats.");
@@ -1236,6 +1241,62 @@ bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 		}
 	}
 
+
+	if (FStatOverlay::IsEnabled(EStatFlags::Skinning))
+	{
+		const FSkinningFrameStats& Skin = FSkinningStats::Last();
+		const ESkinningMode Effective = USkeletalMeshComponent::GetSkinningMode();
+
+		Lines.Add({ "Skinning", TitleColor });
+		Lines.Add({ std::format("  Mode: {}{}", Effective == ESkinningMode::GPU ? "GPU" : "CPU",
+			RenderingPath == ERenderingPath::Deferred ? "  (Deferred: GPU skinning falls back to CPU)" : ""), ValueColor });
+		Lines.Add({ std::format("  Components: {} (CPU {} / GPU {})",
+			Skin.TotalComponents, Skin.CpuModeComponents, Skin.GpuModeComponents), ValueColor });
+		Lines.Add({ std::format("  Mesh Vertices / Bones: {} / {}", Skin.TotalVertices, Skin.TotalBones), ValueColor });
+		Lines.Add({ std::format("  Updated This Frame: CPU {} / GPU {}{}",
+			Skin.CpuSkinnedComponents, Skin.GpuSkinnedComponents,
+			USkeletalMeshComponent::IsForceSkinningUpdate() ? "  (ForceUpdate)" : ""), ValueColor });
+		// 포즈가 그대로면 스키닝은 다시 돌지 않아 두 모드의 차이가 보이지 않는다.
+		if (Skin.CpuSkinnedComponents + Skin.GpuSkinnedComponents == 0 && Skin.TotalComponents > 0)
+			Lines.Add({ "  Pose unchanged: nothing re-skinned. Use r.Skinning.ForceUpdate 1 to compare.", ValueColor });
+		Lines.Add({ std::format("  CPU Skinned Vertices: {}", Skin.CpuSkinnedVertices), ValueColor });
+		Lines.Add({ std::format("  Bone Matrices Computed: {}", Skin.BoneMatrices), ValueColor });
+		Lines.Add({ std::format("  Upload: Vertex {:.1f} KB / Matrix {:.1f} KB",
+			static_cast<double>(Skin.VertexUploadBytes) / 1024.0,
+			static_cast<double>(Skin.MatrixUploadBytes) / 1024.0), ValueColor });
+
+		ProfileLines.Add({ "Skinning CPU (ms)", TitleColor, { "Last", "Avg120", "Max120" } });
+		auto AddSkinCpuLine = [&](const char* Name, const FCycleStatData& History)
+			{
+				FProfileStatLine Line{ FString("  ") + Name, ValueColor };
+				Line.Values[0] = std::format("{:.3f}", History.GetLastMs());
+				Line.Values[1] = std::format("{:.3f}", History.GetRecentAverageMs());
+				Line.Values[2] = std::format("{:.3f}", GetDecalRecentMaxMs(History));
+				ProfileLines.Add(Line);
+			};
+		AddSkinCpuLine("Bone Matrices", FSkinningStats::BoneMatrixHistory());
+		AddSkinCpuLine("Vertex Skinning", FSkinningStats::CpuSkinHistory());
+		AddSkinCpuLine("Buffer Upload", FSkinningStats::UploadHistory());
+		AddSkinCpuLine("Total", FSkinningStats::TotalHistory());
+
+		// GPU 스키닝의 정점 변환은 Base Pass VS에서 일어나므로 Base Pass 전체 시간을 비교한다.
+		ProfileLines.Add({ "Skinning GPU (ms)", TitleColor, { "Last", "Avg120", "Max120" } });
+		FProfileStatLine GpuLine{ "  Base Pass", ValueColor };
+		const std::shared_ptr<FGpuTimingHistory>& BasePass = RenderData.BasePassGpu;
+		if (!BasePass || BasePass->Count == 0)
+		{
+			GpuLine.Values[0] = "Pending";
+			GpuLine.Values[1] = "-";
+			GpuLine.Values[2] = "-";
+		}
+		else
+		{
+			GpuLine.Values[0] = std::format("{:.3f}", BasePass->LastMs);
+			GpuLine.Values[1] = std::format("{:.3f}", BasePass->GetAverageMs());
+			GpuLine.Values[2] = std::format("{:.3f}", BasePass->GetMaxMs());
+		}
+		ProfileLines.Add(GpuLine);
+	}
 
 	if (Lines.Num() == 0 && ProfileLines.Num() == 0)
 		return false;

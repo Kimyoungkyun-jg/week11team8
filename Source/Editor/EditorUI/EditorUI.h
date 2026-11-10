@@ -68,11 +68,13 @@ private:
 		FFbxImportOptions Options;
 		bool bLockOutput = false;
 		bool bReimport = false;
+		bool bDeferred = false; // 메시 없는 FBX를 대상 Skeleton이 생길 때까지 한 번 미뤘다
 	};
 	void EnqueueFbxRequest(FFbxImportRequest Request);
 	void ApplyFbxRequest(const FFbxImportRequest& Request, bool bKeepOptions);
 	void AdvanceFbxQueue(bool bKeepOptions);
 	void RunFbxImport();
+	bool TryFbxImportWithLoadedSkeleton();
 	void DrawFbxImportBody();
 	void DrawFbxFailures();
 	TArray<FFbxImportRequest> FbxQueue;   // 0번이 지금 창에 표시 중인 요청

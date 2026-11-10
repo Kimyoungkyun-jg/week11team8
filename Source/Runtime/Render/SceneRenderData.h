@@ -72,6 +72,9 @@ struct FSceneRenderData
 	FRenderQueue RenderQueue;
 	FRenderStats RenderStats;
 	FDecalStats DecalStats;
+	// stat skinning: 이 뷰의 Base Pass(ForwardOpaque 또는 GBuffer) GPU 시간. GPU 스키닝의 VS 비용이 여기에 들어간다.
+	std::shared_ptr<FGpuTimingHistory> BasePassGpu = std::make_shared<FGpuTimingHistory>();
+	ESkinningMode BasePassGpuMode = ESkinningMode::CPU;   // 모드가 바뀌면 이력을 새로 시작한다
 	TArray<FPrimitiveSceneProxy*> VisibleProxies;
 	TArray<FLODSelectionInput> LODInputs;
 	TArray<uint8> SelectedLODs;
@@ -144,6 +147,7 @@ struct FSceneRenderData
 		DecalStats.Frame = {};
 		DecalStats.bCollecting = false;
 		DecalStats.ResetHistory();
+		BasePassGpu = std::make_shared<FGpuTimingHistory>();
 
 		for (FGatherChunk& Chunk : GatherChunks)
 		{

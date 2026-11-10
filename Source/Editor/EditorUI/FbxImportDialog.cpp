@@ -220,6 +220,12 @@ void FEditorUI::ApplyFbxRequest(const FFbxImportRequest& Request, bool bKeepOpti
 	{
 		FbxOptions = Request.Options;
 	}
+	else
+	{
+		// Import All은 첫 파일의 옵션을 이어 쓰지만 대상 Skeleton은 파일마다 다르다.
+		// 이어 쓰면 뒤의 메시 FBX가 애니메이션만 만들고 메시를 만들지 않는다. 메시 없는 FBX는 자동 대상 선택이 처리한다.
+		FbxOptions.TargetSkeletonKey = Request.Options.TargetSkeletonKey;
+	}
 	UpdateFbxOutputDirectory();
 }
 
@@ -240,11 +246,68 @@ void FEditorUI::AdvanceFbxQueue(bool bKeepOptions)
 	}
 }
 
+// 메시가 없는 FBX를 Target Skeleton 없이 받으면 실패한다. 이때 로드된 Skeleton을 차례로 대상으로 시도한다.
+// 같은 폴더의 Skeleton을 먼저 본다. 본 이름과 부모가 맞지 않으면 임포터가 거절하므로 엉뚱한 Skeleton에 붙지 않는다.
+bool FEditorUI::TryFbxImportWithLoadedSkeleton()
+{
+	FString SourceKey, Ignored;
+	const FString SourceFolder = FbxPath::GetAssetKey(FbxSourcePath, SourceKey, Ignored, false)
+		? FbxPath::ToString(FbxPath::FromString(SourceKey).parent_path()) : FString();
+	TArray<USkeleton*> Candidates;
+	for (TObjectIterator<USkeleton> It; It; ++It)
+	{
+		USkeleton* Skeleton = *It;
+		if (Skeleton && !Skeleton->IsRetired() && !Skeleton->GetPath().empty())
+			Candidates.Add(Skeleton);
+	}
+	std::stable_sort(Candidates.begin(), Candidates.end(), [&](const USkeleton* A, const USkeleton* B)
+	{
+		const bool ASame = FbxPath::ToString(FbxPath::FromString(A->GetPath()).parent_path()) == SourceFolder;
+		const bool BSame = FbxPath::ToString(FbxPath::FromString(B->GetPath()).parent_path()) == SourceFolder;
+		return ASame != BSame ? ASame : A->GetPath() < B->GetPath();
+	});
+	// FBX를 매번 다시 읽으므로 시도 횟수를 제한한다.
+	constexpr int32 MaxAttempts = 8;
+	for (int32 I = 0; I < Candidates.Num() && I < MaxAttempts; ++I)
+	{
+		FFbxImportOptions Options = FbxOptions;
+		Options.TargetSkeletonKey = Candidates[I]->GetPath();
+		// 이름이 몇 개만 같은 다른 캐릭터의 Skeleton에 붙지 않도록 본 대부분이 맞아야 받는다.
+		Options.MinTargetBoneMatch = 0.9f;
+		FFbxImportResult Result = FFbxAssetLoader::Import(FbxSourcePath, Options, FbxOutputDirectory, FbxQueue[0].Owner);
+		if (Result.bSuccess)
+		{
+			HTR_LOG(Info, "[FBX] No mesh in {}; imported animations for target skeleton {}", FbxSourcePath, Options.TargetSkeletonKey);
+			FbxResult = std::move(Result);
+			return true;
+		}
+	}
+	return false;
+}
+
 void FEditorUI::RunFbxImport()
 {
 	bFbxImportTextDrawn = false;
 	const FString Source = FbxSourcePath;
 	FbxResult = FFbxAssetLoader::Import(FbxSourcePath, FbxOptions, FbxOutputDirectory, FbxQueue[0].Owner);
+	if (!FbxResult.bSuccess && FbxOptions.TargetSkeletonKey.empty() && FbxResult.Error == "No visible supported mesh geometry in FBX" &&
+		!TryFbxImportWithLoadedSkeleton())
+	{
+		// 아직 대상 Skeleton을 만드는 메시 FBX가 큐 뒤에 있을 수 있다(새로 받은 저장소). 한 번만 맨 뒤로 미룬다.
+		if (!FbxQueue[0].bDeferred && FbxQueue.Num() > 1)
+		{
+			FFbxImportRequest Deferred = FbxQueue[0];
+			Deferred.bDeferred = true;
+			Deferred.Options = FbxOptions;
+			FbxQueue.Add(std::move(Deferred));
+			--FbxProcessedCount;
+			HTR_LOG(Info, "[FBX] No mesh and no matching skeleton yet; retried after the other files: {}", Source);
+			FbxResult = {};
+			AdvanceFbxQueue(bFbxImportAll);
+			return;
+		}
+		FbxResult.Error += ". Import the FBX that owns the skeleton first, or choose a Target Skeleton.";
+	}
 	for (const auto& Warning : FbxResult.Warnings)
 	{
 		HTR_LOG(Warning, "FBX: {}", Warning);

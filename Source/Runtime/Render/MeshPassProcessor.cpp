@@ -6,6 +6,7 @@
 #include "Render/Mesh.h"
 #include "Render/NormalMapUtils.h"
 #include "Engine/PrimitiveSceneProxy.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Core/EngineTimer.h"
 #include <algorithm>
 #include <cstring>
@@ -391,12 +392,21 @@ bool FMeshPassProcessor::Build(const TArray<FPrimitiveSceneProxy*>& ShadowMeshes
 		Batch.Pipeline = *Pipeline;
 		Batch.VertexBuffer = Proxy->GetVertexBuffer(LOD);
 		Batch.IndexBuffer = Proxy->GetIndexBuffer(LOD);
+		if (USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Proxy->GetComponent()))
+		{
+			Batch.SkinningMatricesBuffer = SkelComp->GetSkinningMatricesBuffer();
+			if (Batch.SkinningMatricesBuffer)
+			{
+				Batch.VertexBuffer = Proxy->GetSkeletalMesh()->GetVertexBuffer(LOD);
+				Batch.Pipeline.Shader = FRenderResourceManager::GetGPUSkinningShadowDepthShaderProgram();
+			}
+		}
 		Batch.bUseObjectSlots = false;
 		Batch.bBindViewConstants = true;
 		Batch.ObjectBindingSlot = 2;
 		Batch.ObjectStages = EShaderBindFlagBits::Vertex;
 
-		if (!Batch.VertexBuffer || !Batch.IndexBuffer)
+		if (!Batch.VertexBuffer || !Batch.IndexBuffer || !Batch.Pipeline.Shader)
 		{
 			continue;
 		}

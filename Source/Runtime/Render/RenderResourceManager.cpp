@@ -7,7 +7,32 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <set>
 
+namespace
+{
+	// 파일 본문과 #include "..."로 끌어온 파일들을 이어 붙인다. 진입점이 include한 파일에만 있는 셰이더
+	// (예: EditorArrowShader.hlsl → UberLit.hlsl)도 VS/PS 셰이더로 알아보려면 include까지 봐야 한다.
+	void AppendShaderSource(const fs::path& Path, std::set<fs::path>& Visited, std::string& Out)
+	{
+		std::error_code Ec;
+		const fs::path Canonical = fs::weakly_canonical(Path, Ec);
+		if (Ec || !Visited.insert(Canonical).second) return;
+		std::ifstream File(Path, std::ios::binary);
+		if (!File) return;
+		const std::string Source(std::istreambuf_iterator<char>{ File }, std::istreambuf_iterator<char>{});
+		Out += Source;
+		for (size_t Pos = Source.find("#include"); Pos != std::string::npos; Pos = Source.find("#include", Pos + 8))
+		{
+			const size_t Open = Source.find('"', Pos);
+			const size_t LineEnd = Source.find('\n', Pos);
+			if (Open == std::string::npos || (LineEnd != std::string::npos && Open > LineEnd)) continue;
+			const size_t Close = Source.find('"', Open + 1);
+			if (Close == std::string::npos) continue;
+			AppendShaderSource(Path.parent_path() / Source.substr(Open + 1, Close - Open - 1), Visited, Out);
+		}
+	}
+}
 
 
 struct FPipelineTableEntry
@@ -74,6 +99,23 @@ void FRenderResourceManager::InitPipelineStates()
 	FShaderProgram* DepthProgram = GetShaderProgram("Resources/Shader/DepthPrepass.hlsl");
 	if (DepthProgram && DepthProgram->VertexShader)
 		ShaderProgramMap["ShadowDepth"] = MakeUnique<FShaderProgram>(DepthProgram->VertexShader, nullptr);
+	const FString ShadowPath = "Resources/Shader/ShadowDepth.hlsl";
+	if (auto* Base = ShaderProgramMap.Find(ShadowPath))
+	{
+		const D3D_SHADER_MACRO Defines[] = { { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
+		FString VSPath;
+		FShaderByteCode Code = RenderUtil::GetOrCompile(ShadowPath, "mainVS", EShaderType::Vertex, VSPath, Defines);
+		if (Code.IsValid())
+		{
+			auto VS = RenderCommand::CreateVertexShader(Code);
+			if (VS && VS->IsValid())
+			{
+				FVertexShader* VSRaw = VS.get();
+				VertexShaderMap[VSPath] = std::move(VS);
+				ShaderProgramMap[ShadowPath + "#GPU"] = MakeUnique<FShaderProgram>(VSRaw, (*Base)->PixelShader);
+			}
+		}
+	}
 
 	struct FForwardVariant { const char* Name; const char* Shading; const char* Reflection; };
 	const FForwardVariant Variants[] = {
@@ -115,6 +157,33 @@ void FRenderResourceManager::InitPipelineStates()
 		ShaderProgramMap[Key] = MakeUnique<FShaderProgram>(VSRaw, PSRaw);
 		if (std::strcmp(Name, "VIEW_MODE_WORLD_NORMAL") == 0)
 			PipelineStateMap[EPSOType::StaticMesh_WorldNormal]->Shader = ShaderProgramMap[Key].get();
+
+		const D3D_SHADER_MACRO SkinningDefines[] = { { Variant.Shading, "1" }, { Variant.Reflection, "1" }, { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
+		FString SkinningVSPath;
+		FShaderByteCode SkinningCode = RenderUtil::GetOrCompile(Path, "mainVS", EShaderType::Vertex, SkinningVSPath, SkinningDefines);
+		if (!SkinningCode.IsValid()) continue;
+		auto SkinningVS = RenderCommand::CreateVertexShader(SkinningCode);
+		if (!SkinningVS || !SkinningVS->IsValid()) continue;
+		FVertexShader* SkinningVSRaw = SkinningVS.get();
+		VertexShaderMap[SkinningVSPath] = std::move(SkinningVS);
+		ShaderProgramMap[Key + "#GPU"] = MakeUnique<FShaderProgram>(SkinningVSRaw, PSRaw);
+	}
+	const FString TranslucentPath = "Resources/Shader/StaticMeshTranslucentShader.hlsl";
+	if (auto* Base = ShaderProgramMap.Find(TranslucentPath))
+	{
+		const D3D_SHADER_MACRO Defines[] = { { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
+		FString VSPath;
+		FShaderByteCode Code = RenderUtil::GetOrCompile(TranslucentPath, "mainVS", EShaderType::Vertex, VSPath, Defines);
+		if (Code.IsValid())
+		{
+			auto VS = RenderCommand::CreateVertexShader(Code);
+			if (VS && VS->IsValid())
+			{
+				FVertexShader* VSRaw = VS.get();
+				VertexShaderMap[VSPath] = std::move(VS);
+				ShaderProgramMap[TranslucentPath + "#GPU"] = MakeUnique<FShaderProgram>(VSRaw, (*Base)->PixelShader);
+			}
+		}
 	}
 }
 
@@ -124,13 +193,33 @@ FShaderProgram* FRenderResourceManager::GetShadowDepthShaderProgram()
 	return nullptr;
 }
 
-FShaderProgram* FRenderResourceManager::GetForwardShaderProgram(EReflectionModel Reflection, EShadingModel Shading, bool bUnlit)
+FShaderProgram* FRenderResourceManager::GetGPUSkinningShadowDepthShaderProgram()
+{
+	if (auto* Found = Get().ShaderProgramMap.Find("Resources/Shader/ShadowDepth.hlsl#GPU")) return Found->get();
+	return nullptr;
+}
+
+FShaderProgram* FRenderResourceManager::GetForwardShaderProgram(EReflectionModel Reflection, EShadingModel Shading, bool bGPUSkinning, bool bUnlit)
 {
 	const char* ReflectionName = Reflection == EReflectionModel::Phong ? "Phong" :
 		Reflection == EReflectionModel::Lambert ? "Lambert" : "BlinnPhong";
 	const FString Name = bUnlit ? FString("VIEW_MODE_UNLIT") :
 		FString(Shading == EShadingModel::Gouraud ? "Gouraud" : "Phong") + ReflectionName;
-	const FString Key = FString("Resources/Shader/UberLit.hlsl#") + Name;
+	const FString Key = FString("Resources/Shader/UberLit.hlsl#") + Name + (bGPUSkinning ? "#GPU" : "");
+	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
+	return nullptr;
+}
+
+FShaderProgram* FRenderResourceManager::GetWorldNormalShaderProgram(bool bGPUSkinning)
+{
+	const FString Key = FString("Resources/Shader/UberLit.hlsl#VIEW_MODE_WORLD_NORMAL") + (bGPUSkinning ? "#GPU" : "");
+	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
+	return nullptr;
+}
+
+FShaderProgram* FRenderResourceManager::GetTranslucentShaderProgram(bool bGPUSkinning)
+{
+	const FString Key = FString("Resources/Shader/StaticMeshTranslucentShader.hlsl") + (bGPUSkinning ? "#GPU" : "");
 	if (auto* Found = Get().ShaderProgramMap.Find(Key)) return Found->get();
 	return nullptr;
 }
@@ -159,9 +248,9 @@ void FRenderResourceManager::ScanShaders(const fs::path& ShaderRoot)
 		if (!Entry.is_regular_file()) continue;
 		if (Entry.path().extension() != ".hlsl") continue;
 		// 컴퓨트 전용 .hlsl에는 mainVS/mainPS가 없다. VS/PS로 컴파일하지 않는다.
-		std::ifstream SourceFile(Entry.path(), std::ios::binary);
-		if (!SourceFile) continue;
-		const std::string Source(std::istreambuf_iterator<char>{ SourceFile }, std::istreambuf_iterator<char>{});
+		std::string Source;
+		std::set<fs::path> Visited;
+		AppendShaderSource(Entry.path(), Visited, Source);
 		if (Source.find("mainVS(") == std::string::npos ||
 			Source.find("mainPS(") == std::string::npos) continue;
 
