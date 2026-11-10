@@ -188,6 +188,9 @@ void FSkeletalMeshViewerPanel::Tick(float DeltaTime)
 				Viewer->bScrollTreeToSelection = true;
 			}
 		}
+		// 선택이 바뀌었을 때만 컴포넌트가 다시 스키닝한다 (같은 값이면 SetBoneWeightHeatmap이 바로 돌아간다).
+		if (Viewer->MeshComponent)
+			Viewer->MeshComponent->SetBoneWeightHeatmap(Viewer->bShowBoneWeightHeatmap, Viewer->SelectedBone);
 		if (Viewer->ViewSize.x >= 1.0f && Viewer->ViewSize.y >= 1.0f)
 			Viewer->Client.Resize(static_cast<uint32>(Viewer->ViewSize.x), static_cast<uint32>(Viewer->ViewSize.y));
 	}
@@ -598,6 +601,19 @@ void FSkeletalMeshViewerPanel::DrawViewportToolbar(FSkeletalMeshViewer& Viewer)
 				if (Viewer.MeshComponent)
 				{
 					Viewer.MeshComponent->SetVisibility(Viewer.bShowMesh);
+				}
+			}
+			if (ImGui::MenuItem("Bone Weight Heatmap", nullptr, &Viewer.bShowBoneWeightHeatmap))
+			{
+				// 조명이 섞이면 색이 가중치를 정확히 나타내지 못하므로 Unlit으로 본다.
+				if (Viewer.bShowBoneWeightHeatmap)
+				{
+					Viewer.ModeBeforeHeatmap = Viewer.Client.GetViewportMode();
+					Viewer.Client.SetViewportMode(EViewportMode::Unlit);
+				}
+				else
+				{
+					Viewer.Client.SetViewportMode(Viewer.ModeBeforeHeatmap);
 				}
 			}
 			ImGui::EndMenu();

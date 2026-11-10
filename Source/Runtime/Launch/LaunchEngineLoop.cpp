@@ -150,7 +150,8 @@ bool FEngineLoop::Tick()
 
 	FGpuProfiler& GpuProfiler = FGpuProfiler::Get();
 	GpuProfiler.BeginFrame(
-		FStatOverlay::IsEnabled(EStatFlags::Decal));
+		FStatOverlay::IsEnabled(EStatFlags::Decal) ||
+		FStatOverlay::IsEnabled(EStatFlags::Skinning));
 
 	{
 		SCOPE_CYCLE_COUNTER(STAT_EngineTick);

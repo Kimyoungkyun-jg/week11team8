@@ -21,6 +21,8 @@ void FEditorViewportClient::ApplyRenderSettings(FSceneRenderOptions& Options) co
     Options.ShadingModel = Options.RenderingPath == ERenderingPath::Deferred ? EShadingModel::Phong : ShadingModel;
     Options.bOverrideMaterialLighting = true;
     Options.bEnableFXAA = ShowFlags.bFXAA;
+    Options.bDrawDecals = ShowFlags.bDecals;
+    Options.bDrawSkeletalMeshes = ShowFlags.bSkeletalMeshes;
     Options.bShowVignette = ShowFlags.bVignette;
     Options.bShowCameraOverlay = ShowFlags.bCameraOverlay;
     Options.SceneDepthRange = MaxRange;

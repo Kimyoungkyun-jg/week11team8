@@ -5,6 +5,7 @@
 #include "Render/ShadowRendering.h"
 
 #include "Editor/Settings/SettingsPanel.h"
+#include "Components/SkeletalMeshComponent.h"
 
 #include <algorithm>
 #include <charconv>
@@ -124,6 +125,9 @@ bool FOutputLogPanel::Init()
 	Commands.Add("STAT");
 	Commands.Add("CSM");
 	Commands.Add("r.shadow.CacheWholeSceneShadows");
+	Commands.Add("r.SkinningMode");
+	Commands.Add("r.GPUSkinning");
+	Commands.Add("r.Skinning.ForceUpdate");
 	for (const FConsoleVariable& Variable : GetConsoleVariables())
 		Commands.Add(Variable.Name);
 
@@ -378,7 +382,9 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 	{
 		FLog::Log(ELogVerbosity::Info, "Commands:");
 		FLog::Log(ELogVerbosity::Info, "- HELP | HISTORY | CLEAR");
-		FLog::Log(ELogVerbosity::Info, "- STAT <fps|memory|profile|light|decal|all|none> [on|off]");
+		FLog::Log(ELogVerbosity::Info, "- STAT <fps|memory|profile|light|decal|skinning|all|none> [on|off]");
+		FLog::Log(ELogVerbosity::Info, "- r.SkinningMode [cpu|gpu|toggle]   (= r.GPUSkinning [0|1], GPU needs Forward rendering path)");
+		FLog::Log(ELogVerbosity::Info, "- r.Skinning.ForceUpdate [0|1]   (re-skin every frame for CPU/GPU comparison)");
 		FLog::Log(ELogVerbosity::Info, "- CSM Count <1-4>   (= r.Shadow.CSM.MaxCascades)");
 		FLog::Log(ELogVerbosity::Info, "- r.shadow.CacheWholeSceneShadows [0|1]   (not implemented yet)");
 		FLog::Log(ELogVerbosity::Info, "Console variables (type the name alone to see the value):");
@@ -427,6 +433,60 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 		FLog::Log(ELogVerbosity::Info, "r.shadow.CacheWholeSceneShadows = {}", EditorSettings->bCacheShadows ? 1 : 0);
 		// 그림자 맵은 지금 매 프레임 다시 그린다. 설정 값만 저장되고 렌더링에는 아직 영향이 없다.
 		FLog::Log(ELogVerbosity::Warning, "Shadow caching is not implemented yet; this setting has no effect.");
+		return;
+	}
+
+	// CPU/GPU 스키닝 전환. Settings 패널의 Skinning Mode와 같은 값을 바꾸므로 editor.ini에도 저장된다.
+	// 이름만 입력하면 현재 값을 보여 준다 (콘솔 변수와 같은 규칙).
+	if (EqualsIgnoreCase(Command, "r.SkinningMode") || EqualsIgnoreCase(Command, "r.GPUSkinning"))
+	{
+		if (!EditorSettings)
+		{
+			FLog::Log(ELogVerbosity::Info, "Settings not available");
+			return;
+		}
+		constexpr const char* Usage = "Usage: r.SkinningMode [cpu|gpu|toggle]  or  r.GPUSkinning [0|1]";
+		if (Tokens.Num() > 2)
+		{
+			FLog::Log(ELogVerbosity::Info, "{}", Usage);
+			return;
+		}
+		if (Tokens.Num() == 2)
+		{
+			const FString& Value = Tokens[1];
+			if (EqualsIgnoreCase(Value, "gpu") || Value == "1")
+				EditorSettings->SkinningMode = ESkinningMode::GPU;
+			else if (EqualsIgnoreCase(Value, "cpu") || Value == "0")
+				EditorSettings->SkinningMode = ESkinningMode::CPU;
+			else if (EqualsIgnoreCase(Value, "toggle"))
+				EditorSettings->SkinningMode = EditorSettings->SkinningMode == ESkinningMode::GPU ? ESkinningMode::CPU : ESkinningMode::GPU;
+			else
+			{
+				FLog::Log(ELogVerbosity::Info, "{}", Usage);
+				return;
+			}
+		}
+
+		const bool bGPU = EditorSettings->SkinningMode == ESkinningMode::GPU;
+		FLog::Log(ELogVerbosity::Info, "r.SkinningMode = {}", bGPU ? "GPU" : "CPU");
+		// TickWorldAndEditor가 Deferred에서는 CPU로 고정한다 (GBuffer 셰이더에 GPU 스키닝 변형이 없다).
+		if (bGPU && EditorSettings->RenderingPath != ERenderingPath::Forward)
+			FLog::Log(ELogVerbosity::Warning, "GPU skinning needs the Forward rendering path. CPU skinning stays active until Rendering Path is Forward.");
+		return;
+	}
+
+	// 아직 런타임 애니메이션이 없어 포즈가 바뀌지 않으면 스키닝은 처음 한 번만 돈다.
+	// 비교용으로 매 프레임 스키닝을 다시 시켜 애니메이션 재생과 같은 부하를 만든다.
+	if (EqualsIgnoreCase(Command, "r.Skinning.ForceUpdate"))
+	{
+		if (Tokens.Num() == 2 && (Tokens[1] == "0" || Tokens[1] == "1"))
+			USkeletalMeshComponent::SetForceSkinningUpdate(Tokens[1] == "1");
+		else if (Tokens.Num() != 1)
+		{
+			FLog::Log(ELogVerbosity::Info, "Usage: r.Skinning.ForceUpdate [0|1]");
+			return;
+		}
+		FLog::Log(ELogVerbosity::Info, "r.Skinning.ForceUpdate = {}", USkeletalMeshComponent::IsForceSkinningUpdate() ? 1 : 0);
 		return;
 	}
 

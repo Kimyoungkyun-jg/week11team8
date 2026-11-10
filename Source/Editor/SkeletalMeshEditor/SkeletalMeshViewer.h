@@ -36,6 +36,9 @@ struct FSkeletalMeshViewer
 
 	EBoneDrawMode BoneDrawMode = EBoneDrawMode::AllHierarchy;
 	bool bShowMesh = true;
+	// 선택한 본의 가중치를 색으로 보는 모드. 켜는 동안 뷰를 Unlit으로 바꾸고, 끌 때 원래 모드로 되돌린다.
+	bool bShowBoneWeightHeatmap = false;
+	EViewportMode ModeBeforeHeatmap = EViewportMode::Solid;
 	bool bShowGrid = false;
 	float DetailsHeight = 280.0f;
 	float CameraSpeed = 4.0f;
