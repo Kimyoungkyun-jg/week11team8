@@ -23,6 +23,7 @@
 
 #include "Render/ImageLoader.h"
 #include <cctype>
+#include <type_traits>
 
 
 
@@ -404,6 +405,7 @@ void UAssetManager::Shutdown()
 	Get().AssetMap.Empty();
 	Get().SoundMap.Empty();
 	Get().AnimationMap.Empty();
+	Get().PreviewAnimationMap.Empty();
 }
 
 
@@ -424,7 +426,11 @@ void UAssetManager::CommitAssetRegistration(TMap<FString, URenderAsset*>& Prepar
 	for (const auto& [Key, Previous] : AssetMap)
 	{
 		URenderAsset** Next = Prepared.Find(Key);
-		if (Previous && Next && *Next != Previous) Previous->SetRetired(true);
+		if (Previous && Next && *Next != Previous)
+		{
+			Previous->SetRetired(true);
+			AnimationMap.Remove(Key);
+		}
 	}
 	AssetMap.Swap(Prepared);
 }
@@ -543,24 +549,54 @@ USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)
 	return GetAssetByPath<USkeletalMesh>(MakeAssetKey(Path));
 }
 
-const TArray<FAnimationClip>* UAssetManager::LoadFbxAnimations(const FString& Path)
+namespace
 {
-	USkeletalMesh* Mesh = LoadFbxSkeletalMesh(Path);
-	if (!Mesh || GetAssetExtension(Path) != ".fbxbin") return nullptr;
+template <typename T>
+bool LoadFbxAnimationData(const FString& Path, TArray<T>& Out)
+{
+	USkeletalMesh* Mesh = UAssetManager::LoadFbxSkeletalMesh(Path);
+	if (!Mesh || GetAssetExtension(Path) != ".fbxbin") return false;
 	FFbxAssetData Header; FString Error;
-	if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) { HTR_LOG(Warning, "[FBX] {}", Error); return nullptr; }
-	TArray<FAnimationClip> Clips;
-	if (!FFbxAssetImporter::ExtractAnimationClips(FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath)), Header.Options, Mesh->RefSkeleton, Clips, Error))
+	if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) { HTR_LOG(Warning, "[FBX] {}", Error); return false; }
+	const FString Source = FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath));
+	bool bExtracted;
+	if constexpr (std::is_same_v<T, UAnimSequence>)
+		bExtracted = FFbxAssetImporter::ExtractAnimSequence(Source, Header.Options, Mesh->RefSkeleton, Out, Error);
+	else
+		bExtracted = FFbxAssetImporter::ExtractAnimationClips(Source, Header.Options, Mesh->RefSkeleton, Out, Error);
+	if (!bExtracted)
 	{
 		HTR_LOG(Warning, "[FBX] Animation extraction failed: {}", Error);
-		return nullptr;
+		return false;
 	}
+	return true;
+}
+}
+
+const TArray<FAnimationClip>* UAssetManager::LoadFbxAnimations(const FString& Path)
+{
+	TArray<FAnimationClip> Clips;
+	if (!LoadFbxAnimationData(Path, Clips)) return nullptr;
 	const FString Key = MakeAssetKey(Path);
-	Get().AnimationMap.FindOrAdd(Key) = std::move(Clips);
-	return Get().AnimationMap.Find(Key);
+	Get().PreviewAnimationMap.FindOrAdd(Key) = std::move(Clips);
+	return Get().PreviewAnimationMap.Find(Key);
 }
 
 const TArray<FAnimationClip>* UAssetManager::GetFbxAnimations(const FString& AssetKey)
+{
+	return Get().PreviewAnimationMap.Find(AssetKey);
+}
+
+const TArray<UAnimSequence>* UAssetManager::LoadFbxAnimSequences(const FString& Path)
+{
+	TArray<UAnimSequence> Sequences;
+	if (!LoadFbxAnimationData(Path, Sequences)) return nullptr;
+	const FString Key = MakeAssetKey(Path);
+	Get().AnimationMap.FindOrAdd(Key) = std::move(Sequences);
+	return Get().AnimationMap.Find(Key);
+}
+
+const TArray<UAnimSequence>* UAssetManager::GetFbxAnimSequences(const FString& AssetKey)
 {
 	return Get().AnimationMap.Find(AssetKey);
 }

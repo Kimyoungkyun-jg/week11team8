@@ -4,6 +4,9 @@
 #include "Render/RenderEnums.h"
 #include "SkeletalMeshComponent.generated.h"
 
+class UAnimSequence;
+class UAnimInstance;
+
 UCLASS()
 class USkeletalMeshComponent : public USkinnedMeshComponent
 {
@@ -11,12 +14,22 @@ class USkeletalMeshComponent : public USkinnedMeshComponent
 
 public:
 	USkeletalMeshComponent();
-	virtual ~USkeletalMeshComponent() override = default;
+	virtual ~USkeletalMeshComponent() override;
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime) override;
 
 	virtual void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh) override;
+	// nullptr이면 현재 포즈에서 재생을 멈춘다.
+	void PlayAnimation(const UAnimSequence* Sequence, bool bLoop);
+	void PlayAnimationBlend(const UAnimSequence* SequenceA, const UAnimSequence* SequenceB, bool bLoop, float Alpha);
+	const TArray<UAnimSequence>* GetAnimationSequences() const;
+	const FString& GetAnimationSequenceName() const { return AnimationSequenceName; }
+	void SetAnimationSequenceName(const FString& InName);
+	const FString& GetBlendSequenceName() const { return BlendSequenceName; }
+	void SetBlendSequenceName(const FString& InName);
+	float GetAnimationBlendAlpha() const { return AnimationBlendAlpha; }
+	void SetAnimationBlendAlpha(float InAlpha);
 
 	void InitBoneTransforms();
 	void SetBoneTransform(int32 BoneIndex, const FMatrix& LocalTransform);
@@ -40,6 +53,18 @@ public:
 	virtual bool LineTraceComponent(const FRay& WorldRay, FHitResult& OutHit) override;
 	virtual bool LineTraceComponentLocal(const FRay& LocalRay, float& OutT) override;
 private:
+	// 디테일 패널에서 선택하며 씬 저장과 PIE 복제에 포함한다.
+	UPROPERTY()
+	FString AnimationSequenceName;
+
+	UPROPERTY()
+	FString BlendSequenceName;
+
+	UPROPERTY()
+	float AnimationBlendAlpha = 0.5f;
+
+	void PlaySelectedAnimation();
+
 	struct FSkinnedLOD
 	{
 		TArray<FVertex> Vertices;
@@ -48,6 +73,8 @@ private:
 	};
 	TArray<FSkinnedLOD> SkinnedLODs;
 	uint64 PoseRevision = 1;
+	TUniquePtr<UAnimInstance> AnimInstance;
+	void RefreshAnimationPose();
 	void UpdateBoneMatrices();
 	// 씬 로드와 복제는 프로퍼티로 메시 포인터만 채운다. 처음 쓸 때 본 상태를 만든다.
 	void EnsureBoneState();

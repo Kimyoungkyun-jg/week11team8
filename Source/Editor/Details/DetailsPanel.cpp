@@ -669,6 +669,75 @@ namespace
 		}
 	}
 
+	void DrawAnimationSequenceCombo(USkeletalMeshComponent* Component, const char* Label, const char* Id,
+		const FString& SelectedName, void (USkeletalMeshComponent::*SetName)(const FString&))
+	{
+		const char* Preview = SelectedName.empty() ? "None" : SelectedName.c_str();
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(Label);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(-1.0f);
+		EditorUIScale::LimitNextComboPopupWidth();
+		if (!ImGui::BeginCombo(Id, Preview))
+		{
+			return;
+		}
+
+		if (ImGui::Selectable("None", SelectedName.empty()))
+		{
+			(Component->*SetName)({});
+		}
+		const auto* Sequences = Component->GetAnimationSequences();
+		if (Sequences && !Sequences->IsEmpty())
+		{
+			for (const UAnimSequence& Sequence : *Sequences)
+			{
+				const FString& Name = Sequence.GetName();
+				ImGui::PushID(&Sequence);
+				const bool bSelected = Name == SelectedName;
+				if (ImGui::Selectable(Name.c_str(), bSelected))
+				{
+					(Component->*SetName)(Name);
+				}
+				if (bSelected)
+				{
+					ImGui::SetItemDefaultFocus();
+				}
+				ImGui::PopID();
+			}
+		}
+		else
+		{
+			ImGui::TextDisabled(Component->GetSkeletalMesh() ? "No sequences found." : "Assign a skeletal mesh first.");
+		}
+		ImGui::EndCombo();
+	}
+
+	void DrawAnimationSequenceSlot(USkeletalMeshComponent* Component)
+	{
+		DrawAnimationSequenceCombo(Component, "Animation Sequence", "##AnimationSequence",
+			Component->GetAnimationSequenceName(), &USkeletalMeshComponent::SetAnimationSequenceName);
+		if (Component->GetAnimationSequenceName().empty())
+		{
+			return;
+		}
+
+		DrawAnimationSequenceCombo(Component, "Blend Sequence", "##BlendSequence",
+			Component->GetBlendSequenceName(), &USkeletalMeshComponent::SetBlendSequenceName);
+		if (!Component->GetBlendSequenceName().empty())
+		{
+			float Alpha = Component->GetAnimationBlendAlpha();
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted("Blend Alpha");
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(-1.0f);
+			if (ImGui::SliderFloat("##BlendAlpha", &Alpha, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+			{
+				Component->SetAnimationBlendAlpha(Alpha);
+			}
+		}
+	}
+
 	UMaterial* EnsureMaterialOverride(UMeshComponent* MeshComponent, int32 Slot, UMaterial* Effective, UMaterial* Override)
 	{
 		// 이 컴포넌트 전용 인스턴스가 아니면 지금 적용 중인 머티리얼을 복제해서 덮어쓰기로 만든다.
@@ -1200,6 +1269,8 @@ namespace
 			// 스크립트는 경로 검증을 위한 전용 UI를 같은 클래스 헤더 안에 표시한다.
 			UScriptComponent* ScriptComponent = Class == UScriptComponent::StaticClass()
 				? Cast<UScriptComponent>(Object) : nullptr;
+			USkeletalMeshComponent* SkeletalMeshComponent = Class == USkeletalMeshComponent::StaticClass()
+				? Cast<USkeletalMeshComponent>(Object) : nullptr;
 
 			// 노출할 프로퍼티나 전용 UI가 없으면 헤더도 그리지 않는다.
 			bool bHasVisibleProperty = false;
@@ -1211,7 +1282,7 @@ namespace
 					break;
 				}
 			}
-			if (!bHasVisibleProperty && !ScriptComponent)
+			if (!bHasVisibleProperty && !ScriptComponent && !SkeletalMeshComponent)
 			{
 				continue;
 			}
@@ -1234,6 +1305,10 @@ namespace
 				if (ScriptComponent)
 				{
 					DrawScriptSection(ScriptComponent);
+				}
+				if (SkeletalMeshComponent)
+				{
+					DrawAnimationSequenceSlot(SkeletalMeshComponent);
 				}
 			}
 			ImGui::PopID();

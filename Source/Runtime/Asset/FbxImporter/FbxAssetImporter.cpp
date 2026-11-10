@@ -3,6 +3,7 @@
 #include "FbxAssetBake.h"
 #include "FbxPath.h"
 #include "AnimationData.h"
+#include "Animation/AnimSequence.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <functional>
 #include <iomanip>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -1170,6 +1172,73 @@ struct FLoadedScene
 	bool bBlender = false;
 };
 
+// 같은 FBX에서 추출한 시퀀스들은 씬과 평가 캐시를 공유한다.
+struct FAnimSequenceScene
+{
+	FLoadedScene Loaded;
+	std::vector<FbxNode*> Nodes;
+	TArray<int32> Parents;
+	FbxAMatrix FrameInverse;
+	TArray<FMatrix> ComponentPose;
+	std::mutex EvaluationMutex;
+
+	bool EvaluateLocalPose(FbxAnimStack* Stack, double TimeSeconds,
+		TArray<FMatrix>& OutLocalPose, int32& OutInvalidBone)
+	{
+		if (Loaded.Scene->GetCurrentAnimationStack() != Stack)
+		{
+			Loaded.Scene->SetCurrentAnimationStack(Stack);
+		}
+
+		FbxTime Time;
+		Time.SetSecondDouble(TimeSeconds);
+		const int32 BoneCount = Parents.Num();
+		ComponentPose.SetNum(BoneCount);
+		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+		{
+			ComponentPose[Bone] = EngineMatrix(
+				FrameInverse * Nodes[Bone]->EvaluateGlobalTransform(Time), Loaded.UnitScale);
+		}
+
+		OutLocalPose.SetNum(BoneCount);
+		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+		{
+			const int32 Parent = Parents[Bone];
+			if (Parent >= 0 && !FiniteMatrix(ComponentPose[Parent]))
+			{
+				OutInvalidBone = Parent;
+				return false;
+			}
+			OutLocalPose[Bone] = Parent < 0 ? ComponentPose[Bone]
+				: ComponentPose[Bone] * ComponentPose[Parent].Inverse();
+		}
+		return true;
+	}
+
+	bool ComposeLocalPose(FbxAnimStack* Stack, double TimeSeconds, const TArray<FbxAnimCurve*>& CurveInputs,
+		const TArray<float>& CurveValues, TArray<FMatrix>& OutLocalPose)
+	{
+		if (CurveInputs.Num() != CurveValues.Num())
+		{
+			return false;
+		}
+
+		const std::lock_guard Lock(EvaluationMutex);
+		// 한 키짜리 입력에 계산된 값을 넣고 SDK는 레이어와 노드 변환을 합성한다.
+		for (int32 Index = 0; Index < CurveInputs.Num(); ++Index)
+		{
+			FbxAnimCurve* Input = CurveInputs[Index];
+			Input->KeyModifyBegin();
+			Input->KeySetValue(0, CurveValues[Index]);
+			Input->KeyModifyEnd();
+		}
+		Loaded.Scene->GetAnimationEvaluator()->Reset();
+
+		int32 InvalidBone = INDEX_NONE;
+		return EvaluateLocalPose(Stack, TimeSeconds, OutLocalPose, InvalidBone);
+	}
+};
+
 bool LoadScene(const fs::path& Source, const FFbxImportOptions& Options, const fs::path* Extraction, FLoadedScene& Out, FString& Error)
 {
 	Out.Manager.reset(FbxManager::Create());
@@ -1188,6 +1257,7 @@ bool LoadScene(const fs::path& Source, const FFbxImportOptions& Options, const f
 	if (Extraction) Parser->SetEmbeddingExtractionFolder(FbxPath::ToString(*Extraction).c_str());
 	Out.Scene = FbxScene::Create(Out.Manager.get(), "Import");
 	if (!Parser->Import(Out.Scene)) { Error = Parser->GetStatus().GetErrorString(); return false; }
+	Parser->Destroy();
 	if (auto* Info = Out.Scene->GetSceneInfo()) Out.bBlender = Lower(Info->Original_ApplicationName.Get().Buffer()).find("blender") != FString::npos;
 	Out.UnitScale = Out.Scene->GetGlobalSettings().GetSystemUnit().GetScaleFactor() / 100. * Options.UniformScale;
 	if (!std::isfinite(Out.UnitScale) || Out.UnitScale <= 0) { Error = "Invalid FBX scene unit or uniform scale"; return false; }
@@ -1298,6 +1368,214 @@ bool FFbxAssetImporter::ExtractAnimationClips(const FString& SourcePath, const F
 		return true;
 	}
 	catch (const std::exception& E) { Error = E.what(); Out.Reset(); return false; }
+#else
+	Error = "FBX SDK is not configured.";
+	return false;
+#endif
+}
+
+bool FFbxAssetImporter::ExtractAnimSequence(const FString& SourcePath, const FFbxImportOptions& Options, const FReferenceSkeleton& Skeleton,
+	TArray<UAnimSequence>& Out, FString& Error, float SampleRate)
+{
+#if WITH_FBX_SDK
+	const double FrameRate = SampleRate;
+	if (!std::isfinite(FrameRate) || FrameRate <= 0.0)
+	{
+		Error = "Animation sample rate must be finite and positive";
+		return false;
+	}
+
+	try
+	{
+		FString Identity;
+		fs::path Source;
+		if (!FbxPath::GetSourcePath(SourcePath, Source, Identity, Error)) return false;
+		const int32 BoneCount = Skeleton.GetNum();
+		if (BoneCount <= 0) { Error = "Skeleton has no bones"; return false; }
+		const auto SequenceScene = MakeShared<FAnimSequenceScene>();
+		FLoadedScene& Loaded = SequenceScene->Loaded;
+		if (!LoadScene(Source, Options, nullptr, Loaded, Error)) return false;
+
+		auto& Nodes = SequenceScene->Nodes;
+		Nodes.resize(BoneCount);
+		SequenceScene->Parents.SetNum(BoneCount);
+		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+		{
+			const auto& Info = Skeleton.RefBoneInfo[Bone];
+			if (Info.ParentIndex < -1 || Info.ParentIndex >= Bone)
+			{
+				Error = "Invalid skeleton parent: " + Info.Name;
+				return false;
+			}
+			SequenceScene->Parents[Bone] = Info.ParentIndex;
+			Nodes[Bone] = Loaded.Scene->FindNodeByName(Info.Name.c_str());
+			if (!Nodes[Bone]) { Error = "Bone not found in FBX: " + Info.Name; return false; }
+		}
+
+		if (!Options.bBakeSkeletalMeshes && Nodes[0]->GetParent())
+			SequenceScene->FrameInverse = Nodes[0]->GetParent()->EvaluateGlobalTransform(FBXSDK_TIME_ZERO).Inverse();
+
+		const int StackCount = Loaded.Scene->GetSrcObjectCount<FbxAnimStack>();
+		if (StackCount > 256) { Error = "Too many animation stacks"; return false; }
+		TArray<UAnimSequence> Sequences;
+		std::unordered_set<FbxAnimCurve*> BoundCurves;
+		Sequences.Reserve(StackCount);
+		for (int StackIndex = 0; StackIndex < StackCount; ++StackIndex)
+		{
+			FbxAnimStack* Stack = Loaded.Scene->GetSrcObject<FbxAnimStack>(StackIndex);
+			if (!Stack) continue;
+			FbxTimeSpan Span = Stack->GetLocalTimeSpan();
+			if (Span.GetDuration().GetSecondDouble() <= 0.0)
+				Loaded.Scene->GetGlobalSettings().GetTimelineDefaultTimeSpan(Span);
+
+			const double Start = Span.GetStart().GetSecondDouble();
+			const double Duration = Span.GetStop().GetSecondDouble() - Start;
+			if (!std::isfinite(Start) || !std::isfinite(Duration) || Duration <= 0.0) continue;
+
+			const double KeyCount = std::ceil(Duration * FrameRate) + 1.0;
+			if (KeyCount > 100000.0 || KeyCount * BoneCount > 50000000.0)
+			{
+				Error = "Animation is too long: " + FString(Stack->GetName());
+				return false;
+			}
+			const int32 NumKeys = static_cast<int32>(KeyCount);
+			Loaded.Scene->SetCurrentAnimationStack(Stack);
+
+			// Track 설정
+			TArray<FBoneAnimationTrack> Tracks;
+			Tracks.SetNum(BoneCount);
+			for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+			{
+				FBoneAnimationTrack& Track = Tracks[Bone];
+				Track.Name = FName(Skeleton.RefBoneInfo[Bone].Name);
+				Track.InternalTrack.PosKeys.Reserve(NumKeys);
+				Track.InternalTrack.RotKeys.Reserve(NumKeys);
+				Track.InternalTrack.ScaleKeys.Reserve(NumKeys);
+			}
+
+			TArray<FMatrix> LocalPose;
+			for (int32 KeyIndex = 0; KeyIndex < NumKeys; ++KeyIndex)
+			{
+				const double Time = Start + std::min(KeyIndex / FrameRate, Duration);
+				int32 InvalidBone = INDEX_NONE;
+				if (!SequenceScene->EvaluateLocalPose(Stack, Time, LocalPose, InvalidBone))
+				{
+					Error = "Invalid animated parent transform: " + Skeleton.RefBoneInfo[InvalidBone].Name;
+					return false;
+				}
+				for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+				{
+					const FBoneTransform Transform = FBoneTransform::FromMatrix(LocalPose[Bone]);
+					FRawAnimSequenceTrack& Track = Tracks[Bone].InternalTrack;
+					Track.PosKeys.Add(Transform.Translation);
+					Track.RotKeys.Add(Transform.Rotation);
+					Track.ScaleKeys.Add(Transform.Scale);
+				}
+			}
+
+			// Curves 설정
+			TArray<FAnimationCurveData> Curves;
+			TArray<FbxAnimCurve*> CurveInputs;
+			const char* Axes[] = {
+				FBXSDK_CURVENODE_COMPONENT_X, FBXSDK_CURVENODE_COMPONENT_Y, FBXSDK_CURVENODE_COMPONENT_Z
+			};
+			const int32 LayerCount = Stack->GetMemberCount<FbxAnimLayer>();
+			for (int32 LayerIndex = 0; LayerIndex < LayerCount; ++LayerIndex)
+			{
+				FbxAnimLayer* Layer = Stack->GetMember<FbxAnimLayer>(LayerIndex);
+				if (!Layer) continue;
+				for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+				{
+					FbxNode* Node = Nodes[Bone];
+					const auto ReadProperty = [&](FbxPropertyT<FbxDouble3>& Property, EAnimationCurveProperty Kind)
+					{
+						const FbxDouble3 Defaults = Property.Get();
+						for (uint8 Axis = 0; Axis < 3; ++Axis)
+						{
+							FbxAnimCurve* Curve = Property.GetCurve(Layer, Axes[Axis]);
+							if (!Curve || Curve->KeyGetCount() == 0) continue;
+
+							FAnimationCurveData Channel;
+							Channel.BoneIndex = Bone;
+							Channel.LayerIndex = LayerIndex;
+							Channel.Property = Kind;
+							Channel.Axis = Axis;
+							Channel.DefaultValue = static_cast<float>(Defaults[Axis]);
+
+							const int32 CurveKeyCount = Curve->KeyGetCount();
+							Channel.Keys.Reserve(CurveKeyCount);
+							for (int32 KeyIndex = 0; KeyIndex < CurveKeyCount; ++KeyIndex)
+							{
+								FAnimationCurveKey Key;
+								Key.TimeSeconds = static_cast<float>(Curve->KeyGetTime(KeyIndex).GetSecondDouble() - Start);
+								Key.Value = Curve->KeyGetValue(KeyIndex);
+								const auto Mode = Curve->KeyGetInterpolation(KeyIndex);
+								if (Mode == FbxAnimCurveDef::eInterpolationConstant)
+								{
+									Key.Interpolation = EAnimationCurveInterpolation::Constant;
+									Key.bConstantNext = Curve->KeyGetConstantMode(KeyIndex) == FbxAnimCurveDef::eConstantNext;
+								}
+								else if (Mode == FbxAnimCurveDef::eInterpolationCubic)
+								{
+									Key.Interpolation = EAnimationCurveInterpolation::Cubic;
+									Key.LeaveTangent = Curve->KeyGetRightDerivative(KeyIndex);
+								}
+								if (KeyIndex > 0 &&
+									Curve->KeyGetInterpolation(KeyIndex - 1) == FbxAnimCurveDef::eInterpolationCubic)
+								{
+									Key.ArriveTangent = Curve->KeyGetLeftDerivative(KeyIndex);
+								}
+								Channel.Keys.Add(Key);
+							}
+							Curves.Add(std::move(Channel));
+							CurveInputs.Add(Curve);
+							BoundCurves.insert(Curve);
+						}
+					};
+					ReadProperty(Node->LclTranslation, EAnimationCurveProperty::Translation);
+					ReadProperty(Node->LclRotation, EAnimationCurveProperty::Rotation);
+					ReadProperty(Node->LclScaling, EAnimationCurveProperty::Scale);
+				}
+			}
+
+			TUniquePtr<UAnimDataModel> Model = MakeUnique<UAnimDataModel>();
+			Model->BoneAnimationTracks = std::move(Tracks);
+			Model->CurveData = std::move(Curves);
+			Model->PlayLength = static_cast<float>(Duration);
+			Model->FrameRate = SampleRate;
+			Model->NumberOfFrames = NumKeys - 1;
+			Model->NumberOfKeys = NumKeys;
+			Model->ComposeCurvePose = [SequenceScene, Stack, Start, Duration, CurveInputs = std::move(CurveInputs)](
+				float ClipTime, const TArray<float>& CurveValues, TArray<FMatrix>& OutLocalPose)
+			{
+				const double Offset = ClipTime >= static_cast<float>(Duration) ? Duration : ClipTime;
+				return SequenceScene->ComposeLocalPose(Stack, Start + Offset, CurveInputs, CurveValues, OutLocalPose);
+			};
+			Sequences.Emplace(Stack->GetName(), std::move(Model));
+		}
+
+		// 원본 키는 모든 스택의 샘플과 CurveData를 추출한 뒤에만 교체한다.
+		const FbxTime ValueTime = FBXSDK_TIME_ZERO;
+		for (FbxAnimCurve* Curve : BoundCurves)
+		{
+			const float InitialValue = Curve->KeyGetValue(0);
+			Curve->KeyModifyBegin();
+			Curve->KeyClear();
+			const int KeyIndex = Curve->KeyAdd(ValueTime);
+			Curve->KeySet(KeyIndex, ValueTime, InitialValue, FbxAnimCurveDef::eInterpolationConstant);
+			Curve->KeyModifyEnd();
+			Curve->SetPreExtrapolation(FbxAnimCurveBase::eConstant);
+			Curve->SetPostExtrapolation(FbxAnimCurveBase::eConstant);
+		}
+		Out = std::move(Sequences);
+		Error.clear();
+		return true;
+	}
+	catch (const std::exception& E)
+	{
+		Error = E.what();
+		return false;
+	}
 #else
 	Error = "FBX SDK is not configured.";
 	return false;

@@ -1,10 +1,15 @@
 #include "EnginePCH.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Animation/AnimInstance.h"
+#include "Asset/AssetManager.h"
+#include "Asset/FbxImporter/FbxPath.h"
 #include "Render/RenderCommand.h"
 #include "Render/RenderPacket.h"
 #include "Collision/Ray.h"
 #include "Engine/PrimitiveSceneProxy.h"
 #include "Asset/LOD/StaticMeshLODSelector.h"
+#include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -35,17 +40,31 @@ namespace
 
 USkeletalMeshComponent::USkeletalMeshComponent()
 {
+	PrimaryComponentTick.bCanEverTick = true;
 }
+
+USkeletalMeshComponent::~USkeletalMeshComponent() = default;
 
 void USkeletalMeshComponent::BeginPlay()
 {
     Super::BeginPlay();
     InitBoneTransforms();
+    if (!AnimationSequenceName.empty())
+    {
+        PlaySelectedAnimation();
+    }
 }
 
 void USkeletalMeshComponent::TickComponent(float DeltaTime)
 {
 	Super::TickComponent(DeltaTime);
+
+	if (AnimInstance)
+	{
+		EnsureBoneState();
+		AnimInstance->NativeUpdateAnimation(DeltaTime);
+		RefreshAnimationPose();
+	}
 
 	if (!SkinningMatrices.IsEmpty() && (bSkinningMatricesDirty || AppliedMode != SkinningMode))
 	{
@@ -53,10 +72,144 @@ void USkeletalMeshComponent::TickComponent(float DeltaTime)
 	}
 }
 
+void USkeletalMeshComponent::PlayAnimation(const UAnimSequence* Sequence, bool bLoop)
+{
+	PlayAnimationBlend(Sequence, nullptr, bLoop, 0.0f);
+}
+
+void USkeletalMeshComponent::PlayAnimationBlend(
+	const UAnimSequence* SequenceA, const UAnimSequence* SequenceB, bool bLoop, float Alpha)
+{
+	if (!SequenceA && !SequenceB)
+	{
+		AnimInstance.reset();
+		return;
+	}
+
+	EnsureBoneState();
+	if (!AnimInstance)
+	{
+		AnimInstance = MakeUnique<UAnimInstance>();
+	}
+	AnimInstance->Play(SequenceA, SequenceB, bLoop, Alpha);
+	RefreshAnimationPose();
+}
+
+const TArray<UAnimSequence>* USkeletalMeshComponent::GetAnimationSequences() const
+{
+	if (!SkeletalMesh)
+	{
+		return nullptr;
+	}
+
+	const FString& AssetKey = SkeletalMesh->GetPath();
+	if (const auto* Sequences = UAssetManager::GetFbxAnimSequences(AssetKey))
+	{
+		return Sequences;
+	}
+
+	FString AssetPath;
+	FString Error;
+	if (!FbxPath::ResolveKey(AssetKey, AssetPath, Error))
+	{
+		return nullptr;
+	}
+	return UAssetManager::LoadFbxAnimSequences(AssetPath);
+}
+
+void USkeletalMeshComponent::SetAnimationSequenceName(const FString& InName)
+{
+	AnimationSequenceName = InName;
+	if (AnimationSequenceName.empty())
+	{
+		BlendSequenceName.clear();
+	}
+	if (HasBegunPlay())
+	{
+		PlaySelectedAnimation();
+	}
+}
+
+void USkeletalMeshComponent::SetBlendSequenceName(const FString& InName)
+{
+	BlendSequenceName = InName;
+	if (HasBegunPlay())
+	{
+		PlaySelectedAnimation();
+	}
+}
+
+void USkeletalMeshComponent::SetAnimationBlendAlpha(float InAlpha)
+{
+	AnimationBlendAlpha = std::isnan(InAlpha) ? 0.0f : std::clamp(InAlpha, 0.0f, 1.0f);
+	if (AnimInstance)
+	{
+		AnimInstance->SetBlendAlpha(AnimationBlendAlpha);
+		RefreshAnimationPose();
+	}
+}
+
+void USkeletalMeshComponent::PlaySelectedAnimation()
+{
+	if (!AnimationSequenceName.empty())
+	{
+		if (const auto* Sequences = GetAnimationSequences())
+		{
+			const UAnimSequence* SequenceA = nullptr;
+			const UAnimSequence* SequenceB = nullptr;
+			for (const UAnimSequence& Sequence : *Sequences)
+			{
+				if (!SequenceA && Sequence.GetName() == AnimationSequenceName)
+				{
+					SequenceA = &Sequence;
+				}
+				if (!SequenceB && !BlendSequenceName.empty() && Sequence.GetName() == BlendSequenceName)
+				{
+					SequenceB = &Sequence;
+				}
+			}
+			if (SequenceA)
+			{
+				PlayAnimationBlend(SequenceA, SequenceB, true, AnimationBlendAlpha);
+				return;
+			}
+		}
+	}
+
+	if (AnimInstance)
+	{
+		PlayAnimation(nullptr, false);
+		InitBoneTransforms();
+	}
+}
+
+void USkeletalMeshComponent::RefreshAnimationPose()
+{
+	if (AnimInstance && SkeletalMesh && AnimInstance->EvaluateLocalPose(*SkeletalMesh, LocalBoneTransforms))
+	{
+		bGlobalBoneTransformsOverridden = false;
+		bSkinningMatricesDirty = true;
+	}
+}
+
 void USkeletalMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkeletalMesh)
 {
+	const bool bMeshChanged = SkeletalMesh != InSkeletalMesh;
+	if (bMeshChanged && (!AnimationSequenceName.empty() || !BlendSequenceName.empty()))
+	{
+		AnimInstance.reset();
+		if (!SkeletalMesh || !InSkeletalMesh || SkeletalMesh->GetPath() != InSkeletalMesh->GetPath())
+		{
+			AnimationSequenceName.clear();
+			BlendSequenceName.clear();
+		}
+	}
 	Super::SetSkeletalMesh(InSkeletalMesh);
 	InitBoneTransforms();
+	if (bMeshChanged && HasBegunPlay() && !AnimationSequenceName.empty())
+	{
+		PlaySelectedAnimation();
+	}
 }
 
 void USkeletalMeshComponent::EnsureBoneState()
@@ -66,6 +219,10 @@ void USkeletalMeshComponent::EnsureBoneState()
 
 void USkeletalMeshComponent::InitBoneTransforms()
 {
+	if (AnimInstance)
+	{
+		AnimInstance->NativeInitializeAnimation();
+	}
 	BoneStateMesh = SkeletalMesh;
 	SkinnedVertexBuffer.reset();
 	SkinnedLODs.Reset();
@@ -115,6 +272,7 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	}
 
 	bSkinningMatricesDirty = true;
+	RefreshAnimationPose();
 	UpdateSkinning();
 }
 

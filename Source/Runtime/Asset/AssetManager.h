@@ -5,6 +5,7 @@
 #include "Render/Renderer.h"
 #include "Asset/LOD/StaticMeshLODGenerator.h"
 #include "Asset/FbxImporter/AnimationData.h"
+#include "Animation/AnimSequence.h"
 
 #include <filesystem>
 #include <functional>
@@ -92,6 +93,8 @@ public:
 	static USkeletalMesh* LoadFbxSkeletalMesh(const FString& Path);
 	static const TArray<FAnimationClip>* LoadFbxAnimations(const FString& Path);
 	static const TArray<FAnimationClip>* GetFbxAnimations(const FString& AssetKey);
+	static const TArray<UAnimSequence>* LoadFbxAnimSequences(const FString& Path);
+	static const TArray<UAnimSequence>* GetFbxAnimSequences(const FString& AssetKey);
 
 	// 시작 스캔에서 바이너리를 찾지 못한 FBX 경로. 에디터가 임포트 창으로 넘긴다.
 	const TArray<FString>& GetFbxImportCandidates() const { return FbxImportCandidates; }
@@ -111,7 +114,8 @@ private:
 	TMap<FString, FString> AssetPathMap;
 	TMap<FString, URenderAsset*> AssetMap;
 	TMap<FString, USoundWave*> SoundMap;
-	TMap<FString, TArray<FAnimationClip>> AnimationMap;
+	TMap<FString, TArray<UAnimSequence>> AnimationMap;
+	TMap<FString, TArray<FAnimationClip>> PreviewAnimationMap;
 	TArray<FString> FbxImportCandidates;
 	std::set<FString> ImportedFbxSources; // 소유 FBX 식별자, 대소문자 무시
 
