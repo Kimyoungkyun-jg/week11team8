@@ -19,7 +19,7 @@ public:
 	bool IsRootPanel() const override { return true; }
 	void OpenAsset(const FString& InPath);
 	void SetOpenBlendSpaceCallback(std::function<void(const FString&)> Callback) { OnOpenBlendSpace = std::move(Callback); }
-	void NewAsset(const FString& InPath);
+	void NewAsset(const FString& InPath, const FString& InSkeletonKey);
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();
 	~FAnimGraphEditorPanel() override { Release(); }

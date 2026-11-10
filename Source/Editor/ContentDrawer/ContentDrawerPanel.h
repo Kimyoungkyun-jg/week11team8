@@ -28,7 +28,7 @@ public:
 	// .widget 파일을 더블클릭하면 불린다 (UI 에디터가 연다).
 	void SetOpenWidgetCallback(std::function<void(const FString&)> InCallback) { OnOpenWidget = std::move(InCallback); }
 	void SetCreateWidgetCallback(std::function<void(const FString&)> InCallback) { OnCreateWidget = std::move(InCallback); }
-	void SetCreateAnimGraphCallback(std::function<void(const FString&)> InCallback) { OnCreateAnimGraph = std::move(InCallback); }
+	void SetCreateAnimGraphCallback(std::function<void(const FString&, const FString&)> InCallback) { OnCreateAnimGraph = std::move(InCallback); }
 	void SetOpenAnimGraphCallback(std::function<void(const FString&)> InCallback) { OnOpenAnimGraph = std::move(InCallback); }
 	void SetCreateBlendSpaceCallback(std::function<void(const FString&, bool)> InCallback) { OnCreateBlendSpace = std::move(InCallback); }
 	void SetOpenBlendSpaceCallback(std::function<void(const FString&)> InCallback) { OnOpenBlendSpace = std::move(InCallback); }
@@ -46,6 +46,7 @@ private:
 	void OpenItem(const fs::path& Path);
 	void RefreshFbxFolderCache();
 	void DrawFbxBinaryMenu(const FString& Path);
+	void RefreshSkeletonKeys();
 	std::function<void(const FString&)> OnReimportFromFile;
 	std::function<void(const FString&)> OnImportFbxFiles;
 	// 매 프레임 파일을 열지 않도록 현재 폴더의 FBX 상태를 잠시 들고 있는다.
@@ -60,7 +61,7 @@ private:
 	std::function<void(const FString&, bool)> OnImportFbx;
 	std::function<void(const FString&)> OnOpenWidget;
 	std::function<void(const FString&)> OnCreateWidget;
-	std::function<void(const FString&)> OnCreateAnimGraph;
+	std::function<void(const FString&, const FString&)> OnCreateAnimGraph;   // (대상 경로, 스켈레톤 키)
 	std::function<void(const FString&)> OnOpenAnimGraph;
 	std::function<void(const FString&, bool)> OnCreateBlendSpace;
 	std::function<void(const FString&)> OnOpenBlendSpace;
@@ -68,6 +69,8 @@ private:
 	char NewAssetName[64] = "NewWidget";
 	bool bOpenCreateWidget = false;
 	bool bOpenCreateAnimGraph = false;
+	FString NewAnimGraphSkeleton;          // 생성 모달에서 선택된 스켈레톤 키 (Assets 기준 상대 경로)
+	TArray<FString> SkeletonKeys;          // 모달을 열 때 Assets에서 수집한 SKEL_*.fbxbin
 	bool bOpenCreateBlendSpace = false;
 	bool bNewBlendSpace2D = true;
 

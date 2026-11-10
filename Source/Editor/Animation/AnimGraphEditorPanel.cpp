@@ -53,18 +53,21 @@ void FAnimGraphEditorPanel::OpenAsset(const FString& InPath)
 	StartPreview();
 }
 
-void FAnimGraphEditorPanel::NewAsset(const FString& InPath)
+void FAnimGraphEditorPanel::NewAsset(const FString& InPath, const FString& InSkeletonKey)
 {
+	// 스켈레톤은 호출자가 고른다. 로드할 수 없으면 만들지 않는다.
+	USkeleton* Skeleton = UAssetManager::LoadSkeleton(InSkeletonKey);
+	if (!Skeleton) { Status = "Cannot load skeleton: " + InSkeletonKey; SetOpen(true); return; }
 	FAnimGraphAsset NewGraph;
+	NewGraph.SkeletonPath = Skeleton->GetPath();
 	FAnimGraphState Initial;
 	Initial.Id = 1; Initial.Name = "Idle"; Initial.X = 80.0f; Initial.Y = 120.0f;
+	// 초기 상태에는 이 스켈레톤의 시퀀스 중 경로순 첫 번째를 넣는다. 없으면 비워 두고 사용자가 고른다.
 	TArray<UAnimSequence*> Sequences;
-	UAssetManager::GetAllAnimSequences(Sequences);
-	if (!Sequences.IsEmpty())
-	{
-		Initial.AssetPath = Sequences[0]->GetPath();
-		if (Sequences[0]->Skeleton) NewGraph.SkeletonPath = Sequences[0]->Skeleton->GetPath();
-	}
+	UAssetManager::GetAnimSequencesForSkeleton(Skeleton, Sequences);
+	std::sort(Sequences.begin(), Sequences.end(),
+		[](const UAnimSequence* A, const UAnimSequence* B) { return A->GetPath() < B->GetPath(); });
+	if (!Sequences.IsEmpty()) Initial.AssetPath = Sequences[0]->GetPath();
 	NewGraph.EntryState = Initial.Id;
 	NewGraph.States.push_back(Initial);
 	Path = InPath; Graph = std::move(NewGraph); SelectedId = 1; SelectedPoseNode = 1; View = EView::Root;
