@@ -72,6 +72,7 @@ private:
 	UWorld* PreviewWorld = nullptr;
 	ACharacter* PreviewCharacter = nullptr;
 	FEditorViewportClient Client;
+	float CameraSpeed = 1.0f;
 	float PreviewSpeed = 0.0f;
 	float PreviewDirection = 0.0f;
 	bool bPreviewFalling = false;

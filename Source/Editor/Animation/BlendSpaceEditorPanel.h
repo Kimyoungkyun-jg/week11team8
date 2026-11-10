@@ -52,6 +52,8 @@ private:
 	void AddSample(const FString& SequencePath, float X, float Y);
 	bool Validate(FString& Error) const;
 	float Snap(float Value, const FAxis& Axis) const;
+	// Ignore 번째 샘플을 빼고 (X, Y)에 다른 샘플이 있는지. 1D는 X만 본다.
+	bool IsSamplePositionTaken(int Ignore, float X, float Y) const;
 
 	FString Path;
 	std::function<void(const FString&)> OnOpenSequence;
@@ -78,4 +80,5 @@ private:
 	UWorld* PreviewWorld = nullptr;
 	USkeletalMeshComponent* MeshComponent = nullptr;
 	FEditorViewportClient Client;
+	float CameraSpeed = 1.0f;
 };
