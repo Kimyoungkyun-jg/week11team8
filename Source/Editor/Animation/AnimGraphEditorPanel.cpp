@@ -963,8 +963,9 @@ void FAnimGraphEditorPanel::OnRender()
 	if (ImGui::InputText("AnimGraph Name", AssetName, sizeof(AssetName))) bDirty = true;
 	ImGui::SameLine();
 	if (ImGui::Button("Save")) Save(); ImGui::SameLine();
-	if (ImGui::Button("Validate")) Graph.Validate(Status); ImGui::SameLine();
-	if (bDirty) ImGui::TextUnformatted("*");
+	if (ImGui::Button("Validate")) Graph.Validate(Status);
+	// SameLine은 바로 다음 아이템에만 적용된다. 더티가 아닐 때 이후의 Graph Tree 차일드가 이 줄에 붙지 않도록 조건부로 호출한다.
+	if (bDirty) { ImGui::SameLine(); ImGui::TextUnformatted("*"); }
 	if (!Status.empty()) ImGui::TextWrapped("%s", Status.c_str());
 	const ImVec2 Available = ImGui::GetContentRegionAvail();
 	const float Split = EditorUIScale::Px(6);
