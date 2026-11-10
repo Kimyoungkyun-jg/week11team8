@@ -5,11 +5,15 @@
 #include "FbxPath.h"
 #include "Asset/AssetManager.h"
 #include "Animation/Skeleton.h"
+#include "Asset/AnimSequence.h"
+#include "UObject/UObjectIterator.h"
 #include "Render/Material.h"
 #include "Render/Mesh.h"
 #include "Render/RenderCommand.h"
 #include "Render/Texture2D.h"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <set>
@@ -54,6 +58,117 @@ FSkeletalMeshData ConvertSkeletalLOD(const FFbxMeshLODData& Input, const FRefere
 		Out.Bones.Add(Bone);
 	}
 	return Out;
+}
+
+// 파일의 트랙은 본 이름으로 연결되고 일부 본이 빠질 수 있다(Target Skeleton 임포트).
+// 런타임 샘플러는 Skeleton 본 순서와 같은 개수의 트랙을 요구하므로 여기서 본 순서로 다시 놓는다. 트랙이 없는 본은 기준 포즈 키 1개를 쓴다.
+bool BuildSequence(const FFbxAssetData& Asset, USkeleton& Skeleton, UAnimSequence& Sequence, FString& Error)
+{
+	const FFbxAnimationData& Source = Asset.Animation;
+	const FReferenceSkeleton& Ref = Skeleton.RefSkeleton;
+	const int32 BoneCount = Ref.GetNum();
+	TArray<FBoneAnimationTrack> Tracks;
+	Tracks.SetNum(BoneCount);
+	TArray<uint8> Filled;
+	Filled.SetNum(BoneCount);
+	int32 Matched = 0;
+	for (const FFbxBoneTrack& Track : Source.Tracks)
+	{
+		int32 Bone = Ref.FindBoneIndex(Track.BoneName);
+		// 이 수정 전에 저장된 파일은 이름이 FName을 거쳐 "spine_01"이 "spine_1"로 바뀌어 있다. FName 비교로 한 번 더 찾는다.
+		if (Bone < 0)
+		{
+			const FName Name(Track.BoneName);
+			for (int32 Index = 0; Index < BoneCount && Bone < 0; ++Index)
+				if (FName(Ref.RefBoneInfo[Index].Name) == Name) Bone = Index;
+		}
+		if (Bone < 0 || Filled[Bone]) continue;
+		Tracks[Bone].InternalTrack = Track.InternalTrack;
+		Filled[Bone] = 1;
+		++Matched;
+	}
+	if (!Matched) { Error = "No animation track matches the skeleton: " + Asset.Key; return false; }
+	for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+	{
+		Tracks[Bone].Name = FName(Ref.RefBoneInfo[Bone].Name);
+		if (Filled[Bone]) continue;
+		const FBoneTransform& Pose = Ref.RefBonePose[Bone];
+		Tracks[Bone].InternalTrack.PosKeys = { Pose.Translation };
+		Tracks[Bone].InternalTrack.RotKeys = { Pose.Rotation };
+		Tracks[Bone].InternalTrack.ScaleKeys = { Pose.Scale };
+	}
+	if (Matched < Source.Tracks.Num())
+		HTR_LOG(Warning, "[Anim] {}: {} tracks have no bone in {}", Asset.Key, Source.Tracks.Num() - Matched, Asset.SkeletonKey);
+#ifdef ENGINE_DEBUG
+	// 임포트·저장·샘플링이 맞물리는지 보는 점검. 0초 키를 Skeleton의 기준 포즈와 비교한다.
+	// 키가 1개인 본(움직이지 않는 본)은 기준 포즈와 같아야 한다. 차이가 크면 공간 변환이 어긋난 것이다.
+	{
+		float StaticPosition = 0.f, StaticDegrees = 0.f;
+		int32 StaticCount = 0;
+		FString WorstBone;
+		for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+		{
+			const FRawAnimSequenceTrack& Keys = Tracks[Bone].InternalTrack;
+			if (!Filled[Bone] || Keys.PosKeys.Num() != 1 || Keys.RotKeys.Num() != 1) continue;
+			const FBoneTransform& Bind = Ref.RefBonePose[Bone];
+			const FQuat& A = Keys.RotKeys[0];
+			const FQuat& B = Bind.Rotation;
+			const float Dot = std::min(1.0f, std::abs(A.X * B.X + A.Y * B.Y + A.Z * B.Z + A.W * B.W));
+			const float Degrees = 2.0f * std::acos(Dot) * 57.2957795f;
+			StaticPosition = std::max(StaticPosition, (Keys.PosKeys[0] - Bind.Translation).Length());
+			if (Degrees > StaticDegrees) { StaticDegrees = Degrees; WorstBone = Ref.RefBoneInfo[Bone].Name; }
+			++StaticCount;
+		}
+		HTR_LOG(Info, "[Anim] {}: {}/{} bones matched, {} keys | static bones {}: max position {:.4f}, rotation {:.3f} deg ({})",
+			Asset.Key, Matched, BoneCount, Source.NumberOfKeys, StaticCount, StaticPosition, StaticDegrees, WorstBone);
+	}
+#endif
+	UAnimDataModel* Model = Sequence.DataModel ? Sequence.DataModel : NewObject<UAnimDataModel>(&Sequence);
+	Model->BoneAnimationTracks = std::move(Tracks);
+	Model->FrameRate = Source.FrameRate;
+	Model->NumberOfKeys = Source.NumberOfKeys;
+	Model->NumberOfFrames = Source.NumberOfKeys - 1;
+	// 한 키짜리 포즈 애니메이션도 0으로 나누지 않도록 최소 한 프레임 길이를 준다.
+	Model->PlayLength = static_cast<float>(std::max(1, Model->NumberOfFrames)) / Source.FrameRate.AsDecimal();
+	Sequence.DataModel = Model;
+	Sequence.Skeleton = &Skeleton;
+	Sequence.Name = Source.Name;
+	Sequence.SourceFilePath = Asset.SourcePath;
+	Sequence.SourceTakeIndex = Source.SourceTakeIndex;
+	Sequence.bEnableRootMotion = Source.bEnableRootMotion;
+	Sequence.bForceRootLock = Source.bForceRootLock;
+	Sequence.bUseNormalizedRootMotionScale = Source.bUseNormalizedRootMotionScale;
+	Sequence.RootMotionRootLock = static_cast<ERootMotionRootLock>(Source.RootMotionRootLock);
+	Sequence.RateScale = Source.RateScale;
+	return true;
+}
+
+// 사용자가 바꾼 루트 모션 설정을 재임포트 후에도 유지한다. 기존 .fbxbin이 없으면 예전 .animseq.bin에서 옮긴다.
+void KeepAnimationSettings(const fs::path& Target, FFbxAssetData& Data)
+{
+	FFbxAssetData Existing; FString Ignored;
+	auto& A = Data.Animation;
+	if (fs::exists(Target) && FFbxAssetBake::ReadBaked(FbxPath::ToString(Target), Existing, Ignored) &&
+		Existing.Type == EFbxAssetType::AnimSequence)
+	{
+		const auto& E = Existing.Animation;
+		A.bEnableRootMotion = E.bEnableRootMotion; A.bForceRootLock = E.bForceRootLock;
+		A.bUseNormalizedRootMotionScale = E.bUseNormalizedRootMotionScale;
+		A.RootMotionRootLock = E.RootMotionRootLock; A.RateScale = E.RateScale;
+		return;
+	}
+	// 예전 형식은 FBX 옆의 <이름>.animseq.bin(스택 하나) 또는 <이름>_<번호>.animseq.bin이었다.
+	fs::path Source;
+	if (!FbxPath::ResolveKey(Data.SourcePath, Source, Ignored)) return;
+	const std::wstring Stem = Source.stem().native();
+	for (const std::wstring& Name : { Stem + L".animseq.bin", Stem + L"_" + std::to_wstring(A.SourceTakeIndex) + L".animseq.bin" })
+	{
+		if (FFbxAssetBake::ReadLegacyAnimationSettings(FbxPath::ToString(Source.parent_path() / Name), A))
+		{
+			HTR_LOG(Info, "[Anim] {}: root motion settings migrated from {}", Data.Key, FbxPath::ToString(Name));
+			return;
+		}
+	}
 }
 
 // 아직 등록하지 않은 의존 애셋도 같은 배치에서 찾는다. 실패 시 기존 검색표는 그대로 유지된다.
@@ -109,6 +224,15 @@ public:
 		{
 			auto* Skeleton = Allocate<USkeleton>();
 			Skeleton->RefSkeleton = Asset.RefSkeleton; Object = Skeleton;
+		}
+		else if (Asset.Type == EFbxAssetType::AnimSequence)
+		{
+			// 애니메이션은 Skeleton에 맞춰 만들어진다. 같은 배치, 등록된 애셋, 디스크 순서로 Skeleton을 찾는다.
+			auto* Skeleton = Cast<USkeleton>(Resolve(Asset.SkeletonKey));
+			if (!Skeleton) { if (Error.empty()) Error = "Invalid FBX skeleton reference: " + Asset.SkeletonKey; return nullptr; }
+			auto* Sequence = Allocate<UAnimSequence>();
+			if (!Sequence || !BuildSequence(Asset, *Skeleton, *Sequence, Error)) return nullptr;
+			Object = Sequence;
 		}
 		else if (Asset.Type == EFbxAssetType::Material)
 		{
@@ -248,6 +372,38 @@ URenderAsset* FFbxAssetLoader::CreateTexture(const FImageData& Image, FString& E
 	auto* Object = NewObject<UTexture2D>(); Object->SetResource(std::move(Resource)); return Object;
 }
 
+void FFbxAssetLoader::RebindToReimportedSkeletons()
+{
+	// 메시 FBX를 다시 가져오면 Skeleton 객체가 새로 만들어지고 옛 객체는 Retired가 된다.
+	// 다른 FBX에서 만든 AnimSequence(Target Skeleton 임포트)와 BlendSpace는 옛 Skeleton을 가리킨 채 남으므로,
+	// 객체는 그대로 두고 Skeleton을 새 객체로 바꾼다. 시퀀스는 본 순서가 바뀌었을 수 있어 파일에서 트랙을 다시 놓는다.
+	TArray<UAnimationAsset*> Stale;
+	for (TObjectIterator<UAnimationAsset> It; It; ++It)
+	{
+		UAnimationAsset* Asset = *It;
+		if (Asset && !Asset->IsRetired() && Asset->Skeleton && Asset->Skeleton->IsRetired())
+			Stale.Add(Asset);
+	}
+	for (UAnimationAsset* Asset : Stale)
+	{
+		USkeleton* Current = UAssetManager::GetAssetByPath<USkeleton>(Asset->Skeleton->GetPath());
+		if (!Current || Current->IsRetired()) continue;
+		if (UAnimSequence* Sequence = Cast<UAnimSequence>(Asset))
+		{
+			FString Path, Error;
+			FFbxAssetData Data;
+			if (!FbxPath::ResolveKey(Sequence->GetPath(), Path, Error) || !FFbxAssetBake::ReadBaked(Path, Data, Error) ||
+				Data.Type != EFbxAssetType::AnimSequence || !BuildSequence(Data, *Current, *Sequence, Error))
+			{
+				HTR_LOG(Warning, "[Anim] Cannot rebind {} to the reimported skeleton: {}", Sequence->GetPath(), Error);
+				continue;
+			}
+		}
+		else
+			Asset->Skeleton = Current;
+	}
+}
+
 URenderAsset* FFbxAssetLoader::LoadAsset(const FString& Path, FString& Error)
 {
 	try
@@ -314,6 +470,7 @@ FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxIm
 			fs::path Target;
 			if (!FbxPath::ResolveKey(Data.Key, Target, Result.Error)) return Result;
 			FReplacement File{ Target, Folder.Path / (std::to_string(Files.size()) + ".new"), Folder.Path / (std::to_string(Files.size()) + ".old") };
+			if (Data.Type == EFbxAssetType::AnimSequence) KeepAnimationSettings(Target, Data);
 			if (!FFbxAssetBake::WriteBaked(FbxPath::ToString(File.Staged), Data, Result.Error)) return Result;
 			FFbxAssetData Verified;
 			if (!FFbxAssetBake::ReadBaked(FbxPath::ToString(File.Staged), Verified, Result.Error)) return Result;
@@ -351,14 +508,7 @@ FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxIm
 			return Result;
 		}
 		Batch.Publish(); Result.AssetKeys = std::move(OutputKeys); Result.bSuccess = true;
-		for (const auto& Key : Result.AssetKeys)
-		{
-			if (USkeletalMesh* SkeletalMesh = UAssetManager::GetAssetByPath<USkeletalMesh>(Key))
-			{
-				if (SkeletalMesh->Skeleton)
-					UAssetManager::LoadFbxAnimSequences(Key, *SkeletalMesh->Skeleton);
-			}
-		}
+		RebindToReimportedSkeletons();
 		UAssetManager::Get().MarkFbxImported(OwnerSource.empty() ? SourceKey : OwnerSource);
 	}
 	catch (const std::exception& E) { Result.Error = E.what(); }

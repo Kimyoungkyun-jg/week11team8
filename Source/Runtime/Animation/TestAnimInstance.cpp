@@ -47,10 +47,10 @@ void UTestAnimInstance::BuildGraph()
 	LocomotionPlayer->BlendSpace = SimpleBlendSpace;
 	StateMachine = CreateNode<FAnimNode_StateMachine>();
 	const int32 Locomotion = StateMachine->AddState("Locomotion", LocomotionPlayer);
-	const int32 Jump = AddSequenceState(*StateMachine, "Jump", BasePath + "MM_Jump.animseq", false, JumpPlayer);
-	const int32 FallLoop = AddSequenceState(*StateMachine, "FallLoop", BasePath + "MM_Fall_Loop.animseq", true, FallLoopPlayer);
-	const int32 Land = AddSequenceState(*StateMachine, "Land", BasePath + "MM_Land.animseq", false, LandPlayer);
-	const int32 Attack = AddSequenceState(*StateMachine, "Attack", BasePath + "MM_Attack_01.animseq", false, AttackPlayer);
+	const int32 Jump = AddSequenceState(*StateMachine, "Jump", BasePath + "AS_MM_Jump.fbxbin", false, JumpPlayer);
+	const int32 FallLoop = AddSequenceState(*StateMachine, "FallLoop", BasePath + "AS_MM_Fall_Loop.fbxbin", true, FallLoopPlayer);
+	const int32 Land = AddSequenceState(*StateMachine, "Land", BasePath + "AS_MM_Land.fbxbin", false, LandPlayer);
+	const int32 Attack = AddSequenceState(*StateMachine, "Attack", BasePath + "AS_MM_Attack_01.fbxbin", false, AttackPlayer);
 	if (Jump >= 0 && FallLoop >= 0 && Land >= 0)
 	{
 		StateMachine->AddTransition(Locomotion, Jump, [this] { return bJumpEventThisTick; }, 0.08f);

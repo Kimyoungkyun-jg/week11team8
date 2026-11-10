@@ -230,8 +230,8 @@ void FContentDrawerPanel::OnRender()
 			{
 				const fs::path Path = It->path();
 				const FString EntryName = FbxPath::ToString(Path.filename());
-				if ((Path.extension() == ".bin" && !EntryName.ends_with(".animseq.bin")) ||
-					EntryName.starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
+				// .bin은 OBJ 캐시와 예전 .animseq.bin이다. 애셋은 .fbxbin 하나로 통일했으므로 보이지 않는다.
+				if (Path.extension() == ".bin" || EntryName.starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
 
 				std::error_code TypeError;
 				const bool bIsDirectory = fs::is_directory(Path, TypeError);
@@ -244,18 +244,6 @@ void FContentDrawerPanel::OnRender()
 				std::string PathString = FbxPath::ToString(Path);
 				std::string FilenameString = FbxPath::ToString(Path.filename());
 				FString DisplayName = FilenameString;
-				if (FilenameString.ends_with(".animseq.bin"))
-				{
-					auto Found = AnimSequenceDisplayNames.find(PathString);
-					if (Found == AnimSequenceDisplayNames.end())
-					{
-						FString SkeletonPath;
-						if (FFbxAssetBake::ReadAnimationSequenceSkeletonPath(PathString, SkeletonPath))
-							DisplayName = GetAnimSequenceDisplayName(PathString, SkeletonPath);
-						Found = AnimSequenceDisplayNames.emplace(PathString, DisplayName).first;
-					}
-					DisplayName = Found->second;
-				}
 
 				ImGui::PushID(PathString.c_str()); // 각 위젯에 고유 ID 부여
 				UTexture2D* Thumbnail = nullptr;
@@ -419,13 +407,12 @@ void FContentDrawerPanel::OpenItem(const fs::path& Path)
 	if (Extension == ".widget" && OnOpenWidget) OnOpenWidget(FbxPath::ToString(Path));
 	else if (Extension == ".animgraph" && OnOpenAnimGraph) OnOpenAnimGraph(FbxPath::ToString(Path));
 	else if (Extension == ".blendspace" && OnOpenBlendSpace) OnOpenBlendSpace(FbxPath::ToString(Path));
-	else if (Extension == ".bin" && FbxPath::ToString(Path.filename()).ends_with(".animseq.bin") && OnOpenAnimSequence)
-		OnOpenAnimSequence(FbxPath::ToString(Path));
 	else if (Extension == ".fbxbin")
 	{
 		FString Error;
 		auto* Asset = FFbxAssetLoader::LoadAsset(FbxPath::ToString(Path), Error);
 		if (!Asset) HTR_LOG(Warning, "[FBX] {}", Error);
+		else if (Asset->IsA<UAnimSequence>() && OnOpenAnimSequence) OnOpenAnimSequence(FbxPath::ToString(Path));
 		else if (Asset->IsA<USkeletalMesh>() && OnOpenSkeletalMesh) OnOpenSkeletalMesh(FbxPath::ToString(Path));
 		else if (OnOpenAsset) OnOpenAsset(FbxPath::ToString(Path));
 	}
@@ -459,8 +446,10 @@ void FContentDrawerPanel::RefreshFbxFolderCache()
 		else if (Extension == ".fbxbin")
 		{
 			FFbxAssetData Header; FString HeaderError;
+			// 애니메이션만 든 FBX도 AS_*.fbxbin이 있으면 임포트된 것으로 보고 숨긴다.
 			if (FFbxAssetBake::ReadHeader(FbxPath::ToString(Path), Header, HeaderError) &&
-				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh))
+				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh ||
+				 Header.Type == EFbxAssetType::AnimSequence))
 				FolderSources.insert(Lower(Header.SourcePath));
 		}
 	}

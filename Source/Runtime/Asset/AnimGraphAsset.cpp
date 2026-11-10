@@ -8,6 +8,13 @@
 
 namespace
 {
+	// 시퀀스는 AS_*.fbxbin이다. 예전 .animseq 키도 로더가 AS_ 키로 바꿔 읽으므로 받는다.
+	bool HasPoseAssetExtension(EAnimGraphPose Pose, const FString& Path)
+	{
+		if (Pose == EAnimGraphPose::Sequence) return Path.ends_with(".fbxbin") || Path.ends_with(".animseq");
+		return Path.ends_with(".blendspace");
+	}
+
 	fs::path ResolvePath(const FString& Path)
 	{
 		fs::path Relative(Path);
@@ -50,13 +57,11 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 			static_cast<int>(State.InputY) < 0 || static_cast<int>(State.InputY) > 2)
 		{ Error = "Invalid state."; return false; }
 		if (State.AssetPath.empty() && State.OutputPlayerId == 0) { Error = "State has no animation asset: " + State.Name; return false; }
-		const FString Extension = State.Pose == EAnimGraphPose::Sequence ? ".animseq" : ".blendspace";
-		if (!State.AssetPath.empty() && !State.AssetPath.ends_with(Extension)) { Error = "Wrong asset type in state: " + State.Name; return false; }
+		if (!State.AssetPath.empty() && !HasPoseAssetExtension(State.Pose, State.AssetPath)) { Error = "Wrong asset type in state: " + State.Name; return false; }
 		if (State.Players.size() > 256) { Error = "Too many player nodes in state: " + State.Name; return false; }
 		std::set<int32> PlayerIds;
 		for (const auto& Player : State.Players)
 		{
-			const FString PlayerExtension = Player.Pose == EAnimGraphPose::Sequence ? ".animseq" : ".blendspace";
 			if (Player.Id <= 0 || !PlayerIds.insert(Player.Id).second ||
 				static_cast<int>(Player.Pose) < 0 || static_cast<int>(Player.Pose) > 2 ||
 				static_cast<int>(Player.InputX) < 0 || static_cast<int>(Player.InputX) > 2 ||
@@ -64,7 +69,7 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 				!std::isfinite(Player.X) || !std::isfinite(Player.Y) ||
 				!std::isfinite(Player.ConstantX) || !std::isfinite(Player.ConstantY) ||
 				!std::isfinite(Player.PlayRate) || Player.PlayRate <= 0 ||
-				(!Player.AssetPath.empty() && !Player.AssetPath.ends_with(PlayerExtension)))
+				(!Player.AssetPath.empty() && !HasPoseAssetExtension(Player.Pose, Player.AssetPath)))
 			{ Error = "Invalid player node in state: " + State.Name; return false; }
 		}
 		if (State.OutputPlayerId != 0)

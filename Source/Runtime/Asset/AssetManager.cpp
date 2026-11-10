@@ -204,6 +204,18 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 				(Header.Type == EFbxAssetType::StaticMesh || Header.Type == EFbxAssetType::SkeletalMesh) &&
 				GetAssetByPath<URenderAsset>(Path))
 				MarkFbxImported(Header.SourcePath);
+			// 애니메이션만 든 FBX(예: MM_Jump.FBX)는 다른 FBX의 Skeleton을 대상으로 AS_*.fbxbin만 만든다.
+			// Skeleton이 같은 FBX에서 왔으면 메시 FBX의 테이크이므로 위의 메시 바이너리 기준으로만 판단한다.
+			else if (Header.Type == EFbxAssetType::AnimSequence)
+			{
+				const UAnimSequence* Sequence = GetAssetByPath<UAnimSequence>(Path);
+				FFbxAssetData SkeletonHeader; fs::path SkeletonFile;
+				if (Sequence && Sequence->Skeleton &&
+					FbxPath::ResolveKey(Sequence->Skeleton->GetPath(), SkeletonFile, Error) &&
+					FFbxAssetBake::ReadHeader(FbxPath::ToString(SkeletonFile), SkeletonHeader, Error) &&
+					FoldCase(SkeletonHeader.SourcePath) != FoldCase(Header.SourcePath))
+					MarkFbxImported(Header.SourcePath);
+			}
 		}
 
 		if (OnProgress)
@@ -211,48 +223,13 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 			OnProgress(i + 1, Total, Key);
 		}
 	}
-
-	// 애니메이션만 든 FBX(예: MM_Jump.FBX)는 .fbxbin 대신 같은 폴더에 <이름>.animseq.bin 또는 <이름>_<번호>.animseq.bin을 만든다.
-	// 그 시퀀스의 Skeleton이 다른 FBX에서 왔으면 애니메이션 전용으로 이미 처리된 FBX다. 임포트 창에 올리지 않는다.
-	// Skeleton이 같은 FBX에서 왔으면 메시 FBX의 테이크이므로, 위의 메시 바이너리 기준으로만 판단한다.
-	const auto IsAnimationOnlyFbxProcessed = [](const FString& FbxFilePath, const FString& FbxKey)
-	{
-		const fs::path FbxFile = FbxPath::FromString(FbxFilePath);
-		const std::wstring Stem = FbxFile.stem().native();
-		const FString StemText = FoldCase(FbxPath::ToString(FbxFile.stem()));
-		for (const wchar_t* Suffix : { L".animseq.bin", L"_0.animseq.bin" })
-		{
-			const fs::path BinPath = FbxFile.parent_path() / (Stem + Suffix);
-			std::error_code FileError;
-			if (!fs::exists(BinPath, FileError)) continue;
-			FString SkeletonPath;
-			if (!FFbxAssetBake::ReadAnimationSequenceSkeletonPath(FbxPath::ToString(BinPath), SkeletonPath)) continue;
-			fs::path SkeletonDiskPath;
-			FFbxAssetData SkeletonHeader;
-			FString Error;
-			if (FbxPath::ResolveKey(SkeletonPath, SkeletonDiskPath, Error) &&
-				FFbxAssetBake::ReadHeader(FbxPath::ToString(SkeletonDiskPath), SkeletonHeader, Error))
-				return FoldCase(SkeletonHeader.SourcePath) != FoldCase(FbxKey);
-			// Skeleton 바이너리가 아직 없으면(새로 받은 저장소) Skeleton 키 이름에 이 FBX 이름이 들어 있는지로 판단한다.
-			return FoldCase(SkeletonPath).find(StemText) == FString::npos;
-		}
-		return false;
-	};
-
 	// 스캔 순서는 정해져 있지 않으므로 모든 바이너리를 본 뒤에 비교한다.
 	FbxImportCandidates.Reset();
 	for (const FString& Path : FbxFiles)
 	{
 		FString Key, Error;
 		if (FbxPath::GetAssetKey(Path, Key, Error) && !IsFbxImported(Key))
-		{
-			if (IsAnimationOnlyFbxProcessed(Path, Key))
-			{
-				MarkFbxImported(Key);
-				continue;
-			}
 			FbxImportCandidates.Add(Path);
-		}
 	}
 }
 
@@ -271,13 +248,7 @@ void UAssetManager::LoadAsset(const FString& Key, const FString& Path) {
 	if (Extension == ".fbxbin")
 	{
 		FString Error;
-		URenderAsset* Asset = FFbxAssetLoader::LoadAsset(Path, Error);
-		if (!Asset) HTR_LOG(Error, "[FBX] {}", Error);
-		else if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
-		{
-			if (SkeletalMesh->Skeleton)
-				LoadFbxAnimSequences(Path, *SkeletalMesh->Skeleton);
-		}
+		if (!FFbxAssetLoader::LoadAsset(Path, Error)) HTR_LOG(Error, "[FBX] {}", Error);
 		return;
 	}
 	if (Extension == ".png" || Extension == ".dds") {
@@ -609,45 +580,26 @@ USkeleton* UAssetManager::LoadSkeleton(const FString& AssetPath)
 UAnimSequence* UAssetManager::LoadAnimSequence(const FString& AssetPath)
 {
 	if (UAnimSequence* Cached = GetAssetByPath<UAnimSequence>(AssetPath)) return Cached;
-	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
-	const FString BinPath = FbxPath::ToString(ContentPaths::AssetRoot / FbxPath::FromString(Key + ".bin"));
-	FString SkeletonPath;
-	if (!FFbxAssetBake::ReadAnimationSequenceSkeletonPath(BinPath, SkeletonPath))
+	FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	// 예전 키(<폴더>/<FBX 이름>.animseq)는 같은 폴더의 AS_<FBX 이름>.fbxbin으로 읽는다. 다른 브랜치의 씬·JSON을 열 때를 위한 것이다.
+	if (Key.ends_with(".animseq"))
 	{
-		HTR_LOG(Warning, "Cannot read animation sequence header: {}", BinPath);
+		const fs::path Legacy = FbxPath::FromString(Key);
+		const FString Migrated = FbxPath::ToString(Legacy.parent_path() / (L"AS_" + Legacy.stem().native() + L".fbxbin"));
+		HTR_LOG(Warning, "[Anim] Legacy sequence key {} is read as {}", Key, Migrated);
+		Key = Migrated;
+		if (UAnimSequence* Cached = GetAssetByPath<UAnimSequence>(Key)) return Cached;
+	}
+	if (GetAssetExtension(Key) != ".fbxbin") return nullptr;
+	FString Path, Error;
+	if (!FbxPath::ResolveKey(Key, Path, Error))
+	{
+		HTR_LOG(Warning, "[Anim] {}", Error);
 		return nullptr;
 	}
-	USkeleton* Skeleton = LoadSkeleton(SkeletonPath);
-	if (!Skeleton)
-	{
-		HTR_LOG(Warning, "Cannot load animation skeleton: {}", SkeletonPath);
-		return nullptr;
-	}
-	UAnimSequence* Sequence = NewObject<UAnimSequence>();
-	if (!FFbxAssetBake::ReadAnimationSequence(BinPath, *Skeleton, *Sequence))
-	{
-		HTR_LOG(Warning, "Cannot read animation sequence: {}", BinPath);
-		return nullptr;
-	}
-	Get().RegisterAsset(Key, Sequence);
+	UAnimSequence* Sequence = Cast<UAnimSequence>(FFbxAssetLoader::LoadAsset(Path, Error));
+	if (!Sequence) HTR_LOG(Warning, "[Anim] Cannot load animation sequence {}: {}", Key, Error.empty() ? FString("not an AnimSequence") : Error);
 	return Sequence;
-}
-
-UAnimSequence* UAssetManager::LoadOrImportFbxAnimSequence(const FString& AssetPath, USkeleton& Skeleton)
-{
-	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
-	if (!Key.ends_with(".animseq")) return nullptr;
-	if (UAnimSequence* Cached = GetAssetByPath<UAnimSequence>(Key))
-		return Cached->Skeleton == &Skeleton ? Cached : nullptr;
-	const fs::path BinPath = ContentPaths::AssetRoot / FbxPath::FromString(Key + ".bin");
-	if (fs::exists(BinPath))
-		if (UAnimSequence* Sequence = LoadAnimSequence(Key))
-			return Sequence->Skeleton == &Skeleton ? Sequence : nullptr;
-	const FString SourceKey = Key.substr(0, Key.size() - 8) + ".FBX";
-	const FString SourcePath = FbxPath::ToString(ContentPaths::AssetRoot / FbxPath::FromString(SourceKey));
-	if (!fs::exists(FbxPath::FromString(SourcePath)) || !LoadFbxAnimSequences(SourcePath, Skeleton)) return nullptr;
-	UAnimSequence* Sequence = GetAssetByPath<UAnimSequence>(Key);
-	return Sequence && Sequence->Skeleton == &Skeleton ? Sequence : nullptr;
 }
 
 UBlendSpace* UAssetManager::LoadBlendSpace(const FString& AssetPath)
@@ -739,15 +691,35 @@ bool UAssetManager::SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& Bl
 
 bool UAssetManager::SaveAnimSequence(const UAnimSequence& Sequence)
 {
+	// 키 데이터는 FBX에서 다시 만들 수 있으므로 트랙은 그대로 두고 에디터에서 바꾸는 재생 설정만 고쳐 쓴다.
 	const FString& Key = Sequence.GetPath();
-	const FString RelativeKey = Key.rfind("Assets/", 0) == 0 ? Key.substr(7) : Key;
-	const fs::path Relative = FbxPath::FromString(RelativeKey + ".bin");
-	if (Key.empty() || !Key.ends_with(".animseq") || Relative.is_absolute() ||
-		GetAssetByPath<UAnimSequence>(Key) != &Sequence) return false;
-	for (const fs::path& Part : Relative)
-		if (Part == "..") return false;
-	return FFbxAssetBake::WriteAnimationSequence(
-		FbxPath::ToString(ContentPaths::AssetRoot / Relative), Sequence);
+	FString Path, Error;
+	if (Key.empty() || GetAssetExtension(Key) != ".fbxbin" || GetAssetByPath<UAnimSequence>(Key) != &Sequence ||
+		!FbxPath::ResolveKey(Key, Path, Error)) return false;
+	FFbxAssetData Data;
+	if (!FFbxAssetBake::ReadBaked(Path, Data, Error) || Data.Type != EFbxAssetType::AnimSequence)
+	{
+		HTR_LOG(Warning, "[Anim] Cannot save {}: {}", Key, Error);
+		return false;
+	}
+	Data.Animation.bEnableRootMotion = Sequence.bEnableRootMotion;
+	Data.Animation.bForceRootLock = Sequence.bForceRootLock;
+	Data.Animation.bUseNormalizedRootMotionScale = Sequence.bUseNormalizedRootMotionScale;
+	Data.Animation.RootMotionRootLock = static_cast<uint8>(Sequence.RootMotionRootLock);
+	Data.Animation.RateScale = Sequence.RateScale;
+	// 쓰는 도중 실패해도 원본이 남도록 임시 파일에 쓰고 바꾼다.
+	const fs::path Target = FbxPath::FromString(Path);
+	fs::path Staged = Target; Staged += L".saving";
+	if (!FFbxAssetBake::WriteBaked(FbxPath::ToString(Staged), Data, Error))
+	{
+		std::error_code Ignored; fs::remove(Staged, Ignored);
+		HTR_LOG(Warning, "[Anim] Cannot save {}: {}", Key, Error);
+		return false;
+	}
+	std::error_code Ec;
+	fs::rename(Staged, Target, Ec);
+	if (Ec) { fs::remove(Staged, Ec); return false; }
+	return true;
 }
 
 void UAssetManager::GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArray<UAnimSequence*>& OutSequences)
@@ -785,83 +757,40 @@ USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)
 		FString Error;
 		USkeletalMesh* Mesh = Cast<USkeletalMesh>(FFbxAssetLoader::LoadAsset(Path, Error));
 		if (!Mesh && !Error.empty()) HTR_LOG(Warning, "[FBX] {}", Error);
-		else if (Mesh && Mesh->Skeleton && !GetFbxAnimSequences(MakeAssetKey(Path)))
-			LoadFbxAnimSequences(Path, *Mesh->Skeleton);
 		return Mesh;
 	}
 	const FString Key = MakeAssetKey(Path);
 	if (USkeletalMesh* Cached = GetAssetByPath<USkeletalMesh>(Key))
-	{
-		if (Cached->Skeleton && !GetFbxAnimSequences(Key))
-			LoadFbxAnimSequences(Path, *Cached->Skeleton);
 		return Cached;
-	}
 	if (GetAssetExtension(Path) == ".fbx" && fs::exists(FbxPath::FromString(Path)))
 	{
 		FFbxImportResult Imported = FFbxAssetLoader::Import(Path, FFbxImportOptions{});
 		for (const FString& ImportedKey : Imported.AssetKeys)
 		{
 			if (USkeletalMesh* Mesh = GetAssetByPath<USkeletalMesh>(ImportedKey))
-			{
-				if (Mesh->Skeleton)
-					LoadFbxAnimSequences(Path, *Mesh->Skeleton);
 				return Mesh;
-			}
 		}
 	}
 	return nullptr;
 }
 
+// 애니메이션은 임포트 때 AS_*.fbxbin으로 만들어지고 시작 스캔에서 로드된다. 여기서는 FBX를 다시 읽지 않고 같은 Skeleton의 시퀀스를 모은다.
 const TArray<UAnimSequence*>* UAssetManager::LoadFbxAnimSequences(const FString& Path, USkeleton& Skeleton)
 {
-	const FString Key = MakeAssetKey(Path);
-	FString SourcePath = Path;
-	FFbxImportOptions Options{};
-	FString Error;
-	if (GetAssetExtension(Path) == ".fbxbin")
-	{
-		fs::path ResolvedPath = FbxPath::FromString(Path);
-		if (!fs::exists(ResolvedPath))
-		{
-			FString ResolveError;
-			FbxPath::ResolveKey(Key, ResolvedPath, ResolveError);
-		}
-		FFbxAssetData Header;
-		if (!FFbxAssetBake::ReadHeader(FbxPath::ToString(ResolvedPath), Header, Error))
-		{
-			HTR_LOG(Warning, "[FBX] {}", Error);
-			return nullptr;
-		}
-		SourcePath = FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath));
-		Options = Header.Options;
-	}
-	else if (!Skeleton.GetPath().empty() && GetAssetExtension(Skeleton.GetPath()) == ".fbxbin")
-	{
-		fs::path SkelDiskPath;
-		FString ResolveError;
-		if (FbxPath::ResolveKey(Skeleton.GetPath(), SkelDiskPath, ResolveError))
-		{
-			FFbxAssetData SkelHeader;
-			if (FFbxAssetBake::ReadHeader(FbxPath::ToString(SkelDiskPath), SkelHeader, ResolveError))
-				Options = SkelHeader.Options;
-		}
-	}
 	TArray<UAnimSequence*> Sequences;
-	if (!FFbxAssetImporter::ExtractAnimationSequences(SourcePath, Options, Skeleton, Sequences, Error))
-	{
-		if (!Error.empty())
-			HTR_LOG(Warning, "[FBX] Animation sequence extraction failed: {}", Error);
-		return nullptr;
-	}
-	for (UAnimSequence* Sequence : Sequences)
-		Get().RegisterAsset(Sequence->GetPath(), Sequence);
+	GetAnimSequencesForSkeleton(&Skeleton, Sequences);
+	std::sort(Sequences.begin(), Sequences.end(),
+		[](const UAnimSequence* A, const UAnimSequence* B) { return A->GetPath() < B->GetPath(); });
+	const FString Key = MakeAssetKey(Path);
 	Get().AnimationSequencesByFbx.FindOrAdd(Key) = std::move(Sequences);
 	return Get().AnimationSequencesByFbx.Find(Key);
 }
 
 const TArray<UAnimSequence*>* UAssetManager::GetFbxAnimSequences(const FString& AssetKey)
 {
-	return Get().AnimationSequencesByFbx.Find(AssetKey);
+	USkeletalMesh* Mesh = GetAssetByPath<USkeletalMesh>(AssetKey);
+	if (!Mesh || !Mesh->Skeleton) return nullptr;
+	return LoadFbxAnimSequences(AssetKey, *Mesh->Skeleton);
 }
 
 bool UAssetManager::ReorientStaticMesh(UStaticMesh& Mesh, const std::function<FVector(const FVector&)>& Rotate)

@@ -567,14 +567,14 @@ void FPoseRetargetPanel::OnRender()
 	DrawRigPicker(1);
 	if (SourceRig)
 	{
-		if (ImGui::Button("Extract source animations"))
+		if (ImGui::Button("Refresh source animations"))
 		{
 			SelectAnimation(-1);
 			const FString Path = (std::filesystem::path("Assets") / SourceRig->GetPath()).generic_string();
 			const TArray<UAnimSequence*>* Sequences = SourceRig->Skeleton ?
 				UAssetManager::LoadFbxAnimSequences(Path, *SourceRig->Skeleton) : nullptr;
-			AnimationMessage = !Sequences ? "Animation extraction failed." :
-				Sequences->IsEmpty() ? "No animation clips found in Source FBX." : "Animations extracted.";
+			AnimationMessage = !Sequences ? "No skeleton for source rig." :
+				Sequences->IsEmpty() ? "No AnimSequence uses this skeleton. Import animations with Target Skeleton." : "Animations listed.";
 		}
 		if (const TArray<UAnimSequence*>* Sequences = UAssetManager::GetFbxAnimSequences(SourceRig->GetPath()))
 		{
@@ -582,8 +582,10 @@ void FPoseRetargetPanel::OnRender()
 			ImGui::Text("%d clips", Sequences->Num());
 			if (!Sequences->IsEmpty())
 			{
-				const char* Current = SelectedAnimation >= 0 && SelectedAnimation < Sequences->Num()
-					? (*Sequences)[SelectedAnimation]->Name.c_str() : "Select animation";
+				// 테이크 이름은 모두 "Unreal Take"처럼 같을 수 있어 파일 이름(AS_...)으로 표시한다.
+				const FString CurrentLabel = SelectedAnimation >= 0 && SelectedAnimation < Sequences->Num()
+					? FbxPath::ToString(FbxPath::FromString((*Sequences)[SelectedAnimation]->GetPath()).stem()) : FString("Select animation");
+				const char* Current = CurrentLabel.c_str();
 				ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 150.0f));
 				if (ImGui::BeginCombo("Source animation", Current))
 				{
@@ -591,7 +593,7 @@ void FPoseRetargetPanel::OnRender()
 					for (int32 ClipIndex = 0; ClipIndex < Sequences->Num(); ++ClipIndex)
 					{
 						ImGui::PushID(ClipIndex);
-						if (ImGui::Selectable((*Sequences)[ClipIndex]->Name.c_str(), SelectedAnimation == ClipIndex))
+						if (ImGui::Selectable(FbxPath::ToString(FbxPath::FromString((*Sequences)[ClipIndex]->GetPath()).stem()).c_str(), SelectedAnimation == ClipIndex))
 							SelectAnimation(ClipIndex);
 						ImGui::PopID();
 					}

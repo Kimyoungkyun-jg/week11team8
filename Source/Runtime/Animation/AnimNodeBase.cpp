@@ -87,6 +87,27 @@ bool FAnimNode_SequencePlayer::ConsumeRootMotion(FMatrix& OutDelta)
 	return true;
 }
 
+float FAnimNode_SequencePlayer::GetCycleSeconds() const
+{
+	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(PlayRate) || PlayRate <= 0.0f ||
+		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f) return 0.0f;
+	const float Length = Sequence->GetDataModel()->PlayLength;
+	return Length > 0.0f && std::isfinite(Length) ? Length / (PlayRate * Sequence->RateScale) : 0.0f;
+}
+
+bool FAnimNode_SequencePlayer::GetNormalizedTime(float& OutTime) const
+{
+	if (!Sequence || !Sequence->GetDataModel() || Sequence->GetDataModel()->PlayLength <= 0.0f) return false;
+	OutTime = std::clamp(CurrentTime / Sequence->GetDataModel()->PlayLength, 0.0f, 1.0f);
+	return true;
+}
+
+void FAnimNode_SequencePlayer::SetNormalizedTime(float Time)
+{
+	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(Time)) return;
+	CurrentTime = std::clamp(Time, 0.0f, 1.0f) * Sequence->GetDataModel()->PlayLength;
+}
+
 void FAnimNode_TwoWayBlend::Reset()
 {
 	if (A) A->Reset();
@@ -95,9 +116,27 @@ void FAnimNode_TwoWayBlend::Reset()
 
 void FAnimNode_TwoWayBlend::Update(float DeltaSeconds)
 {
+	// 가중치가 0인 자식도 시간을 진행한다. 멈춰 두면 다시 섞일 때 멈췄던 위치에서 이어져 동작이 튄다.
 	const float WeightB = std::clamp(Alpha, 0.0f, 1.0f);
-	if (WeightB < 1.0f && A) A->Update(DeltaSeconds);
-	if (WeightB > 0.0f && B) B->Update(DeltaSeconds);
+	FAnimNode_Base* Leader = WeightB >= 0.5f ? B : A;
+	FAnimNode_Base* Follower = Leader == A ? B : A;
+	if (!Leader) std::swap(Leader, Follower);
+	if (!Leader) return;
+	Leader->Update(DeltaSeconds);
+	if (!Follower) return;
+	const float LeaderCycle = Leader->GetCycleSeconds();
+	const float FollowerCycle = Follower->GetCycleSeconds();
+	float LeaderTime = 0.0f;
+	if (bSyncByNormalizedTime && Leader->IsLooping() && Follower->IsLooping() &&
+		LeaderCycle > 0.0f && FollowerCycle > 0.0f && Leader->GetNormalizedTime(LeaderTime))
+	{
+		// 리더가 이번 프레임에 진행한 주기 비율만큼 팔로워도 진행해 루트 모션을 같은 비율로 얻는다.
+		// 그 뒤 위상을 리더에 맞춰 누적 오차와 처음 어긋남을 없앤다.
+		Follower->Update(DeltaSeconds * FollowerCycle / LeaderCycle);
+		Follower->SetNormalizedTime(LeaderTime);
+	}
+	else
+		Follower->Update(DeltaSeconds);
 }
 
 bool FAnimNode_TwoWayBlend::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
@@ -151,6 +190,13 @@ bool FAnimNode_BlendSpacePlayer::Evaluate(const USkeleton* Skeleton, TArray<FAni
 {
 	return BlendSpace && Skeleton && BlendSpace->Skeleton == Skeleton &&
 		BlendSpace->Evaluate(InputX, InputY, NormalizedTime, OutPose);
+}
+
+float FAnimNode_BlendSpacePlayer::GetCycleSeconds() const
+{
+	if (!BlendSpace || !std::isfinite(PlayRate) || PlayRate <= 0.0f) return 0.0f;
+	const float Length = BlendSpace->GetEffectiveLength(InputX, InputY);
+	return Length > 0.0f && std::isfinite(Length) ? Length / PlayRate : 0.0f;
 }
 
 bool FAnimNode_BlendSpacePlayer::ConsumeRootMotion(FMatrix& OutDelta)

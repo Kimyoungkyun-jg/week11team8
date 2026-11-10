@@ -5,7 +5,7 @@
   "Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
   "States": [
     {
-      "Asset": "Models/UnrealModel/Idle.animseq",
+      "Asset": "Models/UnrealModel/AS_Idle.fbxbin",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
       "DirectionOffsetX": 0.0,
@@ -55,7 +55,7 @@
       "Y": 240.0
     },
     {
-      "Asset": "Models/UnrealModel/MM_Jump.animseq",
+      "Asset": "Models/UnrealModel/AS_MM_Jump.fbxbin",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
       "DirectionOffsetX": 0.0,
@@ -80,7 +80,7 @@
       "Y": 40.0
     },
     {
-      "Asset": "Models/UnrealModel/MM_Fall_Loop.animseq",
+      "Asset": "Models/UnrealModel/AS_MM_Fall_Loop.fbxbin",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
       "DirectionOffsetX": 0.0,
@@ -105,7 +105,7 @@
       "Y": 40.0
     },
     {
-      "Asset": "Models/UnrealModel/MM_Land.animseq",
+      "Asset": "Models/UnrealModel/AS_MM_Land.fbxbin",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
       "DirectionOffsetX": 0.0,

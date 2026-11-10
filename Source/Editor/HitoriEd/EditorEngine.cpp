@@ -183,20 +183,34 @@ bool UEditorEngine::Init()
 	});
 	EditorUI->SetFbxImportBlockedQuery([this]() { return IsPlaying(); });
 	AssetEditorPanel = EditorUI->AddEditorPanel<FAssetEditorPanel>();
-	ContentDrawerPanel->SetImportFbxCallback([this](const FString& Path, bool Reimport)
+	// 다시 가져오기의 옵션은 바이너리 헤더에서 읽는다. Target Skeleton은 헤더에 없으므로,
+	// 다른 FBX의 Skeleton에 맞춘 AnimSequence면 그 Skeleton을 대상으로 다시 지정한다(메시 없는 FBX는 대상 없이 임포트되지 않는다).
+	const auto ReadReimportOptions = [](const FString& Path, FFbxAssetData& Data) -> bool
+	{
+		FString Error;
+		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return false; }
+		if (Data.Type != EFbxAssetType::AnimSequence) return true;
+		FFbxAssetData Full, SkeletonHeader; std::filesystem::path SkeletonFile;
+		if (FFbxAssetBake::ReadBaked(Path, Full, Error) && FbxPath::ResolveKey(Full.SkeletonKey, SkeletonFile, Error) &&
+			FFbxAssetBake::ReadHeader(FbxPath::ToString(SkeletonFile), SkeletonHeader, Error) &&
+			SkeletonHeader.SourcePath != Data.SourcePath)
+			Data.Options.TargetSkeletonKey = Full.SkeletonKey;
+		return true;
+	};
+	ContentDrawerPanel->SetImportFbxCallback([this, ReadReimportOptions](const FString& Path, bool Reimport)
 	{
 		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
 		if (!Reimport) { EditorUI->QueueFbxImports({ Path }); return; }
-		FFbxAssetData Data; FString Error;
-		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
+		FFbxAssetData Data;
+		if (!ReadReimportOptions(Path, Data)) return;
 		EditorUI->QueueFbxReimport(FbxPath::ToString(FbxPath::SourceFile(Data.ActualSourcePath)),
 			FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options, Data.SourcePath);
 	});
-	ContentDrawerPanel->SetReimportFromFileCallback([this](const FString& Path)
+	ContentDrawerPanel->SetReimportFromFileCallback([this, ReadReimportOptions](const FString& Path)
 	{
 		if (IsPlaying()) { HTR_LOG(Warning, "Stop PIE before importing FBX."); return; }
-		FFbxAssetData Data; FString Error;
-		if (!FFbxAssetBake::ReadHeader(Path, Data, Error)) { HTR_LOG(Error, "[FBX] {}", Error); return; }
+		FFbxAssetData Data;
+		if (!ReadReimportOptions(Path, Data)) return;
 		EditorUI->BrowseFbxReimportFile(FbxPath::ToString(FbxPath::FromString(Path).parent_path()), Data.Options, Data.SourcePath);
 	});
 	ContentDrawerPanel->SetImportFbxFilesCallback([this](const FString& OutputDirectory)

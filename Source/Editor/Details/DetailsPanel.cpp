@@ -1200,7 +1200,9 @@ namespace
 			{
 				USkeletalMeshComponent* Component = static_cast<USkeletalMeshComponent*>(Object);
 				UAnimSequence* Current = Component->GetAnimationSequence();
-				const FString Preview = Current ? Current->Name + " (" + Current->GetPath() + ")" : "None";
+				// 테이크 이름(예: "Unreal Take")은 파일마다 같을 수 있어 애셋 이름(AS_...)을 보여 준다.
+				const auto SequenceLabel = [](const UAnimSequence* Sequence) { return FbxPath::ToString(FbxPath::FromString(Sequence->GetPath()).stem()); };
+				const FString Preview = Current ? SequenceLabel(Current) : FString("None");
 				if (ImGui::BeginCombo(Label.c_str(), Preview.c_str()))
 				{
 					if (ImGui::Selectable("None", !Current)) Component->SetAnimationSequence(nullptr);
@@ -1209,7 +1211,7 @@ namespace
 					UAssetManager::GetAnimSequencesForSkeleton(Mesh ? Mesh->Skeleton : nullptr, Sequences);
 					for (UAnimSequence* Sequence : Sequences)
 					{
-						const FString Name = Sequence->Name + " (" + Sequence->GetPath() + ")";
+						const FString Name = SequenceLabel(Sequence);
 						if (ImGui::Selectable(Name.c_str(), Current == Sequence))
 							Component->SetAnimationSequence(Sequence);
 					}

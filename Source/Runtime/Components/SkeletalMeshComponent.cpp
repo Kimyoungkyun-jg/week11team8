@@ -136,13 +136,6 @@ void USkeletalMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkeletalMesh)
 {
 	Super::SetSkeletalMesh(InSkeletalMesh);
 	InitBoneTransforms();
-	if (SkeletalMesh && SkeletalMesh->Skeleton && !SkeletalMesh->GetPath().empty() &&
-		!UAssetManager::GetFbxAnimSequences(SkeletalMesh->GetPath()))
-	{
-		const FString& Key = SkeletalMesh->GetPath();
-		UAssetManager::LoadFbxAnimSequences(Key.rfind("Assets/", 0) == 0 ? Key : "Assets/" + Key,
-			*SkeletalMesh->Skeleton);
-	}
 	if (AnimSequence && (!SkeletalMesh || AnimSequence->Skeleton != SkeletalMesh->Skeleton))
 		SetAnimationSequence(nullptr);
 	if (AnimScriptInstance)
