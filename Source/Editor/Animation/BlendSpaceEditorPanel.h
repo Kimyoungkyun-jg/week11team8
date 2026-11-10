@@ -80,4 +80,5 @@ private:
 	UWorld* PreviewWorld = nullptr;
 	USkeletalMeshComponent* MeshComponent = nullptr;
 	FEditorViewportClient Client;
+	float CameraSpeed = 1.0f;
 };

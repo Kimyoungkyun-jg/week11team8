@@ -196,8 +196,17 @@ void FAnimGraphEditorPanel::DrawPreview()
 			std::max(EditorUIScale::Px(80), ImGui::GetContentRegionAvail().y - EditorUIScale::Px(145)));
 		Client.Resize(static_cast<uint32>(std::max(1.0f, Size.x)), static_cast<uint32>(Size.y));
 		ImGui::Image(Client.GetColorTarget()->GetSRV(), Size);
-		Client.TickInput(ImGui::GetIO().DeltaTime, ImGui::IsItemHovered() && ImGui::IsMouseDown(ImGuiMouseButton_Right),
-			ImGui::IsItemHovered(), static_cast<int32>(ImGui::GetIO().MouseWheel * 120), 4, 1);
+		const bool bHovered = ImGui::IsItemHovered();
+		const bool bCaptured = bHovered && ImGui::IsMouseDown(ImGuiMouseButton_Right);
+		float Wheel = ImGui::GetIO().MouseWheel;
+		// 우클릭으로 카메라를 잡은 동안 휠은 이동 속도를 바꾼다.
+		if (bCaptured && Wheel != 0.0f)
+		{
+			CameraSpeed = std::clamp(CameraSpeed + Wheel * 0.5f, 0.1f, 20.0f);
+			Wheel = 0.0f;
+		}
+		Client.TickInputFromImGui(ImGui::GetIO().DeltaTime, bCaptured, bHovered,
+			static_cast<int32>(Wheel * 120), 4.0f * CameraSpeed, 0.2f);
 	}
 	else if (Graph.SkeletonPath.empty()) ImGui::TextWrapped("Select a skeleton to start the preview.");
 	else ImGui::TextWrapped("No skeletal mesh found for the selected skeleton.");
@@ -706,20 +715,24 @@ void FAnimGraphEditorPanel::DrawCanvas()
 	else if (View == EView::State) DrawState(Draw, Origin, Size);
 	else DrawTransition(Draw, Origin, Size);
 	Draw->PopClipRect();
+	// 우클릭 드래그로 팬한 뒤 버튼을 뗄 때는 컨텍스트 메뉴를 열지 않는다.
+	const ImVec2 RightDrag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
+	const bool bRightPanned = ImGui::IsMouseReleased(ImGuiMouseButton_Right) && (RightDrag.x != 0.0f || RightDrag.y != 0.0f);
 	if (ImGui::IsItemHovered())
 	{
-		if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+		// 휠 클릭 드래그 또는 우클릭 드래그로 캔버스를 이동한다.
+		if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) || ImGui::IsMouseDragging(ImGuiMouseButton_Right))
 		{ Pan.x += ImGui::GetIO().MouseDelta.x; Pan.y += ImGui::GetIO().MouseDelta.y; }
 		if (ImGui::GetIO().MouseWheel != 0 && View == EView::Machine)
 			Zoom = std::clamp(Zoom + ImGui::GetIO().MouseWheel * 0.1f, 0.5f, 2.0f);
 		if (ImGui::IsKeyPressed(ImGuiKey_Escape)) PendingFrom = 0;
 	}
-	if (View == EView::Machine && ImGui::BeginPopupContextItem("##AnimGraphContext"))
+	if (!bRightPanned && View == EView::Machine && ImGui::BeginPopupContextItem("##AnimGraphContext"))
 	{
 		if (ImGui::MenuItem("Add State")) AddState();
 		ImGui::EndPopup();
 	}
-	if (View == EView::State && ImGui::BeginPopupContextItem("##StatePoseContext"))
+	if (!bRightPanned && View == EView::State && ImGui::BeginPopupContextItem("##StatePoseContext"))
 	{
 		FAnimGraphState* State = SelectedState();
 		if (State)
