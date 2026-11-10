@@ -243,6 +243,14 @@ bool UEditorEngine::Init()
 		{
 			FLuaScriptManager::Get().OpenScriptInEditor(Path);
 		}
+		else if (Extension == ".animmontage" && AnimMontageEditorPanel)
+		{
+			AnimMontageEditorPanel->OpenAsset(Path);
+		}
+		else if (Extension == ".aimoffset" && AimOffsetEditorPanel)
+		{
+			AimOffsetEditorPanel->OpenAsset(Path);
+		}
 		else AssetEditorPanel->OpenAsset(Path);
 	});
 
@@ -273,8 +281,16 @@ bool UEditorEngine::Init()
 	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->NewAsset(Path); });
 	ContentDrawerPanel->SetOpenAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->OpenAsset(Path); });
 	BlendSpaceEditorPanel = EditorUI->AddEditorPanel<FBlendSpaceEditorPanel>();
+	AnimMontageEditorPanel = EditorUI->AddEditorPanel<FAnimMontageEditorPanel>();
+	AimOffsetEditorPanel = EditorUI->AddEditorPanel<FAimOffsetEditorPanel>();
 	AnimGraphEditorPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
+	AnimGraphEditorPanel->SetOpenMontageCallback([this](const FString& Path) { AnimMontageEditorPanel->OpenAsset(Path); });
+	AnimGraphEditorPanel->SetOpenAimOffsetCallback([this](const FString& Path) { AimOffsetEditorPanel->OpenAsset(Path); });
 	BlendSpaceEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimMontageEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AimOffsetEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimMontageEditorPanel->SetSavedCallback([this]() { AnimGraphEditorPanel->NotifyAnimationAssetSaved(); });
+	AimOffsetEditorPanel->SetSavedCallback([this]() { AnimGraphEditorPanel->NotifyAnimationAssetSaved(); });
 	ContentDrawerPanel->SetCreateBlendSpaceCallback([this](const FString& Path, bool b2D) { BlendSpaceEditorPanel->NewAsset(Path, b2D); });
 	ContentDrawerPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
 
@@ -1042,6 +1058,8 @@ void UEditorEngine::RenderViewports()
 	AnimSequenceViewerPanel->RenderPreview(this);
 	AnimGraphEditorPanel->RenderPreview(this);
 	BlendSpaceEditorPanel->RenderPreview(this);
+	AnimMontageEditorPanel->RenderPreview(this);
+	AimOffsetEditorPanel->RenderPreview(this);
 }
 
 void UEditorEngine::UpdatePIEViewCamera()
@@ -1798,6 +1816,8 @@ void UEditorEngine::PreExit()
 	if (AnimSequenceViewerPanel) AnimSequenceViewerPanel->Release();
 	if (AnimGraphEditorPanel) AnimGraphEditorPanel->Release();
 	if (BlendSpaceEditorPanel) BlendSpaceEditorPanel->Release();
+	if (AnimMontageEditorPanel) AnimMontageEditorPanel->Release();
+	if (AimOffsetEditorPanel) AimOffsetEditorPanel->Release();
 	if (ContentDrawerPanel) ContentDrawerPanel->Release();
 	if (AssetEditorPanel) AssetEditorPanel->Release();
 	EditorWorld->ClearWorld();

@@ -70,6 +70,8 @@ private:
 	bool bOpenCreateAnimGraph = false;
 	bool bOpenCreateBlendSpace = false;
 	bool bNewBlendSpace2D = true;
+	bool bOpenCreateAnimationAsset = false;
+	bool bNewAnimationAssetMontage = true;
 
 	fs::path AssetRootPath = "Assets";
 	fs::path CurrentPath = "Assets";

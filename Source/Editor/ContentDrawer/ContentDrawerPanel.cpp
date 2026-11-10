@@ -146,11 +146,43 @@ void FContentDrawerPanel::OnRender()
 				strcpy_s(NewAssetName, "NewBlendSpace2D");
 				bNewBlendSpace2D = true; bOpenCreateBlendSpace = true;
 			}
+			if (ImGui::MenuItem("Create AnimMontage") && OnOpenAsset)
+			{
+				strcpy_s(NewAssetName, "NewMontage");
+				bNewAnimationAssetMontage = true; bOpenCreateAnimationAsset = true;
+			}
+			if (ImGui::MenuItem("Create AimOffset") && OnOpenAsset)
+			{
+				strcpy_s(NewAssetName, "NewAimOffset");
+				bNewAnimationAssetMontage = false; bOpenCreateAnimationAsset = true;
+			}
 			ImGui::EndPopup();
 		}
 		if (bOpenCreateWidget) { ImGui::OpenPopup("Create Widget"); bOpenCreateWidget = false; }
 		if (bOpenCreateAnimGraph) { ImGui::OpenPopup("Create AnimGraph"); bOpenCreateAnimGraph = false; }
 		if (bOpenCreateBlendSpace) { ImGui::OpenPopup("Create BlendSpace"); bOpenCreateBlendSpace = false; }
+		if (bOpenCreateAnimationAsset) { ImGui::OpenPopup("Create Animation Asset"); bOpenCreateAnimationAsset = false; }
+		if (ImGui::BeginPopupModal("Create Animation Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const FString Name = NewAssetName;
+			const fs::path Target = CurrentPath / (Name + (bNewAnimationAssetMontage ? ".animmontage" : ".aimoffset"));
+			const bool bExists = fs::exists(Target);
+			const bool bInvalid = Name.empty() || Name == "." || Name == ".." ||
+				Name.find_first_of("\\/:*?\"<>|") != FString::npos;
+			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
+			if (bInvalid) ImGui::TextUnformatted("Enter a valid asset name.");
+			ImGui::BeginDisabled(bExists || bInvalid);
+			if (ImGui::Button("Create") && OnOpenAsset)
+			{
+				OnOpenAsset(FbxPath::ToString(Target));
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 		if (ImGui::BeginPopupModal("Create BlendSpace", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
 			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
