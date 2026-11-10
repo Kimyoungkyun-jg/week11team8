@@ -15,6 +15,9 @@
 #include "Asset/FbxImporter/FbxAssetLoader.h"
 #include "Asset/FbxImporter/FbxAssetBake.h"
 #include "Asset/FbxImporter/FbxPath.h"
+#include "Asset/Skeleton.h"
+#include "Asset/BlendSpace1D.h"
+#include "Asset/BlendSpace2D.h"
 
 #include "Render/GeometryGenerator.h"
 #include "UObject/UObjectGlobals.h"
@@ -22,7 +25,9 @@
 #include "Engine/Classes/Sound/SoundWave.h"
 
 #include "Render/ImageLoader.h"
+#include <algorithm>
 #include <cctype>
+#include <fstream>
 
 
 
@@ -91,7 +96,7 @@ namespace
 				return nullptr;
 			}
 			Material->BaseColor = Slot.BaseColor;
-                Material->ApplyImportedProperties(Slot);
+			Material->ApplyImportedProperties(Slot);
 			if (Material->BaseColor.W < 1.0f)
 			{
 				Material->SetBlendState(EBlendState::AlphaBlend);
@@ -207,6 +212,33 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 		}
 	}
 
+	// 애니메이션만 든 FBX(예: MM_Jump.FBX)는 .fbxbin 대신 같은 폴더에 <이름>.animseq.bin 또는 <이름>_<번호>.animseq.bin을 만든다.
+	// 그 시퀀스의 Skeleton이 다른 FBX에서 왔으면 애니메이션 전용으로 이미 처리된 FBX다. 임포트 창에 올리지 않는다.
+	// Skeleton이 같은 FBX에서 왔으면 메시 FBX의 테이크이므로, 위의 메시 바이너리 기준으로만 판단한다.
+	const auto IsAnimationOnlyFbxProcessed = [](const FString& FbxFilePath, const FString& FbxKey)
+	{
+		const fs::path FbxFile = FbxPath::FromString(FbxFilePath);
+		const std::wstring Stem = FbxFile.stem().native();
+		const FString StemText = FoldCase(FbxPath::ToString(FbxFile.stem()));
+		for (const wchar_t* Suffix : { L".animseq.bin", L"_0.animseq.bin" })
+		{
+			const fs::path BinPath = FbxFile.parent_path() / (Stem + Suffix);
+			std::error_code FileError;
+			if (!fs::exists(BinPath, FileError)) continue;
+			FString SkeletonPath;
+			if (!FFbxAssetBake::ReadAnimationSequenceSkeletonPath(FbxPath::ToString(BinPath), SkeletonPath)) continue;
+			fs::path SkeletonDiskPath;
+			FFbxAssetData SkeletonHeader;
+			FString Error;
+			if (FbxPath::ResolveKey(SkeletonPath, SkeletonDiskPath, Error) &&
+				FFbxAssetBake::ReadHeader(FbxPath::ToString(SkeletonDiskPath), SkeletonHeader, Error))
+				return FoldCase(SkeletonHeader.SourcePath) != FoldCase(FbxKey);
+			// Skeleton 바이너리가 아직 없으면(새로 받은 저장소) Skeleton 키 이름에 이 FBX 이름이 들어 있는지로 판단한다.
+			return FoldCase(SkeletonPath).find(StemText) == FString::npos;
+		}
+		return false;
+	};
+
 	// 스캔 순서는 정해져 있지 않으므로 모든 바이너리를 본 뒤에 비교한다.
 	FbxImportCandidates.Reset();
 	for (const FString& Path : FbxFiles)
@@ -214,6 +246,11 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 		FString Key, Error;
 		if (FbxPath::GetAssetKey(Path, Key, Error) && !IsFbxImported(Key))
 		{
+			if (IsAnimationOnlyFbxProcessed(Path, Key))
+			{
+				MarkFbxImported(Key);
+				continue;
+			}
 			FbxImportCandidates.Add(Path);
 		}
 	}
@@ -234,7 +271,13 @@ void UAssetManager::LoadAsset(const FString& Key, const FString& Path) {
 	if (Extension == ".fbxbin")
 	{
 		FString Error;
-		if (!FFbxAssetLoader::LoadAsset(Path, Error)) HTR_LOG(Error, "[FBX] {}", Error);
+		URenderAsset* Asset = FFbxAssetLoader::LoadAsset(Path, Error);
+		if (!Asset) HTR_LOG(Error, "[FBX] {}", Error);
+		else if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
+		{
+			if (SkeletalMesh->Skeleton)
+				LoadFbxAnimSequences(Path, *SkeletalMesh->Skeleton);
+		}
 		return;
 	}
 	if (Extension == ".png" || Extension == ".dds") {
@@ -250,6 +293,9 @@ void UAssetManager::LoadAsset(const FString& Key, const FString& Path) {
 	}
 	if (Extension == ".obj") {
 		LoadObjStaticMesh(Path);
+	}
+	if (Extension == ".blendspace") {
+		LoadBlendSpace(Key);
 	}
 }
 
@@ -419,7 +465,7 @@ void UAssetManager::Shutdown()
 {
 	Get().AssetMap.Empty();
 	Get().SoundMap.Empty();
-	Get().AnimationMap.Empty();
+	Get().AnimationSequencesByFbx.Empty();
 }
 
 
@@ -546,6 +592,192 @@ UStaticMesh* UAssetManager::LoadObjStaticMesh(const FString& Path)
 	return Mesh;
 }
 
+USkeleton* UAssetManager::LoadSkeleton(const FString& AssetPath)
+{
+	if (USkeleton* Cached = GetAssetByPath<USkeleton>(AssetPath)) return Cached;
+	if (GetAssetExtension(AssetPath) == ".fbxbin")
+	{
+		FString Error;
+		FString Path = AssetPath;
+		if (!FbxPath::FromString(AssetPath).is_absolute() && AssetPath.rfind("Assets/", 0) != 0 &&
+			!FbxPath::ResolveKey(AssetPath, Path, Error)) return nullptr;
+		return Cast<USkeleton>(FFbxAssetLoader::LoadAsset(Path, Error));
+	}
+	return nullptr;
+}
+
+UAnimSequence* UAssetManager::LoadAnimSequence(const FString& AssetPath)
+{
+	if (UAnimSequence* Cached = GetAssetByPath<UAnimSequence>(AssetPath)) return Cached;
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	const FString BinPath = FbxPath::ToString(ContentPaths::AssetRoot / FbxPath::FromString(Key + ".bin"));
+	FString SkeletonPath;
+	if (!FFbxAssetBake::ReadAnimationSequenceSkeletonPath(BinPath, SkeletonPath))
+	{
+		HTR_LOG(Warning, "Cannot read animation sequence header: {}", BinPath);
+		return nullptr;
+	}
+	USkeleton* Skeleton = LoadSkeleton(SkeletonPath);
+	if (!Skeleton)
+	{
+		HTR_LOG(Warning, "Cannot load animation skeleton: {}", SkeletonPath);
+		return nullptr;
+	}
+	UAnimSequence* Sequence = NewObject<UAnimSequence>();
+	if (!FFbxAssetBake::ReadAnimationSequence(BinPath, *Skeleton, *Sequence))
+	{
+		HTR_LOG(Warning, "Cannot read animation sequence: {}", BinPath);
+		return nullptr;
+	}
+	Get().RegisterAsset(Key, Sequence);
+	return Sequence;
+}
+
+UAnimSequence* UAssetManager::LoadOrImportFbxAnimSequence(const FString& AssetPath, USkeleton& Skeleton)
+{
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	if (!Key.ends_with(".animseq")) return nullptr;
+	if (UAnimSequence* Cached = GetAssetByPath<UAnimSequence>(Key))
+		return Cached->Skeleton == &Skeleton ? Cached : nullptr;
+	const fs::path BinPath = ContentPaths::AssetRoot / FbxPath::FromString(Key + ".bin");
+	if (fs::exists(BinPath))
+		if (UAnimSequence* Sequence = LoadAnimSequence(Key))
+			return Sequence->Skeleton == &Skeleton ? Sequence : nullptr;
+	const FString SourceKey = Key.substr(0, Key.size() - 8) + ".FBX";
+	const FString SourcePath = FbxPath::ToString(ContentPaths::AssetRoot / FbxPath::FromString(SourceKey));
+	if (!fs::exists(FbxPath::FromString(SourcePath)) || !LoadFbxAnimSequences(SourcePath, Skeleton)) return nullptr;
+	UAnimSequence* Sequence = GetAssetByPath<UAnimSequence>(Key);
+	return Sequence && Sequence->Skeleton == &Skeleton ? Sequence : nullptr;
+}
+
+UBlendSpace* UAssetManager::LoadBlendSpace(const FString& AssetPath)
+{
+	if (UBlendSpace* Cached = GetAssetByPath<UBlendSpace>(AssetPath)) return Cached;
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	if (FbxPath::FromString(Key).extension() != ".blendspace") return nullptr;
+	std::ifstream In(ContentPaths::AssetRoot / FbxPath::FromString(Key));
+	if (!In) return nullptr;
+	const json Data = json::parse(In, nullptr, false);
+	if (!Data.is_object() || !Data.contains("Type") || !Data["Type"].is_string() ||
+		!Data.contains("Skeleton") || !Data["Skeleton"].is_string() ||
+		!Data.contains("Samples") || !Data["Samples"].is_array() ||
+		Data["Samples"].empty() || Data["Samples"].size() > 256) return nullptr;
+	const FString Type = Data["Type"].get<FString>();
+	if (Type != "BlendSpace1D" && Type != "BlendSpace2D") return nullptr;
+	USkeleton* Skeleton = LoadSkeleton(Data["Skeleton"].get<FString>());
+	if (!Skeleton) return nullptr;
+	UBlendSpace* BlendSpace = Type == "BlendSpace1D"
+		? static_cast<UBlendSpace*>(NewObject<UBlendSpace1D>())
+		: static_cast<UBlendSpace*>(NewObject<UBlendSpace2D>());
+	BlendSpace->Skeleton = Skeleton;
+	for (const json& Sample : Data["Samples"])
+	{
+		if (!Sample.is_object() || !Sample.contains("X") || !Sample["X"].is_number() ||
+			(Type == "BlendSpace2D" && (!Sample.contains("Y") || !Sample["Y"].is_number())) ||
+			!Sample.contains("Sequence") || !Sample["Sequence"].is_string())
+		{
+			delete BlendSpace;
+			return nullptr;
+		}
+		const float X = Sample["X"].get<float>();
+		const float Y = Type == "BlendSpace2D" ? Sample["Y"].get<float>() : 0.0f;
+		UAnimSequence* Sequence = LoadAnimSequence(Sample["Sequence"].get<FString>());
+		const bool Added = Type == "BlendSpace1D"
+			? static_cast<UBlendSpace1D*>(BlendSpace)->AddSample(X, Sequence)
+			: static_cast<UBlendSpace2D*>(BlendSpace)->AddSample(X, Y, Sequence);
+		if (!Added)
+		{
+			delete BlendSpace;
+			return nullptr;
+		}
+	}
+	Get().RegisterAsset(Key, BlendSpace);
+	return BlendSpace;
+}
+
+bool UAssetManager::SaveBlendSpace2D(const FString& AssetPath, UBlendSpace2D& BlendSpace)
+{
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	if (FbxPath::FromString(Key).extension() != ".blendspace" || !BlendSpace.Skeleton ||
+		BlendSpace.Skeleton->GetPath().empty() || BlendSpace.GetSamples().IsEmpty()) return false;
+	json Data = { { "Type", "BlendSpace2D" }, { "Skeleton", BlendSpace.Skeleton->GetPath() },
+		{ "Samples", json::array() } };
+	for (const UBlendSpace2D::FSample& Sample : BlendSpace.GetSamples())
+	{
+		if (!Sample.Sequence || Sample.Sequence->Skeleton != BlendSpace.Skeleton ||
+			Sample.Sequence->GetPath().empty()) return false;
+		Data["Samples"].push_back({ { "X", Sample.X }, { "Y", Sample.Y }, { "Sequence", Sample.Sequence->GetPath() } });
+	}
+	std::ofstream Out(ContentPaths::AssetRoot / FbxPath::FromString(Key));
+	if (!Out) return false;
+	Out << Data.dump(2);
+	if (!Out) return false;
+	Get().RegisterAsset(Key, &BlendSpace);
+	return true;
+}
+
+bool UAssetManager::SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& BlendSpace)
+{
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	if (FbxPath::FromString(Key).extension() != ".blendspace" || !BlendSpace.Skeleton ||
+		BlendSpace.Skeleton->GetPath().empty() || BlendSpace.GetSamples().IsEmpty()) return false;
+	json Data = { { "Type", "BlendSpace1D" }, { "Skeleton", BlendSpace.Skeleton->GetPath() },
+		{ "Samples", json::array() } };
+	for (const UBlendSpace1D::FSample& Sample : BlendSpace.GetSamples())
+	{
+		if (!Sample.Sequence || Sample.Sequence->Skeleton != BlendSpace.Skeleton ||
+			Sample.Sequence->GetPath().empty()) return false;
+		Data["Samples"].push_back({ { "X", Sample.X }, { "Sequence", Sample.Sequence->GetPath() } });
+	}
+	std::ofstream Out(ContentPaths::AssetRoot / FbxPath::FromString(Key));
+	if (!Out) return false;
+	Out << Data.dump(2);
+	if (!Out) return false;
+	Get().RegisterAsset(Key, &BlendSpace);
+	return true;
+}
+
+bool UAssetManager::SaveAnimSequence(const UAnimSequence& Sequence)
+{
+	const FString& Key = Sequence.GetPath();
+	const FString RelativeKey = Key.rfind("Assets/", 0) == 0 ? Key.substr(7) : Key;
+	const fs::path Relative = FbxPath::FromString(RelativeKey + ".bin");
+	if (Key.empty() || !Key.ends_with(".animseq") || Relative.is_absolute() ||
+		GetAssetByPath<UAnimSequence>(Key) != &Sequence) return false;
+	for (const fs::path& Part : Relative)
+		if (Part == "..") return false;
+	return FFbxAssetBake::WriteAnimationSequence(
+		FbxPath::ToString(ContentPaths::AssetRoot / Relative), Sequence);
+}
+
+void UAssetManager::GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArray<UAnimSequence*>& OutSequences)
+{
+	OutSequences.Reset();
+	if (!Skeleton) return;
+	for (const auto& Entry : Get().AssetMap)
+		if (UAnimSequence* Sequence = Cast<UAnimSequence>(Entry.second))
+			if (!Sequence->IsRetired() && Sequence->Skeleton == Skeleton) OutSequences.Add(Sequence);
+}
+
+void UAssetManager::GetAllAnimSequences(TArray<UAnimSequence*>& OutSequences)
+{
+	OutSequences.Reset();
+	for (const auto& Entry : Get().AssetMap)
+		if (UAnimSequence* Sequence = Cast<UAnimSequence>(Entry.second))
+			if (!Sequence->IsRetired()) OutSequences.Add(Sequence);
+	std::sort(OutSequences.begin(), OutSequences.end(),
+		[](const UAnimSequence* A, const UAnimSequence* B) { return A->GetPath() < B->GetPath(); });
+}
+
+void UAssetManager::GetSkeletalMeshesForSkeleton(const USkeleton* Skeleton, TArray<USkeletalMesh*>& OutMeshes)
+{
+	OutMeshes.Reset();
+	if (!Skeleton) return;
+	for (const auto& Entry : Get().AssetMap)
+		if (USkeletalMesh* Mesh = Cast<USkeletalMesh>(Entry.second))
+			if (!Mesh->IsRetired() && Mesh->Skeleton == Skeleton) OutMeshes.Add(Mesh);
+}
+
 USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)
 {
 	if (GetAssetExtension(Path) == ".fbxbin")
@@ -553,32 +785,83 @@ USkeletalMesh* UAssetManager::LoadFbxSkeletalMesh(const FString& Path)
 		FString Error;
 		USkeletalMesh* Mesh = Cast<USkeletalMesh>(FFbxAssetLoader::LoadAsset(Path, Error));
 		if (!Mesh && !Error.empty()) HTR_LOG(Warning, "[FBX] {}", Error);
+		else if (Mesh && Mesh->Skeleton && !GetFbxAnimSequences(MakeAssetKey(Path)))
+			LoadFbxAnimSequences(Path, *Mesh->Skeleton);
 		return Mesh;
 	}
-	// 메시는 .fbxbin에서만 온다. .fbx를 여기서 파싱하지 않는다.
-	return GetAssetByPath<USkeletalMesh>(MakeAssetKey(Path));
+	const FString Key = MakeAssetKey(Path);
+	if (USkeletalMesh* Cached = GetAssetByPath<USkeletalMesh>(Key))
+	{
+		if (Cached->Skeleton && !GetFbxAnimSequences(Key))
+			LoadFbxAnimSequences(Path, *Cached->Skeleton);
+		return Cached;
+	}
+	if (GetAssetExtension(Path) == ".fbx" && fs::exists(FbxPath::FromString(Path)))
+	{
+		FFbxImportResult Imported = FFbxAssetLoader::Import(Path, FFbxImportOptions{});
+		for (const FString& ImportedKey : Imported.AssetKeys)
+		{
+			if (USkeletalMesh* Mesh = GetAssetByPath<USkeletalMesh>(ImportedKey))
+			{
+				if (Mesh->Skeleton)
+					LoadFbxAnimSequences(Path, *Mesh->Skeleton);
+				return Mesh;
+			}
+		}
+	}
+	return nullptr;
 }
 
-const TArray<FAnimationClip>* UAssetManager::LoadFbxAnimations(const FString& Path)
+const TArray<UAnimSequence*>* UAssetManager::LoadFbxAnimSequences(const FString& Path, USkeleton& Skeleton)
 {
-	USkeletalMesh* Mesh = LoadFbxSkeletalMesh(Path);
-	if (!Mesh || GetAssetExtension(Path) != ".fbxbin") return nullptr;
-	FFbxAssetData Header; FString Error;
-	if (!FFbxAssetBake::ReadHeader(Path, Header, Error)) { HTR_LOG(Warning, "[FBX] {}", Error); return nullptr; }
-	TArray<FAnimationClip> Clips;
-	if (!FFbxAssetImporter::ExtractAnimationClips(FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath)), Header.Options, Mesh->RefSkeleton, Clips, Error))
+	const FString Key = MakeAssetKey(Path);
+	FString SourcePath = Path;
+	FFbxImportOptions Options{};
+	FString Error;
+	if (GetAssetExtension(Path) == ".fbxbin")
 	{
-		HTR_LOG(Warning, "[FBX] Animation extraction failed: {}", Error);
+		fs::path ResolvedPath = FbxPath::FromString(Path);
+		if (!fs::exists(ResolvedPath))
+		{
+			FString ResolveError;
+			FbxPath::ResolveKey(Key, ResolvedPath, ResolveError);
+		}
+		FFbxAssetData Header;
+		if (!FFbxAssetBake::ReadHeader(FbxPath::ToString(ResolvedPath), Header, Error))
+		{
+			HTR_LOG(Warning, "[FBX] {}", Error);
+			return nullptr;
+		}
+		SourcePath = FbxPath::ToString(FbxPath::SourceFile(Header.ActualSourcePath));
+		Options = Header.Options;
+	}
+	else if (!Skeleton.GetPath().empty() && GetAssetExtension(Skeleton.GetPath()) == ".fbxbin")
+	{
+		fs::path SkelDiskPath;
+		FString ResolveError;
+		if (FbxPath::ResolveKey(Skeleton.GetPath(), SkelDiskPath, ResolveError))
+		{
+			FFbxAssetData SkelHeader;
+			if (FFbxAssetBake::ReadHeader(FbxPath::ToString(SkelDiskPath), SkelHeader, ResolveError))
+				Options = SkelHeader.Options;
+		}
+	}
+	TArray<UAnimSequence*> Sequences;
+	if (!FFbxAssetImporter::ExtractAnimationSequences(SourcePath, Options, Skeleton, Sequences, Error))
+	{
+		if (!Error.empty())
+			HTR_LOG(Warning, "[FBX] Animation sequence extraction failed: {}", Error);
 		return nullptr;
 	}
-	const FString Key = MakeAssetKey(Path);
-	Get().AnimationMap.FindOrAdd(Key) = std::move(Clips);
-	return Get().AnimationMap.Find(Key);
+	for (UAnimSequence* Sequence : Sequences)
+		Get().RegisterAsset(Sequence->GetPath(), Sequence);
+	Get().AnimationSequencesByFbx.FindOrAdd(Key) = std::move(Sequences);
+	return Get().AnimationSequencesByFbx.Find(Key);
 }
 
-const TArray<FAnimationClip>* UAssetManager::GetFbxAnimations(const FString& AssetKey)
+const TArray<UAnimSequence*>* UAssetManager::GetFbxAnimSequences(const FString& AssetKey)
 {
-	return Get().AnimationMap.Find(AssetKey);
+	return Get().AnimationSequencesByFbx.Find(AssetKey);
 }
 
 bool UAssetManager::ReorientStaticMesh(UStaticMesh& Mesh, const std::function<FVector(const FVector&)>& Rotate)

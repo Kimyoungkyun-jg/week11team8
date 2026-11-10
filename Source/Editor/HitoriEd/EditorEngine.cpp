@@ -253,6 +253,16 @@ bool UEditorEngine::Init()
 
 	SkeletalMeshViewerPanel = EditorUI->AddEditorPanel<FSkeletalMeshViewerPanel>();
 	ContentDrawerPanel->SetOpenSkeletalMeshCallback([this](const FString& Path) { SkeletalMeshViewerPanel->OpenFBX(Path); });
+	AnimSequenceViewerPanel = EditorUI->AddEditorPanel<FAnimSequenceViewerPanel>();
+	ContentDrawerPanel->SetOpenAnimSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimGraphEditorPanel = EditorUI->AddEditorPanel<FAnimGraphEditorPanel>();
+	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->NewAsset(Path); });
+	ContentDrawerPanel->SetOpenAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->OpenAsset(Path); });
+	BlendSpaceEditorPanel = EditorUI->AddEditorPanel<FBlendSpaceEditorPanel>();
+	AnimGraphEditorPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
+	BlendSpaceEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	ContentDrawerPanel->SetCreateBlendSpaceCallback([this](const FString& Path, bool b2D) { BlendSpaceEditorPanel->NewAsset(Path, b2D); });
+	ContentDrawerPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
 
 	Outline = MakeUnique<FOutline>();
 
@@ -538,7 +548,7 @@ void UEditorEngine::BeginFrame(const float DeltaTime)
 			EditorCommandUI::ProcessShortcuts({ &Save, &Play, &Pause, &Resume, &Copy, &Paste, &Duplicate });
 
 		// F: 선택한 액터로 포커스 (UE). 우클릭 비행 중이거나 글자 입력 중이면 받지 않는다.
-		if (!ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
+		if ((!IsPlaying() || IsSimulatingInEditor()) && !ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
 			FInputSystem::IsKeyPressed(EKeyCode::F) && !FInputSystem::IsKeyDown(EKeyCode::Control))
 		{
 			FocusViewportOnActor(OutlinerPanel ? OutlinerPanel->GetSelectedActor() : nullptr);
@@ -998,6 +1008,9 @@ void UEditorEngine::RenderViewports()
 		}
 	}
 	AssetEditorPanel->RenderPreview(this);
+	AnimSequenceViewerPanel->RenderPreview(this);
+	AnimGraphEditorPanel->RenderPreview(this);
+	BlendSpaceEditorPanel->RenderPreview(this);
 }
 
 void UEditorEngine::UpdatePIEViewCamera()
@@ -1160,10 +1173,10 @@ void UEditorEngine::TickPIEInput(float DeltaTime)
 		// SIE에서는 에디터 카메라를 움직이므로 커서를 놓는다. 돌아오면 UpdatePIEMouseCapture가 다시 잠근다.
 		if (GameViewport.IsSIEMode())
 			FMouseCapture::Release();
-		OnActiveWorldChanged();
+		// SIE 전환은 월드를 바꾸지 않으므로 현재 선택과 기즈모를 유지한다.
 	}
 	constexpr EKeyCode Keys[] = { EKeyCode::W, EKeyCode::A, EKeyCode::S, EKeyCode::D,
-		EKeyCode::Q, EKeyCode::E, EKeyCode::Space, EKeyCode::Shift };
+		EKeyCode::Q, EKeyCode::E, EKeyCode::F, EKeyCode::Space, EKeyCode::Shift };
 	for (EKeyCode Key : Keys)
 	{
 		if (FInputSystem::IsKeyPressed(Key))
@@ -1279,6 +1292,20 @@ void UEditorEngine::UpdateGizmoAndPicking()
 	FEditorViewportClient* ViewClient = ViewportsPanel->GetViewportClient(ViewIndex);
 	if (!ViewClient || !ViewClient->IsActive())
 		return;
+	if (PlayWorld && IsSimulatingInEditor() && !IsPIEInWindow() && ViewIndex == PIEViewIndex)
+	{
+		if (FWorldContext* Context = GetPIEWorldContext())
+			if (Context->GameViewport)
+				if (UCameraComponent* Camera = Context->GameViewport->GetCameraComponent())
+				{
+					ViewClient->SetViewLocation(Camera->GetWorldLocation());
+					ViewClient->SetViewRotation(Camera->GetWorldRotation());
+					ViewClient->SetViewFOV(Camera->GetFieldOfView());
+					ViewClient->SetClipPlanes(Camera->GetNearZ(), Camera->GetFarZ());
+					ViewClient->SetOrthoWidth(Camera->GetOrthoWidth());
+					ViewClient->SetIsPerspective(!Camera->GetIsOrthogonal());
+				}
+	}
 
 	const FVector2 LocalMousePosition = ViewportsPanel->GetLocalMousePosition();
 	ViewClient->UpdateGizmoAndPicking(Gizmo.get(), LocalMousePosition, [this](AActor* SelectedActor) {
@@ -1729,6 +1756,9 @@ void UEditorEngine::PreExit()
 	if (SequencerPanel) SequencerPanel->Shutdown();
 	if (PoseRetargetPanel) PoseRetargetPanel->Release();
 	if (SkeletalMeshViewerPanel) SkeletalMeshViewerPanel->Release();
+	if (AnimSequenceViewerPanel) AnimSequenceViewerPanel->Release();
+	if (AnimGraphEditorPanel) AnimGraphEditorPanel->Release();
+	if (BlendSpaceEditorPanel) BlendSpaceEditorPanel->Release();
 	if (ContentDrawerPanel) ContentDrawerPanel->Release();
 	if (AssetEditorPanel) AssetEditorPanel->Release();
 	EditorWorld->ClearWorld();

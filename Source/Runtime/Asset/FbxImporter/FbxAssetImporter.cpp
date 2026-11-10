@@ -2,9 +2,9 @@
 #include "FbxAssetImporter.h"
 #include "FbxAssetBake.h"
 #include "FbxPath.h"
-#include "AnimationData.h"
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -825,10 +825,12 @@ FString FImport::Material(FbxSurfaceMaterial* M)
 	{
 		const FbxDouble3 Color = Lambert->Diffuse.Get();
 		const double Factor = Lambert->DiffuseFactor.Get();
+		const FbxDouble3 TransparentColor = Lambert->TransparentColor.Get();
+		const double Transparency = (TransparentColor[0] + TransparentColor[1] + TransparentColor[2]) / 3.0 * Lambert->TransparencyFactor.Get();
 		DiffuseFactor = static_cast<float>(Factor);
 		// Diffuse를 선형 색상으로 해석하는 임포트 기본값이다. 강도 계수도 선형 공간에서 곱한다.
 		Asset.Material.DiffuseOrFactor = FVector4(static_cast<float>(Color[0] * Factor), static_cast<float>(Color[1] * Factor),
-			static_cast<float>(Color[2] * Factor), static_cast<float>(std::clamp(1. - Lambert->TransparencyFactor.Get(), 0., 1.)));
+			static_cast<float>(Color[2] * Factor), static_cast<float>(std::clamp(1. - Transparency, 0., 1.)));
 		Asset.Material.ShadingModel = ELightingModel::Lambert;
 		Asset.Material.SpecularFactor = 0.f;
 		const FbxDouble3 Emissive = Lambert->Emissive.Get();
@@ -1276,72 +1278,214 @@ bool FFbxAssetImporter::Cook(const FString& SourcePath, const FFbxImportOptions&
 #endif
 }
 
-bool FFbxAssetImporter::ExtractAnimationClips(const FString& SourcePath, const FFbxImportOptions& Options, const FReferenceSkeleton& Skeleton,
-	TArray<FAnimationClip>& Out, FString& Error)
+#include "Asset/AnimSequence.h"
+#include "Asset/AnimTransform.h"
+#include "Animation/Skeleton.h"
+#include "Core/ResourcePaths.h"
+#include "UObject/UObjectGlobals.h"
+
+bool FFbxAssetImporter::ExtractAnimationSequences(const FString& SourcePath, const FFbxImportOptions& Options, USkeleton& Skeleton,
+	TArray<UAnimSequence*>& OutSequences, FString& Error)
 {
-	Out.Reset();
+	OutSequences.Reset();
 #if WITH_FBX_SDK
 	try
 	{
 		FString Identity;
 		fs::path Source;
 		if (!FbxPath::GetSourcePath(SourcePath, Source, Identity, Error)) return false;
-		const int32 BoneCount = Skeleton.GetNum();
+		const int32 BoneCount = Skeleton.RefSkeleton.GetNum();
 		if (BoneCount <= 0) { Error = "Skeleton has no bones"; return false; }
+		std::error_code FileError;
+		const auto SourceTime = fs::last_write_time(Source, FileError);
+		if (FileError) { Error = "Cannot read source timestamp: " + SourcePath; return false; }
+		FString RelSourceKey;
+		FString IgnoredError;
+		if (!FbxPath::GetAssetKey(FbxPath::ToString(Source), RelSourceKey, IgnoredError, false))
+			RelSourceKey = FbxPath::FileName(FbxPath::ToString(Source.filename()));
+		const fs::path RelativeSource = FbxPath::FromString(RelSourceKey);
+		const fs::path CacheDir = ContentPaths::AssetRoot / RelativeSource.parent_path();
+		const FString BaseName = FbxPath::ToString(RelativeSource.stem());
+		const FString SingleName = BaseName + ".animseq.bin";
+		const FString NumberedPrefix = BaseName + "_";
+		std::map<int, fs::path> CachedStacks;
+		bool bFoundSingle = false, bFoundNumbered = false;
+		FileError.clear();
+		for (fs::directory_iterator It(CacheDir, FileError); !FileError && It != fs::directory_iterator{}; It.increment(FileError))
+		{
+			const FString FileName = FbxPath::ToString(It->path().filename());
+			if (FileName == SingleName)
+			{
+				CachedStacks[0] = It->path();
+				bFoundSingle = true;
+				continue;
+			}
+			if (!FileName.starts_with(NumberedPrefix) || !FileName.ends_with(".animseq.bin")) continue;
+			const FString Number = FileName.substr(NumberedPrefix.size(), FileName.size() - NumberedPrefix.size() - 12);
+			if (Number.empty() || !std::all_of(Number.begin(), Number.end(),
+				[](unsigned char C) { return std::isdigit(C); })) continue;
+			int Index = -1;
+			const auto [ParsedEnd, ParseError] = std::from_chars(Number.data(), Number.data() + Number.size(), Index);
+			if (ParseError == std::errc{} && ParsedEnd == Number.data() + Number.size() && Index < 256)
+			{
+				CachedStacks[Index] = It->path();
+				bFoundNumbered = true;
+			}
+		}
+		if (!(bFoundSingle && bFoundNumbered) && !CachedStacks.empty() && CachedStacks.size() <= 256)
+		{
+			TArray<UAnimSequence*> CachedSequences;
+			int ExpectedIndex = 0;
+			for (const auto& [Index, BinPath] : CachedStacks)
+			{
+				FileError.clear();
+				const auto CacheTime = fs::last_write_time(BinPath, FileError);
+				if (FileError || CacheTime < SourceTime || Index != ExpectedIndex++) break;
+				UAnimSequence* Sequence = NewObject<UAnimSequence>();
+				FString SequencePath = FbxPath::ToString(RelativeSource.parent_path() / BinPath.filename());
+				SequencePath.resize(SequencePath.size() - 4);
+				Sequence->SetPath(SequencePath);
+				if (!FFbxAssetBake::ReadAnimationSequence(FbxPath::ToString(BinPath), Skeleton, *Sequence)) break;
+				if ((!Sequence->SourceFilePath.empty() && Sequence->SourceFilePath != Identity) ||
+					Sequence->SourceTakeIndex != Index) break;
+				CachedSequences.Add(Sequence);
+			}
+			if (CachedSequences.Num() == static_cast<int32>(CachedStacks.size()))
+			{
+				OutSequences = std::move(CachedSequences);
+				return true;
+			}
+		}
 		FLoadedScene Loaded;
 		if (!LoadScene(Source, Options, nullptr, Loaded, Error)) return false;
+		const int StackCount = Loaded.Scene->GetSrcObjectCount<FbxAnimStack>();
+		if (StackCount == 0) return true;
+		if (StackCount > 256) { Error = "Too many animation stacks"; return false; }
 		// 메시의 본 테이블 순서로 샘플링한다. 패널과 런타임은 이름과 순서가 같다고 가정한다.
 		std::vector<FbxNode*> Nodes(BoneCount);
-		TArray<FString> Names;
-		TArray<int32> Parents;
 		for (int32 I = 0; I < BoneCount; ++I)
 		{
-			const auto& Bone = Skeleton.RefBoneInfo[I];
+			const auto& Bone = Skeleton.RefSkeleton.RefBoneInfo[I];
 			Nodes[I] = Loaded.Scene->FindNodeByName(Bone.Name.c_str());
 			if (!Nodes[I]) { Error = "Bone not found in FBX: " + Bone.Name; return false; }
-			Names.Add(Bone.Name); Parents.Add(Bone.ParentIndex);
 		}
 		FbxAMatrix FrameInverse;
 		if (!Options.bBakeSkeletalMeshes && Nodes[0]->GetParent())
 			FrameInverse = Nodes[0]->GetParent()->EvaluateGlobalTransform(FBXSDK_TIME_ZERO).Inverse();
-		const int StackCount = Loaded.Scene->GetSrcObjectCount<FbxAnimStack>();
-		if (StackCount > 256) { Error = "Too many animation stacks"; return false; }
+		TArray<UAnimSequence*> Sequences;
 		for (int StackIndex = 0; StackIndex < StackCount; ++StackIndex)
 		{
 			FbxAnimStack* Stack = Loaded.Scene->GetSrcObject<FbxAnimStack>(StackIndex);
 			if (!Stack) continue;
 			FbxTimeSpan Span = Stack->GetLocalTimeSpan();
-			if (Span.GetDuration().GetSecondDouble() <= 0.0) Loaded.Scene->GetGlobalSettings().GetTimelineDefaultTimeSpan(Span);
+			if (Span.GetDuration().GetSecondDouble() <= 0.0)
+				Loaded.Scene->GetGlobalSettings().GetTimelineDefaultTimeSpan(Span);
 			const double Start = Span.GetStart().GetSecondDouble();
 			const double Duration = Span.GetStop().GetSecondDouble() - Start;
 			if (!std::isfinite(Start) || !std::isfinite(Duration) || Duration <= 0.0) continue;
-			FAnimationClip Clip;
-			const double FrameCountDouble = std::ceil(Duration * Clip.FramesPerSecond) + 1.0;
-			if (FrameCountDouble > 100000.0 || FrameCountDouble * BoneCount > 50000000.0) { Error = "Animation is too long: " + FString(Stack->GetName()); return false; }
+			const double FrameCountDouble = std::ceil(Duration * 30.0) + 1.0;
+			if (FrameCountDouble > 100000.0 || FrameCountDouble * BoneCount > 50000000.0)
+			{ Error = "Animation is too long: " + FString(Stack->GetName()); return false; }
 			Loaded.Scene->SetCurrentAnimationStack(Stack);
-			Clip.Name = Stack->GetName();
-			Clip.SkeletonName = Names[0];
-			Clip.DurationSeconds = static_cast<float>(Duration);
-			Clip.BoneNames = Names;
-			Clip.ParentIndices = Parents;
+			UAnimSequence* Sequence = NewObject<UAnimSequence>();
+			Sequence->Skeleton = &Skeleton;
+			Sequence->Name = Stack->GetName();
+			const FString SequenceFileName = BaseName + (StackCount > 1 ? "_" + std::to_string(StackIndex) : "") + ".animseq";
+			const FString SequencePath = FbxPath::ToString(RelativeSource.parent_path() / FbxPath::FromString(SequenceFileName));
+			Sequence->SetPath(SequencePath);
+			Sequence->SourceFilePath = Identity;
+			Sequence->SourceTakeIndex = StackIndex;
+			const fs::path BinFsPath = ContentPaths::AssetRoot / FbxPath::FromString(SequencePath + ".bin");
+			const FString BinPath = FbxPath::ToString(BinFsPath);
+			FileError.clear();
+			const auto CacheTime = fs::last_write_time(BinFsPath, FileError);
+			if (!FileError)
+			{
+				FString ExistingSkeleton;
+				if (FFbxAssetBake::ReadAnimationSequenceSkeletonPath(BinPath, ExistingSkeleton) &&
+					ExistingSkeleton != Skeleton.GetPath())
+				{ Error = "Animation name is already used by another skeleton: " + BinPath; return false; }
+				if (FFbxAssetBake::ReadAnimationSequence(BinPath, Skeleton, *Sequence) &&
+					!Sequence->SourceFilePath.empty() && Sequence->SourceFilePath != Identity)
+				{ Error = "Animation name is already used by another FBX: " + BinPath; return false; }
+			}
+			if (!FileError && CacheTime >= SourceTime &&
+				FFbxAssetBake::ReadAnimationSequence(BinPath, Skeleton, *Sequence) &&
+				Sequence->Name == Stack->GetName() && Sequence->DataModel->FrameRate.Numerator == 30 &&
+				Sequence->DataModel->FrameRate.Denominator == 1 &&
+				Sequence->DataModel->NumberOfKeys == static_cast<int32>(FrameCountDouble))
+			{
+				Sequences.Add(Sequence);
+				continue;
+			}
+			// 재임포트할 때 기존 애셋의 루트 모션 설정은 유지한다.
+			if (!FileError && CacheTime < SourceTime)
+				FFbxAssetBake::ReadAnimationSequence(BinPath, Skeleton, *Sequence);
+			Sequence->Name = Stack->GetName();
+			Sequence->SourceFilePath = Identity;
+			Sequence->SourceTakeIndex = StackIndex;
+			if (!Sequence->DataModel) Sequence->DataModel = NewObject<UAnimDataModel>(Sequence);
+			Sequence->DataModel->FrameRate = FAnimFrameRate{};
 			const int32 FrameCount = static_cast<int32>(FrameCountDouble);
-			Clip.Frames.Reserve(FrameCount);
+			Sequence->DataModel->NumberOfKeys = FrameCount;
+			Sequence->DataModel->NumberOfFrames = FrameCount - 1;
+			Sequence->DataModel->PlayLength = (FrameCount - 1) / 30.0f;
+			TArray<FBoneAnimationTrack>& Tracks = Sequence->DataModel->BoneAnimationTracks;
+			Tracks.Reset();
+			Tracks.SetNum(BoneCount);
+			for (int32 BoneIndex = 0; BoneIndex < BoneCount; ++BoneIndex)
+			{
+				Tracks[BoneIndex].Name = FName(Skeleton.RefSkeleton.RefBoneInfo[BoneIndex].Name);
+				Tracks[BoneIndex].InternalTrack.PosKeys.Reserve(FrameCount);
+				Tracks[BoneIndex].InternalTrack.RotKeys.Reserve(FrameCount);
+				Tracks[BoneIndex].InternalTrack.ScaleKeys.Reserve(FrameCount);
+			}
 			for (int32 FrameIndex = 0; FrameIndex < FrameCount; ++FrameIndex)
 			{
 				FbxTime Time;
-				Time.SetSecondDouble(Start + std::min(FrameIndex / static_cast<double>(Clip.FramesPerSecond), Duration));
-				FAnimationFrame Frame;
-				Frame.Bones.SetNum(BoneCount);
+				Time.SetSecondDouble(Start + std::min(FrameIndex / 30.0, Duration));
+				TArray<FMatrix> GlobalFrame;
+				GlobalFrame.SetNum(BoneCount);
 				// BuildRig의 바인드 행렬과 같은 변환을 써야 스키닝 공간이 맞는다.
-				for (int32 Bone = 0; Bone < BoneCount; ++Bone)
-					Frame.Bones[Bone] = EngineMatrix(FrameInverse * Nodes[Bone]->EvaluateGlobalTransform(Time), Loaded.UnitScale);
-				Clip.Frames.Add(std::move(Frame));
+				for (int32 BoneIndex = 0; BoneIndex < BoneCount; ++BoneIndex)
+					GlobalFrame[BoneIndex] = EngineMatrix(FrameInverse * Nodes[BoneIndex]->EvaluateGlobalTransform(Time), Loaded.UnitScale);
+				for (int32 BoneIndex = 0; BoneIndex < BoneCount; ++BoneIndex)
+				{
+					const int32 Parent = Skeleton.RefSkeleton.RefBoneInfo[BoneIndex].ParentIndex;
+					const FMatrix Local = Parent < 0 ? GlobalFrame[BoneIndex] :
+						GlobalFrame[BoneIndex] * GlobalFrame[Parent].Inverse();
+					if (!FiniteMatrix(Local))
+					{
+						Error = "Invalid animation bone matrix: " + Skeleton.RefSkeleton.RefBoneInfo[BoneIndex].Name;
+						return false;
+					}
+					FVector3f Position, Scale;
+					FQuat4f Rotation;
+					if (!DecomposeAnimMatrix(Local, Position, Rotation, Scale))
+					{
+						const FBoneTransform Fallback = FBoneTransform::FromMatrix(Local);
+						Position = Fallback.Translation;
+						Rotation = Fallback.Rotation;
+						Scale = Fallback.Scale;
+					}
+					FRawAnimSequenceTrack& Track = Tracks[BoneIndex].InternalTrack;
+					Track.PosKeys.Add(Position);
+					Track.RotKeys.Add(Rotation);
+					Track.ScaleKeys.Add(Scale);
+				}
 			}
-			Out.Add(std::move(Clip));
+			fs::create_directories(BinFsPath.parent_path(), FileError);
+			if (!FFbxAssetBake::WriteAnimationSequence(BinPath, *Sequence))
+			{
+				Error = "Failed to bake animation sequence: " + BinPath;
+				return false;
+			}
+			Sequences.Add(Sequence);
 		}
+		OutSequences = std::move(Sequences);
 		return true;
 	}
-	catch (const std::exception& E) { Error = E.what(); Out.Reset(); return false; }
+	catch (const std::exception& E) { Error = E.what(); OutSequences.Reset(); return false; }
 #else
 	Error = "FBX SDK is not configured.";
 	return false;

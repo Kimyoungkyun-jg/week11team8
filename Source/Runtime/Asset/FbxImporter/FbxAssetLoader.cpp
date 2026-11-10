@@ -186,15 +186,15 @@ public:
 				for (int32 L = 0; L < Asset.LODs.Num(); ++L)
 				{
 					FSkeletalMeshLODResource Resource;
-                    Resource.Data = ConvertSkeletalLOD(Asset.LODs[L], Asset.RefSkeleton);
-                    Resource.VertexBuffer = RenderCommand::CreateStaticVertexBuffer(Resource.Data.SkinnedVertices.GetData(),
-                        static_cast<uint32>(Resource.Data.SkinnedVertices.Num() * sizeof(FSkeletalVertex)), sizeof(FSkeletalVertex));
-                    Resource.IndexBuffer = RenderCommand::CreateStaticIndexBuffer(Resource.Data.Indices.GetData(), Resource.Data.Indices.Num());
-                    if (!Resource.VertexBuffer || !Resource.IndexBuffer) { Error = "Cannot create imported skeletal GPU buffers"; return nullptr; }
-                    if (L == 0) { Mesh->MeshData = std::move(Resource.Data); Mesh->VertexBuffer = std::move(Resource.VertexBuffer); Mesh->IndexBuffer = std::move(Resource.IndexBuffer); }
-                    else Mesh->AdditionalLODs.Add(std::move(Resource));
-                }
-                Mesh->RebuildRenderData();
+					Resource.Data = ConvertSkeletalLOD(Asset.LODs[L], Asset.RefSkeleton);
+					Resource.VertexBuffer = RenderCommand::CreateStaticVertexBuffer(Resource.Data.SkinnedVertices.GetData(),
+						static_cast<uint32>(Resource.Data.SkinnedVertices.Num() * sizeof(FSkeletalVertex)), sizeof(FSkeletalVertex));
+					Resource.IndexBuffer = RenderCommand::CreateStaticIndexBuffer(Resource.Data.Indices.GetData(), Resource.Data.Indices.Num());
+					if (!Resource.VertexBuffer || !Resource.IndexBuffer) { Error = "Cannot create imported skeletal GPU buffers"; return nullptr; }
+					if (L == 0) { Mesh->MeshData = std::move(Resource.Data); Mesh->VertexBuffer = std::move(Resource.VertexBuffer); Mesh->IndexBuffer = std::move(Resource.IndexBuffer); }
+					else Mesh->AdditionalLODs.Add(std::move(Resource));
+				}
+				Mesh->RebuildRenderData();
 			}
 		}
 		Loading.erase(Key);
@@ -351,6 +351,14 @@ FFbxImportResult FFbxAssetLoader::Import(const FString& SourcePath, const FFbxIm
 			return Result;
 		}
 		Batch.Publish(); Result.AssetKeys = std::move(OutputKeys); Result.bSuccess = true;
+		for (const auto& Key : Result.AssetKeys)
+		{
+			if (USkeletalMesh* SkeletalMesh = UAssetManager::GetAssetByPath<USkeletalMesh>(Key))
+			{
+				if (SkeletalMesh->Skeleton)
+					UAssetManager::LoadFbxAnimSequences(Key, *SkeletalMesh->Skeleton);
+			}
+		}
 		UAssetManager::Get().MarkFbxImported(OwnerSource.empty() ? SourceKey : OwnerSource);
 	}
 	catch (const std::exception& E) { Result.Error = E.what(); }

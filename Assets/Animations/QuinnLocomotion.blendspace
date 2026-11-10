@@ -1,0 +1,141 @@
+{
+  "Type": "BlendSpace2D",
+  "Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
+  "Samples": [
+    {
+      "X": -180,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": -180,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Bwd.animseq"
+    },
+    {
+      "X": -180,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Bwd.animseq"
+    },
+    {
+      "X": -135,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": -135,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Bwd_Left.animseq"
+    },
+    {
+      "X": -135,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Bwd_Left.animseq"
+    },
+    {
+      "X": -90,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": -90,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Left.animseq"
+    },
+    {
+      "X": -90,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Left.animseq"
+    },
+    {
+      "X": -45,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": -45,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Fwd_Left.animseq"
+    },
+    {
+      "X": -45,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Fwd_Left.animseq"
+    },
+    {
+      "X": 0,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": 0,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Fwd.animseq"
+    },
+    {
+      "X": 0,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Fwd.animseq"
+    },
+    {
+      "X": 45,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": 45,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Fwd_Right.animseq"
+    },
+    {
+      "X": 45,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Fwd_Right.animseq"
+    },
+    {
+      "X": 90,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": 90,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Right.animseq"
+    },
+    {
+      "X": 90,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Right.animseq"
+    },
+    {
+      "X": 135,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": 135,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Bwd_Right.animseq"
+    },
+    {
+      "X": 135,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Bwd_Right.animseq"
+    },
+    {
+      "X": 180,
+      "Y": 0,
+      "Sequence": "Models/UnrealModel/Idle.animseq"
+    },
+    {
+      "X": 180,
+      "Y": 300,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Walk_Bwd.animseq"
+    },
+    {
+      "X": 180,
+      "Y": 600,
+      "Sequence": "Models/UnrealModel/MF_Unarmed_Jog_Bwd.animseq"
+    }
+  ]
+}

@@ -15,8 +15,6 @@ public:
 	FVector ConsumeMovementInputVector();
 	virtual void AddControllerYawInput(float Value) {}
 	virtual void AddControllerPitchInput(float Value) {}
-	virtual void Jump() {}
-	virtual void StopJumping() {}
 	void PossessedBy(APlayerController* NewController) { Controller = NewController; }
 	void UnPossessed() { Controller = nullptr; }
 	APlayerController* GetController() const { return Controller; }

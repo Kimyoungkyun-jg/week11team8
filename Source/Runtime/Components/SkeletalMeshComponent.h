@@ -1,7 +1,10 @@
 #pragma once
 
 #include "Components/SkinnedMeshComponent.h"
+#include "Animation/AnimInstance.h"
+#include "Asset/AnimSequence.h"
 #include "Render/RenderEnums.h"
+#include "Serialization/StructuredArchive.h"
 #include "SkeletalMeshComponent.generated.h"
 
 UCLASS()
@@ -11,12 +14,20 @@ class USkeletalMeshComponent : public USkinnedMeshComponent
 
 public:
 	USkeletalMeshComponent();
-	virtual ~USkeletalMeshComponent() override = default;
+	virtual ~USkeletalMeshComponent() override;
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime) override;
+	virtual void Serialize(FStructuredArchive::FRecord Record) override;
 
 	virtual void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh) override;
+	bool SetAnimInstanceClass(UClass* InAnimClass);
+	bool SetAnimGraphPath(const FString& InPath);
+	const FString& GetAnimGraphPath() const { return AnimGraphPath; }
+	UClass* GetAnimInstanceClass() const { return AnimClass; }
+	UAnimInstance* GetAnimInstance() const { return AnimScriptInstance; }
+	bool SetAnimationSequence(UAnimSequence* InSequence);
+	UAnimSequence* GetAnimationSequence() const { return AnimSequence; }
 
 	void InitBoneTransforms();
 	void SetBoneTransform(int32 BoneIndex, const FMatrix& LocalTransform);
@@ -78,6 +89,14 @@ private:
 	TArray<FVector> PickPositions;
 	FBox PickBounds;
 	uint64 PickRevision = 0;
+	UPROPERTY(EditAnywhere, Transient)
+	UClass* AnimClass = nullptr;
+	UPROPERTY(EditAnywhere, Transient)
+	FString AnimGraphPath;
+	UPROPERTY(Transient)
+	UAnimInstance* AnimScriptInstance = nullptr;
+	UPROPERTY(EditAnywhere, Transient)
+	UAnimSequence* AnimSequence = nullptr;
 	inline static ESkinningMode SkinningMode = ESkinningMode::CPU;
 	inline static bool bForceSkinningUpdate = false;
 	ESkinningMode AppliedMode = ESkinningMode::CPU;

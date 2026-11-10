@@ -36,6 +36,10 @@
 
 #include "Editor/HitoriEd/EditorFileUtils.h"
 #include "Scripting/LuaScriptManager.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimGraphInstance.h"
+#include "Asset/AnimGraphAsset.h"
+#include "UObject/UObjectHash.h"
 
 
 namespace
@@ -1109,6 +1113,30 @@ namespace
 		case EPropertyType::String:
 		{
 			FString* Value = static_cast<FString*>(ValuePtr);
+			if (Property.Name == "AnimGraphPath" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				auto* Component = static_cast<USkeletalMeshComponent*>(Object);
+				const FString& Current = Component->GetAnimGraphPath();
+				if (ImGui::BeginCombo(Label.c_str(), Current.empty() ? "None" : Current.c_str()))
+				{
+					if (ImGui::Selectable("None", Current.empty())) Component->SetAnimGraphPath({});
+					std::error_code Ec;
+					for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+					{
+						if (It->path().extension() != ".animgraph") continue;
+						const FString Candidate = FbxPath::ToString(It->path());
+						FAnimGraphAsset Graph; FString Error;
+						if (!FAnimGraphAsset::Load(Candidate, Graph, Error)) continue;
+						USkeletalMesh* Mesh = Component->GetSkeletalMesh();
+						if (Mesh && Mesh->Skeleton && !Graph.SkeletonPath.empty() &&
+							Graph.SkeletonPath != Mesh->Skeleton->GetPath()) continue;
+						if (ImGui::Selectable(Candidate.c_str(), Candidate == Current))
+							Component->SetAnimGraphPath(Candidate);
+					}
+					ImGui::EndCombo();
+				}
+				break;
+			}
 
 			char Buffer[256] = {};
 			strncpy_s(Buffer, Value->c_str(), sizeof(Buffer) - 1);
@@ -1149,7 +1177,71 @@ namespace
 		{
 			UObject** ObjPtr = static_cast<UObject**>(ValuePtr);
 
-			if (Property.Class == UMaterial::StaticClass())
+			if (Property.Name == "AnimClass" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				USkeletalMeshComponent* Component = static_cast<USkeletalMeshComponent*>(Object);
+				UClass* Current = Component->GetAnimInstanceClass();
+				if (ImGui::BeginCombo(Label.c_str(), Current ? Current->Name.c_str() : "None"))
+				{
+					if (ImGui::Selectable("None", !Current)) { Component->SetAnimGraphPath({}); Component->SetAnimInstanceClass(nullptr); }
+					TArray<UClass*> Classes;
+					Classes.Add(UAnimInstance::StaticClass());
+					GetDerivedClasses(UAnimInstance::StaticClass(), Classes);
+					for (UClass* Class : Classes)
+						if (Class && Class != UAnimGraphInstance::StaticClass() && Class->Constructor && ImGui::Selectable(Class->Name.c_str(), Current == Class))
+						{
+							Component->SetAnimGraphPath({});
+							Component->SetAnimInstanceClass(Class);
+						}
+					ImGui::EndCombo();
+				}
+			}
+			else if (Property.Name == "AnimSequence" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				USkeletalMeshComponent* Component = static_cast<USkeletalMeshComponent*>(Object);
+				UAnimSequence* Current = Component->GetAnimationSequence();
+				const FString Preview = Current ? Current->Name + " (" + Current->GetPath() + ")" : "None";
+				if (ImGui::BeginCombo(Label.c_str(), Preview.c_str()))
+				{
+					if (ImGui::Selectable("None", !Current)) Component->SetAnimationSequence(nullptr);
+					TArray<UAnimSequence*> Sequences;
+					USkeletalMesh* Mesh = Component->GetSkeletalMesh();
+					UAssetManager::GetAnimSequencesForSkeleton(Mesh ? Mesh->Skeleton : nullptr, Sequences);
+					for (UAnimSequence* Sequence : Sequences)
+					{
+						const FString Name = Sequence->Name + " (" + Sequence->GetPath() + ")";
+						if (ImGui::Selectable(Name.c_str(), Current == Sequence))
+							Component->SetAnimationSequence(Sequence);
+					}
+					ImGui::EndCombo();
+				}
+					if (Current && ImGui::TreeNode("Root Motion"))
+					{
+						const bool OldEnable = Current->bEnableRootMotion;
+						const bool OldForce = Current->bForceRootLock;
+						const bool OldScale = Current->bUseNormalizedRootMotionScale;
+						const ERootMotionRootLock OldLock = Current->RootMotionRootLock;
+						bool Changed = ImGui::Checkbox("Enable Root Motion", &Current->bEnableRootMotion);
+						int Lock = static_cast<int>(Current->RootMotionRootLock);
+						if (ImGui::Combo("Root Motion Root Lock", &Lock, "Ref Pose\0Anim First Frame\0Zero\0"))
+						{
+							Current->RootMotionRootLock = static_cast<ERootMotionRootLock>(Lock);
+							Changed = true;
+						}
+						Changed |= ImGui::Checkbox("Force Root Lock", &Current->bForceRootLock);
+						Changed |= ImGui::Checkbox("Use Normalized Root Motion Scale", &Current->bUseNormalizedRootMotionScale);
+						if (Changed && !UAssetManager::SaveAnimSequence(*Current))
+						{
+							Current->bEnableRootMotion = OldEnable;
+							Current->bForceRootLock = OldForce;
+							Current->bUseNormalizedRootMotionScale = OldScale;
+							Current->RootMotionRootLock = OldLock;
+							HTR_LOG(Error, "Failed to save animation root motion settings: {}", Current->GetPath());
+						}
+						ImGui::TreePop();
+					}
+			}
+			else if (Property.Class == UMaterial::StaticClass())
 			{
 				DrawTextureSlot(reinterpret_cast<UMaterial**>(ObjPtr), 0);
 			}
@@ -1225,7 +1317,6 @@ namespace
 					{
 						continue;
 					}
-
 					const bool bReadOnly = Property.HasAnyFlags(CPF_EditConst);
 					if (bReadOnly) ImGui::BeginDisabled();
 					DrawProperty(Object, Property, CustomFont);

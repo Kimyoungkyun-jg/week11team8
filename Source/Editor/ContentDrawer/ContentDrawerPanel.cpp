@@ -1,6 +1,7 @@
 #include "EnginePCH.h"
 #include "Editor/HitoriEd/EditorResourcePaths.h"
 #include "Editor/ContentDrawer/ContentDrawerPanel.h"
+#include "Editor/Animation/AnimSequenceDisplayName.h"
 #include "Editor/EditorUI/EditorUIScale.h"
 #include "Asset/AssetManager.h"
 #include "Asset/FbxImporter/FbxAssetBake.h"
@@ -130,9 +131,64 @@ void FContentDrawerPanel::OnRender()
 				strcpy_s(NewAssetName, "NewWidget");
 				bOpenCreateWidget = true;   // 메뉴 팝업 안에서 바로 다른 팝업을 열 수 없어 다음 줄에서 연다
 			}
+			if (ImGui::MenuItem("Create AnimGraph"))
+			{
+				strcpy_s(NewAssetName, "NewAnimGraph");
+				bOpenCreateAnimGraph = true;
+			}
+			if (ImGui::MenuItem("Create BlendSpace 1D"))
+			{
+				strcpy_s(NewAssetName, "NewBlendSpace1D");
+				bNewBlendSpace2D = false; bOpenCreateBlendSpace = true;
+			}
+			if (ImGui::MenuItem("Create BlendSpace 2D"))
+			{
+				strcpy_s(NewAssetName, "NewBlendSpace2D");
+				bNewBlendSpace2D = true; bOpenCreateBlendSpace = true;
+			}
 			ImGui::EndPopup();
 		}
 		if (bOpenCreateWidget) { ImGui::OpenPopup("Create Widget"); bOpenCreateWidget = false; }
+		if (bOpenCreateAnimGraph) { ImGui::OpenPopup("Create AnimGraph"); bOpenCreateAnimGraph = false; }
+		if (bOpenCreateBlendSpace) { ImGui::OpenPopup("Create BlendSpace"); bOpenCreateBlendSpace = false; }
+		if (ImGui::BeginPopupModal("Create BlendSpace", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const FString Name = NewAssetName;
+			const fs::path Target = CurrentPath / (FString(NewAssetName) + ".blendspace");
+			const bool bExists = fs::exists(Target);
+			const bool bInvalid = Name.empty() || Name == "." || Name == ".." ||
+				Name.find_first_of("\\/:*?\"<>|") != FString::npos;
+			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
+			if (bInvalid) ImGui::TextUnformatted("Enter a valid asset name.");
+			ImGui::BeginDisabled(bExists || bInvalid);
+			if (ImGui::Button("Create") && OnCreateBlendSpace)
+			{
+				OnCreateBlendSpace(FbxPath::ToString(Target), bNewBlendSpace2D);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		if (ImGui::BeginPopupModal("Create AnimGraph", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const fs::path Target = CurrentPath / (FString(NewAssetName) + ".animgraph");
+			const bool bExists = fs::exists(Target);
+			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
+			ImGui::BeginDisabled(bExists || NewAssetName[0] == '\0');
+			if (ImGui::Button("Create") && OnCreateAnimGraph)
+			{
+				OnCreateAnimGraph(FbxPath::ToString(Target));
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 
 		if (ImGui::BeginPopupModal("Create Widget", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
@@ -173,7 +229,9 @@ void FContentDrawerPanel::OnRender()
 			for (; !IterateError && It != End; It.increment(IterateError))
 			{
 				const fs::path Path = It->path();
-				if (Path.extension() == ".bin" || FbxPath::ToString(Path.filename()).starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
+				const FString EntryName = FbxPath::ToString(Path.filename());
+				if ((Path.extension() == ".bin" && !EntryName.ends_with(".animseq.bin")) ||
+					EntryName.starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
 
 				std::error_code TypeError;
 				const bool bIsDirectory = fs::is_directory(Path, TypeError);
@@ -185,6 +243,19 @@ void FContentDrawerPanel::OnRender()
 
 				std::string PathString = FbxPath::ToString(Path);
 				std::string FilenameString = FbxPath::ToString(Path.filename());
+				FString DisplayName = FilenameString;
+				if (FilenameString.ends_with(".animseq.bin"))
+				{
+					auto Found = AnimSequenceDisplayNames.find(PathString);
+					if (Found == AnimSequenceDisplayNames.end())
+					{
+						FString SkeletonPath;
+						if (FFbxAssetBake::ReadAnimationSequenceSkeletonPath(PathString, SkeletonPath))
+							DisplayName = GetAnimSequenceDisplayName(PathString, SkeletonPath);
+						Found = AnimSequenceDisplayNames.emplace(PathString, DisplayName).first;
+					}
+					DisplayName = Found->second;
+				}
 
 				ImGui::PushID(PathString.c_str()); // 각 위젯에 고유 ID 부여
 				UTexture2D* Thumbnail = nullptr;
@@ -254,7 +325,7 @@ void FContentDrawerPanel::OnRender()
 				}
 				else
 				{
-					ImGui::Button(FilenameString.c_str(), { thumbnailSize, thumbnailSize });
+					ImGui::Button(DisplayName.c_str(), { thumbnailSize, thumbnailSize });
 				}
 
 				ImGui::PopStyleVar();
@@ -308,8 +379,8 @@ void FContentDrawerPanel::OnRender()
 				const ImVec2 NamePos = ImGui::GetCursorScreenPos();
 				const float NameWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
 				const float LineHeight = ImGui::GetTextLineHeight();
-				const char* NameBegin = FilenameString.c_str();
-				const char* NameEnd = NameBegin + FilenameString.size();
+				const char* NameBegin = DisplayName.c_str();
+				const char* NameEnd = NameBegin + DisplayName.size();
 				const char* FirstLineEnd = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), NameBegin, NameEnd, NameWidth);
 				ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), NamePos,
 					ImVec2(NamePos.x + NameWidth, NamePos.y + LineHeight), NamePos.x + NameWidth,
@@ -346,6 +417,10 @@ void FContentDrawerPanel::OpenItem(const fs::path& Path)
 	FString Extension = Path.extension().string();
 	std::transform(Extension.begin(), Extension.end(), Extension.begin(), [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
 	if (Extension == ".widget" && OnOpenWidget) OnOpenWidget(FbxPath::ToString(Path));
+	else if (Extension == ".animgraph" && OnOpenAnimGraph) OnOpenAnimGraph(FbxPath::ToString(Path));
+	else if (Extension == ".blendspace" && OnOpenBlendSpace) OnOpenBlendSpace(FbxPath::ToString(Path));
+	else if (Extension == ".bin" && FbxPath::ToString(Path.filename()).ends_with(".animseq.bin") && OnOpenAnimSequence)
+		OnOpenAnimSequence(FbxPath::ToString(Path));
 	else if (Extension == ".fbxbin")
 	{
 		FString Error;
