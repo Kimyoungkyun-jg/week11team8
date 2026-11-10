@@ -131,9 +131,60 @@ void FContentDrawerPanel::OnRender()
 				strcpy_s(NewAssetName, "NewWidget");
 				bOpenCreateWidget = true;   // 메뉴 팝업 안에서 바로 다른 팝업을 열 수 없어 다음 줄에서 연다
 			}
+			if (ImGui::MenuItem("Create AnimGraph"))
+			{
+				strcpy_s(NewAssetName, "NewAnimGraph");
+				bOpenCreateAnimGraph = true;
+			}
+			if (ImGui::MenuItem("Create BlendSpace 1D"))
+			{
+				strcpy_s(NewAssetName, "NewBlendSpace1D");
+				bNewBlendSpace2D = false; bOpenCreateBlendSpace = true;
+			}
+			if (ImGui::MenuItem("Create BlendSpace 2D"))
+			{
+				strcpy_s(NewAssetName, "NewBlendSpace2D");
+				bNewBlendSpace2D = true; bOpenCreateBlendSpace = true;
+			}
 			ImGui::EndPopup();
 		}
 		if (bOpenCreateWidget) { ImGui::OpenPopup("Create Widget"); bOpenCreateWidget = false; }
+		if (bOpenCreateAnimGraph) { ImGui::OpenPopup("Create AnimGraph"); bOpenCreateAnimGraph = false; }
+		if (bOpenCreateBlendSpace) { ImGui::OpenPopup("Create BlendSpace"); bOpenCreateBlendSpace = false; }
+		if (ImGui::BeginPopupModal("Create BlendSpace", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const fs::path Target = CurrentPath / (FString(NewAssetName) + ".blendspace");
+			const bool bExists = fs::exists(Target);
+			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
+			ImGui::BeginDisabled(bExists || NewAssetName[0] == '\0');
+			if (ImGui::Button("Create") && OnCreateBlendSpace)
+			{
+				OnCreateBlendSpace(FbxPath::ToString(Target), bNewBlendSpace2D);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		if (ImGui::BeginPopupModal("Create AnimGraph", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const fs::path Target = CurrentPath / (FString(NewAssetName) + ".animgraph");
+			const bool bExists = fs::exists(Target);
+			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
+			ImGui::BeginDisabled(bExists || NewAssetName[0] == '\0');
+			if (ImGui::Button("Create") && OnCreateAnimGraph)
+			{
+				OnCreateAnimGraph(FbxPath::ToString(Target));
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 
 		if (ImGui::BeginPopupModal("Create Widget", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
@@ -362,6 +413,8 @@ void FContentDrawerPanel::OpenItem(const fs::path& Path)
 	FString Extension = Path.extension().string();
 	std::transform(Extension.begin(), Extension.end(), Extension.begin(), [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
 	if (Extension == ".widget" && OnOpenWidget) OnOpenWidget(FbxPath::ToString(Path));
+	else if (Extension == ".animgraph" && OnOpenAnimGraph) OnOpenAnimGraph(FbxPath::ToString(Path));
+	else if (Extension == ".blendspace" && OnOpenBlendSpace) OnOpenBlendSpace(FbxPath::ToString(Path));
 	else if (Extension == ".bin" && FbxPath::ToString(Path.filename()).ends_with(".animseq.bin") && OnOpenAnimSequence)
 		OnOpenAnimSequence(FbxPath::ToString(Path));
 	else if (Extension == ".fbxbin")

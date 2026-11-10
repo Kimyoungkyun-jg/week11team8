@@ -4,10 +4,13 @@
 #include "Render/RenderPacket.h"
 #include "Collision/Ray.h"
 #include "Engine/PrimitiveSceneProxy.h"
+#include "Engine/World.h"
 #include "Asset/LOD/StaticMeshLODSelector.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UObjectHash.h"
 #include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimGraphInstance.h"
+#include "Asset/AnimGraphAsset.h"
 #include "Asset/AssetManager.h"
 #include "Components/CharacterMovementComponent.h"
 #include "GameFramework/Character.h"
@@ -69,7 +72,7 @@ void USkeletalMeshComponent::TickComponent(float DeltaTime)
 			bGlobalBoneTransformsOverridden = false;
 			bSkinningMatricesDirty = true;
 			FMatrix RootMotion;
-			if (AnimScriptInstance->ConsumeRootMotion(RootMotion))
+			if (AnimScriptInstance->ConsumeRootMotion(RootMotion) && GetWorld() && GetWorld()->IsGameWorld())
 				if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
 					if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
 						Movement->AddRootMotion(RootMotion);
@@ -92,6 +95,12 @@ void USkeletalMeshComponent::Serialize(FStructuredArchive::FRecord Record)
 		if (Record.GetUnderlyingArchive().IsLoading())
 			SetAnimInstanceClass(AnimClassName.empty() ? nullptr : FindClass(AnimClassName));
 	}
+	FString GraphPath = AnimGraphPath;
+	if (auto Slot = Record.TryEnterField("AnimGraphPath", true))
+	{
+		Slot.GetValue() << GraphPath;
+		if (Record.GetUnderlyingArchive().IsLoading() && !GraphPath.empty()) SetAnimGraphPath(GraphPath);
+	}
 	FString SequencePath = AnimSequence ? AnimSequence->GetPath() : FString{};
 	if (auto Slot = Record.TryEnterField("AnimSequencePath", true))
 	{
@@ -108,7 +117,9 @@ void USkeletalMeshComponent::SetSkeletalMesh(USkeletalMesh* InSkeletalMesh)
 	if (SkeletalMesh && SkeletalMesh->Skeleton && !SkeletalMesh->GetPath().empty() &&
 		!UAssetManager::GetFbxAnimSequences(SkeletalMesh->GetPath()))
 	{
-		UAssetManager::LoadFbxAnimSequences(SkeletalMesh->GetPath(), *SkeletalMesh->Skeleton);
+		const FString& Key = SkeletalMesh->GetPath();
+		UAssetManager::LoadFbxAnimSequences(Key.rfind("Assets/", 0) == 0 ? Key : "Assets/" + Key,
+			*SkeletalMesh->Skeleton);
 	}
 	if (AnimSequence && (!SkeletalMesh || AnimSequence->Skeleton != SkeletalMesh->Skeleton))
 		SetAnimationSequence(nullptr);
@@ -126,6 +137,7 @@ bool USkeletalMeshComponent::SetAnimInstanceClass(UClass* InAnimClass)
 {
 	if (InAnimClass && (!InAnimClass->IsChildOf(UAnimInstance::StaticClass()) || !InAnimClass->Constructor))
 		return false;
+	if (InAnimClass != UAnimGraphInstance::StaticClass()) AnimGraphPath.clear();
 	if (AnimClass == InAnimClass && (!InAnimClass || AnimScriptInstance)) return true;
 	UAnimInstance* NewInstance = InAnimClass ? NewObject<UAnimInstance>(this, InAnimClass) : nullptr;
 	if (InAnimClass && !NewInstance) return false;
@@ -137,6 +149,29 @@ bool USkeletalMeshComponent::SetAnimInstanceClass(UClass* InAnimClass)
 	{
 		if (SingleNode->SetAnimationAsset(AnimSequence) && AnimSequence) SingleNode->Play();
 	}
+	return true;
+}
+
+bool USkeletalMeshComponent::SetAnimGraphPath(const FString& InPath)
+{
+	if (!InPath.empty())
+	{
+		FAnimGraphAsset Graph;
+		FString Error;
+		if (!FAnimGraphAsset::Load(InPath, Graph, Error)) return false;
+		if (SkeletalMesh && SkeletalMesh->Skeleton && !Graph.SkeletonPath.empty() &&
+			Graph.SkeletonPath != SkeletalMesh->Skeleton->GetPath()) return false;
+	}
+	const FString PreviousPath = AnimGraphPath;
+	const bool bReuseInstance = AnimClass == UAnimGraphInstance::StaticClass() && AnimScriptInstance;
+	AnimGraphPath = InPath;
+	if (InPath.empty())
+	{
+		if (AnimClass == UAnimGraphInstance::StaticClass()) SetAnimInstanceClass(nullptr);
+		return true;
+	}
+	if (!SetAnimInstanceClass(UAnimGraphInstance::StaticClass())) { AnimGraphPath = PreviousPath; return false; }
+	if (bReuseInstance && AnimScriptInstance) AnimScriptInstance->InitializeAnimation();
 	return true;
 }
 

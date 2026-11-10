@@ -28,6 +28,10 @@ public:
 	// .widget 파일을 더블클릭하면 불린다 (UI 에디터가 연다).
 	void SetOpenWidgetCallback(std::function<void(const FString&)> InCallback) { OnOpenWidget = std::move(InCallback); }
 	void SetCreateWidgetCallback(std::function<void(const FString&)> InCallback) { OnCreateWidget = std::move(InCallback); }
+	void SetCreateAnimGraphCallback(std::function<void(const FString&)> InCallback) { OnCreateAnimGraph = std::move(InCallback); }
+	void SetOpenAnimGraphCallback(std::function<void(const FString&)> InCallback) { OnOpenAnimGraph = std::move(InCallback); }
+	void SetCreateBlendSpaceCallback(std::function<void(const FString&, bool)> InCallback) { OnCreateBlendSpace = std::move(InCallback); }
+	void SetOpenBlendSpaceCallback(std::function<void(const FString&)> InCallback) { OnOpenBlendSpace = std::move(InCallback); }
 
 	// .fbx 파일을 더블클릭 시
 	void SetOpenSkeletalMeshCallback(std::function<void(const FString&)> InCallback) { OnOpenSkeletalMesh = std::move(InCallback); }
@@ -56,9 +60,16 @@ private:
 	std::function<void(const FString&, bool)> OnImportFbx;
 	std::function<void(const FString&)> OnOpenWidget;
 	std::function<void(const FString&)> OnCreateWidget;
+	std::function<void(const FString&)> OnCreateAnimGraph;
+	std::function<void(const FString&)> OnOpenAnimGraph;
+	std::function<void(const FString&, bool)> OnCreateBlendSpace;
+	std::function<void(const FString&)> OnOpenBlendSpace;
 	std::function<void(const FString&)> OnOpenSkeletalMesh;
 	char NewAssetName[64] = "NewWidget";
 	bool bOpenCreateWidget = false;
+	bool bOpenCreateAnimGraph = false;
+	bool bOpenCreateBlendSpace = false;
+	bool bNewBlendSpace2D = true;
 
 	fs::path AssetRootPath = "Assets";
 	fs::path CurrentPath = "Assets";

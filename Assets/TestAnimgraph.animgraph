@@ -1,0 +1,35 @@
+{
+  "EntryState": 1,
+  "InvertDirection": false,
+  "RootPoseConnected": true,
+  "Skeleton": "Models/Dummy/SKEL_Hip Hop Dancing_Bip001-Pelvis.fbxbin",
+  "States": [
+    {
+      "Asset": "Models/Dummy/Hip Hop Dancing_1.animseq",
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "DirectionOffsetX": 0.0,
+      "DirectionOffsetY": 0.0,
+      "Id": 1,
+      "InputX": 0,
+      "InputY": 0,
+      "Loop": true,
+      "Name": "State 1",
+      "OutputOffsetX": 0.0,
+      "OutputOffsetY": 0.0,
+      "OutputPlayerId": 0,
+      "PlayRate": 1.0,
+      "PlayerOffsetX": -287.33331298828125,
+      "PlayerOffsetY": 1.999997854232788,
+      "Players": [],
+      "Pose": 0,
+      "PoseConnected": true,
+      "SpeedOffsetX": 0.0,
+      "SpeedOffsetY": 0.0,
+      "X": 682.0,
+      "Y": 778.0
+    }
+  ],
+  "Transitions": [],
+  "Version": 1
+}

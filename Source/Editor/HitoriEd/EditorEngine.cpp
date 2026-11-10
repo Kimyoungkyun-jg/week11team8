@@ -255,6 +255,12 @@ bool UEditorEngine::Init()
 	ContentDrawerPanel->SetOpenSkeletalMeshCallback([this](const FString& Path) { SkeletalMeshViewerPanel->OpenFBX(Path); });
 	AnimSequenceViewerPanel = EditorUI->AddEditorPanel<FAnimSequenceViewerPanel>();
 	ContentDrawerPanel->SetOpenAnimSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimGraphEditorPanel = EditorUI->AddEditorPanel<FAnimGraphEditorPanel>();
+	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->NewAsset(Path); });
+	ContentDrawerPanel->SetOpenAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->OpenAsset(Path); });
+	BlendSpaceEditorPanel = EditorUI->AddEditorPanel<FBlendSpaceEditorPanel>();
+	ContentDrawerPanel->SetCreateBlendSpaceCallback([this](const FString& Path, bool b2D) { BlendSpaceEditorPanel->NewAsset(Path, b2D); });
+	ContentDrawerPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
 
 	Outline = MakeUnique<FOutline>();
 
@@ -1001,6 +1007,8 @@ void UEditorEngine::RenderViewports()
 	}
 	AssetEditorPanel->RenderPreview(this);
 	AnimSequenceViewerPanel->RenderPreview(this);
+	AnimGraphEditorPanel->RenderPreview(this);
+	BlendSpaceEditorPanel->RenderPreview(this);
 }
 
 void UEditorEngine::UpdatePIEViewCamera()
@@ -1751,6 +1759,8 @@ void UEditorEngine::PreExit()
 	if (PoseRetargetPanel) PoseRetargetPanel->Release();
 	if (SkeletalMeshViewerPanel) SkeletalMeshViewerPanel->Release();
 	if (AnimSequenceViewerPanel) AnimSequenceViewerPanel->Release();
+	if (AnimGraphEditorPanel) AnimGraphEditorPanel->Release();
+	if (BlendSpaceEditorPanel) BlendSpaceEditorPanel->Release();
 	if (ContentDrawerPanel) ContentDrawerPanel->Release();
 	if (AssetEditorPanel) AssetEditorPanel->Release();
 	EditorWorld->ClearWorld();

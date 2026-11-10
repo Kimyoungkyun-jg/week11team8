@@ -37,6 +37,8 @@
 #include "Editor/HitoriEd/EditorFileUtils.h"
 #include "Scripting/LuaScriptManager.h"
 #include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimGraphInstance.h"
+#include "Asset/AnimGraphAsset.h"
 #include "UObject/UObjectHash.h"
 
 
@@ -1111,6 +1113,30 @@ namespace
 		case EPropertyType::String:
 		{
 			FString* Value = static_cast<FString*>(ValuePtr);
+			if (Property.Name == "AnimGraphPath" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				auto* Component = static_cast<USkeletalMeshComponent*>(Object);
+				const FString& Current = Component->GetAnimGraphPath();
+				if (ImGui::BeginCombo(Label.c_str(), Current.empty() ? "None" : Current.c_str()))
+				{
+					if (ImGui::Selectable("None", Current.empty())) Component->SetAnimGraphPath({});
+					std::error_code Ec;
+					for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+					{
+						if (It->path().extension() != ".animgraph") continue;
+						const FString Candidate = FbxPath::ToString(It->path());
+						FAnimGraphAsset Graph; FString Error;
+						if (!FAnimGraphAsset::Load(Candidate, Graph, Error)) continue;
+						USkeletalMesh* Mesh = Component->GetSkeletalMesh();
+						if (Mesh && Mesh->Skeleton && !Graph.SkeletonPath.empty() &&
+							Graph.SkeletonPath != Mesh->Skeleton->GetPath()) continue;
+						if (ImGui::Selectable(Candidate.c_str(), Candidate == Current))
+							Component->SetAnimGraphPath(Candidate);
+					}
+					ImGui::EndCombo();
+				}
+				break;
+			}
 
 			char Buffer[256] = {};
 			strncpy_s(Buffer, Value->c_str(), sizeof(Buffer) - 1);
@@ -1157,13 +1183,16 @@ namespace
 				UClass* Current = Component->GetAnimInstanceClass();
 				if (ImGui::BeginCombo(Label.c_str(), Current ? Current->Name.c_str() : "None"))
 				{
-					if (ImGui::Selectable("None", !Current)) Component->SetAnimInstanceClass(nullptr);
+					if (ImGui::Selectable("None", !Current)) { Component->SetAnimGraphPath({}); Component->SetAnimInstanceClass(nullptr); }
 					TArray<UClass*> Classes;
 					Classes.Add(UAnimInstance::StaticClass());
 					GetDerivedClasses(UAnimInstance::StaticClass(), Classes);
 					for (UClass* Class : Classes)
-						if (Class && Class->Constructor && ImGui::Selectable(Class->Name.c_str(), Current == Class))
+						if (Class && Class != UAnimGraphInstance::StaticClass() && Class->Constructor && ImGui::Selectable(Class->Name.c_str(), Current == Class))
+						{
+							Component->SetAnimGraphPath({});
 							Component->SetAnimInstanceClass(Class);
+						}
 					ImGui::EndCombo();
 				}
 			}

@@ -22,6 +22,7 @@ class UStaticMesh;
 class USkeletalMesh;
 class USkeleton;
 class UBlendSpace1D;
+class UBlendSpace2D;
 class USoundWave;
 
 namespace fs = std::filesystem;
@@ -98,6 +99,7 @@ public:
 	static bool SaveAnimSequence(const UAnimSequence& Sequence);
 	static UBlendSpace* LoadBlendSpace(const FString& AssetPath);
 	static bool SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& BlendSpace);
+	static bool SaveBlendSpace2D(const FString& AssetPath, UBlendSpace2D& BlendSpace);
 	static void GetAnimSequencesForSkeleton(const USkeleton* Skeleton, TArray<UAnimSequence*>& OutSequences);
 	static void GetAllAnimSequences(TArray<UAnimSequence*>& OutSequences);
 	static void GetSkeletalMeshesForSkeleton(const USkeleton* Skeleton, TArray<USkeletalMesh*>& OutMeshes);

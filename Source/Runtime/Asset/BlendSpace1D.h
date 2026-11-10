@@ -17,6 +17,7 @@ public:
 	};
 
 	bool AddSample(float X, UAnimSequence* Sequence);
+	bool ReplaceSamples(const TArray<FSample>& InSamples);
 	const TArray<FSample>& GetSamples() const { return Samples; }
 	float GetEffectiveLength(float X, float Y) const override;
 	bool Evaluate(float X, float Y, float NormalizedTime,

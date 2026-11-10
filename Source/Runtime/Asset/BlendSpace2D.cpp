@@ -47,6 +47,18 @@ bool UBlendSpace2D::AddSample(float X, float Y, UAnimSequence* Sequence)
 	return true;
 }
 
+bool UBlendSpace2D::ReplaceSamples(const TArray<FSample>& InSamples)
+{
+	UBlendSpace2D Replacement;
+	Replacement.Skeleton = Skeleton;
+	for (const FSample& Sample : InSamples)
+		if (!Replacement.AddSample(Sample.X, Sample.Y, Sample.Sequence)) return false;
+	if (Replacement.GetSamples().IsEmpty()) return false;
+	Samples = std::move(Replacement.Samples);
+	Triangles = std::move(Replacement.Triangles);
+	return true;
+}
+
 void UBlendSpace2D::RebuildTriangles()
 {
 	Triangles.Reset();

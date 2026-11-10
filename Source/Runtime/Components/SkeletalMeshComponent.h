@@ -4,6 +4,7 @@
 #include "Animation/AnimInstance.h"
 #include "Asset/AnimSequence.h"
 #include "Render/RenderEnums.h"
+#include "Serialization/StructuredArchive.h"
 #include "SkeletalMeshComponent.generated.h"
 
 UCLASS()
@@ -21,6 +22,8 @@ public:
 
 	virtual void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh) override;
 	bool SetAnimInstanceClass(UClass* InAnimClass);
+	bool SetAnimGraphPath(const FString& InPath);
+	const FString& GetAnimGraphPath() const { return AnimGraphPath; }
 	UClass* GetAnimInstanceClass() const { return AnimClass; }
 	UAnimInstance* GetAnimInstance() const { return AnimScriptInstance; }
 	bool SetAnimationSequence(UAnimSequence* InSequence);
@@ -67,6 +70,8 @@ private:
 	uint64 PickRevision = 0;
 	UPROPERTY(EditAnywhere, Transient)
 	UClass* AnimClass = nullptr;
+	UPROPERTY(EditAnywhere, Transient)
+	FString AnimGraphPath;
 	UPROPERTY(Transient)
 	UAnimInstance* AnimScriptInstance = nullptr;
 	UPROPERTY(EditAnywhere, Transient)

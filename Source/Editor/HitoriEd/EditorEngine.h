@@ -33,6 +33,8 @@
 #include "Editor/SkeletalMeshEditor/Retarget/PoseRetargetPanel.h"
 #include "Editor/SkeletalMeshEditor/SkeletalMeshViewer.h"
 #include "Editor/Animation/AnimSequenceViewerPanel.h"
+#include "Editor/Animation/AnimGraphEditorPanel.h"
+#include "Editor/Animation/BlendSpaceEditorPanel.h"
 
 #include "Editor/Rendering/Outline.h"
 #include "Editor/Rendering/OutLineRenderer.h"
@@ -210,6 +212,8 @@ private:
 	FPoseRetargetPanel* PoseRetargetPanel = nullptr;
 	FSkeletalMeshViewerPanel* SkeletalMeshViewerPanel = nullptr;
 	FAnimSequenceViewerPanel* AnimSequenceViewerPanel = nullptr;
+	FAnimGraphEditorPanel* AnimGraphEditorPanel = nullptr;
+	FBlendSpaceEditorPanel* BlendSpaceEditorPanel = nullptr;
 
 	UWorld* EditorWorld = nullptr;
 	UWorld* PlayWorld = nullptr;

@@ -1,0 +1,91 @@
+{
+  "Version": 1,
+  "Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
+  "InvertDirection": true,
+  "EntryState": 1,
+  "States": [
+    {
+      "Id": 1,
+      "Name": "Idle",
+      "X": 80.0,
+      "Y": 240.0,
+      "Pose": 0,
+      "Asset": "Models/UnrealModel/Idle.animseq",
+      "InputX": 0,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": true
+    },
+    {
+      "Id": 2,
+      "Name": "Locomotion",
+      "X": 350.0,
+      "Y": 240.0,
+      "Pose": 2,
+      "Asset": "Animations/QuinnLocomotion.blendspace",
+      "InputX": 2,
+      "InputY": 1,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": true
+    },
+    {
+      "Id": 3,
+      "Name": "Jump",
+      "X": 350.0,
+      "Y": 40.0,
+      "Pose": 0,
+      "Asset": "Models/UnrealModel/MM_Jump.animseq",
+      "InputX": 0,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": false
+    },
+    {
+      "Id": 4,
+      "Name": "Fall Loop",
+      "X": 650.0,
+      "Y": 40.0,
+      "Pose": 0,
+      "Asset": "Models/UnrealModel/MM_Fall_Loop.animseq",
+      "InputX": 0,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": true
+    },
+    {
+      "Id": 5,
+      "Name": "Land",
+      "X": 650.0,
+      "Y": 240.0,
+      "Pose": 0,
+      "Asset": "Models/UnrealModel/MM_Land.animseq",
+      "InputX": 0,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": false
+    }
+  ],
+  "Transitions": [
+    { "Id": 3, "From": 1, "To": 3, "Input": 3, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.08 },
+    { "Id": 4, "From": 2, "To": 3, "Input": 3, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.08 },
+    { "Id": 5, "From": 1, "To": 4, "Input": 4, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.1 },
+    { "Id": 6, "From": 2, "To": 4, "Input": 4, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.1 },
+    { "Id": 1, "From": 1, "To": 2, "Input": 1, "Compare": 1, "Threshold": 10.0, "BlendTime": 0.12 },
+    { "Id": 2, "From": 2, "To": 1, "Input": 1, "Compare": 4, "Threshold": 10.0, "BlendTime": 0.12 },
+    { "Id": 7, "From": 3, "To": 5, "Input": 5, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.08 },
+    { "Id": 8, "From": 3, "To": 4, "Input": 7, "Compare": 4, "Threshold": 0.12, "BlendTime": 0.12 },
+    { "Id": 9, "From": 4, "To": 5, "Input": 5, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.08 },
+    { "Id": 10, "From": 5, "To": 2, "Input": 6, "Compare": 1, "Threshold": 0.5, "BlendTime": 0.05 },
+    { "Id": 11, "From": 5, "To": 2, "Input": 7, "Compare": 4, "Threshold": 0.12, "BlendTime": 0.12 }
+  ]
+}

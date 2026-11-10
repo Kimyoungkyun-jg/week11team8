@@ -21,6 +21,17 @@ bool UBlendSpace1D::AddSample(float X, UAnimSequence* Sequence)
 	return true;
 }
 
+bool UBlendSpace1D::ReplaceSamples(const TArray<FSample>& InSamples)
+{
+	UBlendSpace1D Replacement;
+	Replacement.Skeleton = Skeleton;
+	for (const FSample& Sample : InSamples)
+		if (!Replacement.AddSample(Sample.X, Sample.Sequence)) return false;
+	if (Replacement.GetSamples().IsEmpty()) return false;
+	Samples = std::move(Replacement.Samples);
+	return true;
+}
+
 bool UBlendSpace1D::GetBlendSamples(float X, const FSample*& OutA, const FSample*& OutB,
 	float& OutAlpha) const
 {

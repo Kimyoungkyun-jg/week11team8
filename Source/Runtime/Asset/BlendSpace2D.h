@@ -17,9 +17,12 @@ public:
 		float Y = 0.0f;
 		UAnimSequence* Sequence = nullptr;
 	};
+	struct FTriangle { int32 A, B, C; };
 
 	bool AddSample(float X, float Y, UAnimSequence* Sequence);
+	bool ReplaceSamples(const TArray<FSample>& InSamples);
 	const TArray<FSample>& GetSamples() const { return Samples; }
+	const TArray<FTriangle>& GetTriangles() const { return Triangles; }
 	float GetEffectiveLength(float X, float Y) const override;
 	bool Evaluate(float X, float Y, float NormalizedTime,
 		TArray<FAnimBoneTransform>& OutPose) const override;
@@ -27,7 +30,6 @@ public:
 		int32 LoopCount, FMatrix& OutDelta) const override;
 
 private:
-	struct FTriangle { int32 A, B, C; };
 	struct FWeightedSample { const FSample* Sample = nullptr; float Weight = 0.0f; };
 	bool GetBlendSamples(float X, float Y, std::array<FWeightedSample, 3>& Out, int32& OutCount) const;
 	void RebuildTriangles();

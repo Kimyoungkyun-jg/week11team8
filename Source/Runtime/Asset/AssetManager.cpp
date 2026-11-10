@@ -17,6 +17,7 @@
 #include "Asset/FbxImporter/FbxPath.h"
 #include "Asset/Skeleton.h"
 #include "Asset/BlendSpace1D.h"
+#include "Asset/BlendSpace2D.h"
 
 #include "Render/GeometryGenerator.h"
 #include "UObject/UObjectGlobals.h"
@@ -609,25 +610,34 @@ UBlendSpace* UAssetManager::LoadBlendSpace(const FString& AssetPath)
 	std::ifstream In(ContentPaths::AssetRoot / FbxPath::FromString(Key));
 	if (!In) return nullptr;
 	const json Data = json::parse(In, nullptr, false);
-	if (!Data.is_object() || !Data.contains("Type") || Data["Type"] != "BlendSpace1D" ||
+	if (!Data.is_object() || !Data.contains("Type") || !Data["Type"].is_string() ||
 		!Data.contains("Skeleton") || !Data["Skeleton"].is_string() ||
 		!Data.contains("Samples") || !Data["Samples"].is_array() ||
 		Data["Samples"].empty() || Data["Samples"].size() > 256) return nullptr;
+	const FString Type = Data["Type"].get<FString>();
+	if (Type != "BlendSpace1D" && Type != "BlendSpace2D") return nullptr;
 	USkeleton* Skeleton = LoadSkeleton(Data["Skeleton"].get<FString>());
 	if (!Skeleton) return nullptr;
-	UBlendSpace1D* BlendSpace = NewObject<UBlendSpace1D>();
+	UBlendSpace* BlendSpace = Type == "BlendSpace1D"
+		? static_cast<UBlendSpace*>(NewObject<UBlendSpace1D>())
+		: static_cast<UBlendSpace*>(NewObject<UBlendSpace2D>());
 	BlendSpace->Skeleton = Skeleton;
 	for (const json& Sample : Data["Samples"])
 	{
 		if (!Sample.is_object() || !Sample.contains("X") || !Sample["X"].is_number() ||
+			(Type == "BlendSpace2D" && (!Sample.contains("Y") || !Sample["Y"].is_number())) ||
 			!Sample.contains("Sequence") || !Sample["Sequence"].is_string())
 		{
 			delete BlendSpace;
 			return nullptr;
 		}
 		const float X = Sample["X"].get<float>();
+		const float Y = Type == "BlendSpace2D" ? Sample["Y"].get<float>() : 0.0f;
 		UAnimSequence* Sequence = LoadAnimSequence(Sample["Sequence"].get<FString>());
-		if (!BlendSpace->AddSample(X, Sequence))
+		const bool Added = Type == "BlendSpace1D"
+			? static_cast<UBlendSpace1D*>(BlendSpace)->AddSample(X, Sequence)
+			: static_cast<UBlendSpace2D*>(BlendSpace)->AddSample(X, Y, Sequence);
+		if (!Added)
 		{
 			delete BlendSpace;
 			return nullptr;
@@ -635,6 +645,27 @@ UBlendSpace* UAssetManager::LoadBlendSpace(const FString& AssetPath)
 	}
 	Get().RegisterAsset(Key, BlendSpace);
 	return BlendSpace;
+}
+
+bool UAssetManager::SaveBlendSpace2D(const FString& AssetPath, UBlendSpace2D& BlendSpace)
+{
+	const FString Key = AssetPath.rfind("Assets/", 0) == 0 ? AssetPath.substr(7) : AssetPath;
+	if (FbxPath::FromString(Key).extension() != ".blendspace" || !BlendSpace.Skeleton ||
+		BlendSpace.Skeleton->GetPath().empty() || BlendSpace.GetSamples().IsEmpty()) return false;
+	json Data = { { "Type", "BlendSpace2D" }, { "Skeleton", BlendSpace.Skeleton->GetPath() },
+		{ "Samples", json::array() } };
+	for (const UBlendSpace2D::FSample& Sample : BlendSpace.GetSamples())
+	{
+		if (!Sample.Sequence || Sample.Sequence->Skeleton != BlendSpace.Skeleton ||
+			Sample.Sequence->GetPath().empty()) return false;
+		Data["Samples"].push_back({ { "X", Sample.X }, { "Y", Sample.Y }, { "Sequence", Sample.Sequence->GetPath() } });
+	}
+	std::ofstream Out(ContentPaths::AssetRoot / FbxPath::FromString(Key));
+	if (!Out) return false;
+	Out << Data.dump(2);
+	if (!Out) return false;
+	Get().RegisterAsset(Key, &BlendSpace);
+	return true;
 }
 
 bool UAssetManager::SaveBlendSpace1D(const FString& AssetPath, UBlendSpace1D& BlendSpace)
