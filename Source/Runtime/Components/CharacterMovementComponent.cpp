@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Collision/Ray.h"
+#include "Animation/BoneTransform.h"
 #include <algorithm>
 #include <cmath>
 
@@ -11,6 +12,12 @@ UCharacterMovementComponent::UCharacterMovementComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = ETickingGroup::DuringPhysics;
+}
+
+void UCharacterMovementComponent::AddRootMotion(const FMatrix& Delta)
+{
+	PendingRootMotion = Delta * PendingRootMotion;
+	bHasPendingRootMotion = true;
 }
 
 bool UCharacterMovementComponent::FindFloor(float Distance, FHitResult& OutHit) const
@@ -54,6 +61,12 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 	auto* Pawn = Cast<APawn>(GetOwner());
 	if (!Pawn || !UpdatedComponent || !GetWorld() || !std::isfinite(DeltaTime) || DeltaTime <= 0.0f) return;
 	FVector Input = Pawn->ConsumeMovementInputVector();
+	const bool bApplyRootMotion = bHasPendingRootMotion;
+	if (bApplyRootMotion)
+	{
+		Input = FVector::ZeroVector;
+		Velocity.X = Velocity.Y = 0.0f;
+	}
 	Input.Z = 0.0f;
 	Input = Input.GetClampedToMaxSize(1.0f);
 	float Remaining = std::min(DeltaTime, 0.25f);
@@ -72,6 +85,7 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 		{
 			Velocity.Z = JumpZVelocity;
 			MovementMode = ECharacterMovementMode::Falling;
+			++JumpCounter;
 		}
 		bJumpRequested = false;
 		const FVector Horizontal(Velocity.X, Velocity.Y, 0.0f);
@@ -97,6 +111,20 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 			if (Normal.Z > 0.7f && Delta.Z < 0.0f) MovementMode = ECharacterMovementMode::Walking;
 		}
 	}
+	if (bApplyRootMotion)
+	{
+		const FMatrix TargetMatrix = PendingRootMotion * UpdatedComponent->GetWorldMatrix();
+		const FBoneTransform Target = FBoneTransform::FromMatrix(TargetMatrix);
+		const FVector Delta = Target.Translation - UpdatedComponent->GetWorldLocation();
+		FHitResult Hit;
+		const bool bHit = SweepCapsule(Delta, Hit);
+		const FVector Move = bHit ? Delta * std::max(0.0f, Hit.Time - 0.001f) : Delta;
+		UpdatedComponent->MoveComponent(Move, Target.Rotation.ToFRotator(), false, nullptr);
+		Velocity.X = Move.X / DeltaTime;
+		Velocity.Y = Move.Y / DeltaTime;
+		PendingRootMotion = FMatrix::Identity;
+		bHasPendingRootMotion = false;
+	}
 	UpdateComponentVelocity();
 }
 
@@ -104,5 +132,7 @@ void UCharacterMovementComponent::StopMovementImmediately()
 {
 	Super::StopMovementImmediately();
 	bJumpRequested = false;
+	PendingRootMotion = FMatrix::Identity;
+	bHasPendingRootMotion = false;
 	if (auto* Pawn = Cast<APawn>(GetOwner())) Pawn->ConsumeMovementInputVector();
 }

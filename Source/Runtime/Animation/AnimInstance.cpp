@@ -1,44 +1,65 @@
 #include "EnginePCH.h"
 #include "Animation/AnimInstance.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "GameFramework/Pawn.h"
+#include "Render/SkeletalMesh.h"
 
-void UAnimInstance::Play(
-	const UAnimSequence* SequenceA, const UAnimSequence* SequenceB, bool bLoop, float InAlpha)
+UAnimInstance::~UAnimInstance()
 {
-	SequencePlayerA.SetSequence(SequenceA, bLoop);
-	SequencePlayerB.SetSequence(SequenceB, bLoop);
+	for (FAnimNode_Base* Node : OwnedNodes) delete Node;
+}
 
-	if (SequenceB)
-	{
-		TwoWayBlend.A.SetLinkNode(&SequencePlayerA);
-		TwoWayBlend.B.SetLinkNode(&SequencePlayerB);
-		TwoWayBlend.SetAlpha(InAlpha);
-		Root.SetLinkNode(&TwoWayBlend);
-	}
-	else
-	{
-		Root.SetLinkNode(&SequencePlayerA);
-	}
+USkeletalMeshComponent* UAnimInstance::GetOwningComponent() const
+{
+	return Cast<USkeletalMeshComponent>(GetOuter());
+}
+
+AActor* UAnimInstance::GetOwningActor() const
+{
+	USkeletalMeshComponent* Component = GetOwningComponent();
+	return Component ? Component->GetOwner() : nullptr;
+}
+
+APawn* UAnimInstance::TryGetPawnOwner() const
+{
+	return Cast<APawn>(GetOwningActor());
+}
+
+void UAnimInstance::InitializeAnimation()
+{
+	RootNode = nullptr;
+	for (FAnimNode_Base* Node : OwnedNodes) delete Node;
+	OwnedNodes.Reset();
 	NativeInitializeAnimation();
+	if (RootNode) RootNode->Reset();
 }
 
-void UAnimInstance::SetBlendAlpha(float InAlpha)
+void UAnimInstance::UpdateAnimation(float DeltaSeconds)
 {
-	TwoWayBlend.SetAlpha(InAlpha);
+	NativeUpdateAnimation(DeltaSeconds);
+	USkeletalMeshComponent* Component = GetOwningComponent();
+	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
+	if (Mesh && Mesh->Skeleton && RootNode) RootNode->Update(DeltaSeconds);
 }
 
-void UAnimInstance::NativeInitializeAnimation()
+bool UAnimInstance::EvaluatePose(TArray<FMatrix>& OutLocalPose)
 {
-	Root.Initialize();
+	OutLocalPose.Reset();
+	USkeletalMeshComponent* Component = GetOwningComponent();
+	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
+	if (!Mesh || !Mesh->Skeleton) return false;
+	TArray<FAnimBoneTransform> Pose;
+	if (!RootNode || !RootNode->Evaluate(Mesh->Skeleton, Pose) || Pose.Num() != Mesh->Skeleton->RefSkeleton.GetNum()) return false;
+	OutLocalPose.SetNum(Pose.Num());
+	for (int32 Index = 0; Index < Pose.Num(); ++Index)
+	{
+		const FAnimBoneTransform& Bone = Pose[Index];
+		OutLocalPose[Index] = MakeAnimMatrix(Bone.Position, Bone.Rotation, Bone.Scale);
+	}
+	return true;
 }
 
-void UAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
+bool UAnimInstance::ConsumeRootMotion(FMatrix& OutDelta)
 {
-	const FAnimationUpdateContext Context{ DeltaSeconds };
-	Root.Update(Context);
-}
-
-bool UAnimInstance::EvaluateLocalPose(const USkeletalMesh& Mesh, TArray<FMatrix>& OutLocalPose)
-{
-	FPoseContext Output{ Mesh, OutLocalPose };
-	return Root.Evaluate(Output);
+	return RootNode && RootNode->ConsumeRootMotion(OutDelta);
 }

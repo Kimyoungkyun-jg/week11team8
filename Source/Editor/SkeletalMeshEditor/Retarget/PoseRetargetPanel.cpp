@@ -3,6 +3,8 @@
 #include "PoseRetargetPanel.h"
 #include "StaticPoseRetargeter.h"
 #include "Asset/AssetManager.h"
+#include "Asset/AnimSequence.h"
+#include "Asset/Skeleton.h"
 #include "Asset/FbxImporter/FbxAssetBake.h"
 #include "Asset/FbxImporter/FbxPath.h"
 #include "Engine/World.h"
@@ -161,7 +163,8 @@ void FPoseRetargetPanel::SetRig(int32 Index, USkeletalMesh* Mesh)
 			AnimationTime = 0.0f;
 			bAnimationPlaying = false;
 			bResultPoseApplied = false;
-			AlignedSourceClip = FAnimationClip{};
+			SelectedSequence = nullptr;
+			RootCorrections.Reset();
 		}
 		SourceRig = Mesh;
 	}
@@ -190,7 +193,7 @@ void FPoseRetargetPanel::Tick(float DeltaTime)
 		if (PreviewWorlds[Index]) PreviewWorlds[Index]->Tick(DeltaTime);
 	if (bAnimationPlaying && SourceRig && SelectedAnimation >= 0)
 	{
-		const float Duration = AlignedSourceClip.DurationSeconds;
+		const float Duration = SelectedSequence && SelectedSequence->GetDataModel() ? SelectedSequence->GetDataModel()->PlayLength : 0.0f;
 		if (Duration > 0.0f)
 		{
 			AnimationTime = std::fmod(AnimationTime + std::max(0.0f, DeltaTime), Duration);
@@ -205,7 +208,8 @@ void FPoseRetargetPanel::SelectAnimation(int32 ClipIndex)
 	AnimationTime = 0.0f;
 	LastAnimationFrame = -1;
 	SelectedAnimation = -1;
-	AlignedSourceClip = FAnimationClip{};
+	SelectedSequence = nullptr;
+	RootCorrections.Reset();
 	if (!SourceRig || !Components[0]) return;
 	if (ClipIndex < 0)
 	{
@@ -214,46 +218,34 @@ void FPoseRetargetPanel::SelectAnimation(int32 ClipIndex)
 			ApplyStaticRigPose(*SourceRig, *Components[2], TargetToSource, TargetAimChild, SourceYaw, Message);
 		return;
 	}
-	const TArray<FAnimationClip>* Clips = UAssetManager::GetFbxAnimations(SourceRig->GetPath());
-	if (!Clips || ClipIndex >= Clips->Num()) return;
-	const FAnimationClip& Clip = (*Clips)[ClipIndex];
+	const TArray<UAnimSequence*>* Sequences = UAssetManager::GetFbxAnimSequences(SourceRig->GetPath());
+	if (!Sequences || ClipIndex >= Sequences->Num()) return;
+	UAnimSequence* Sequence = (*Sequences)[ClipIndex];
+	if (!Sequence || !Sequence->Skeleton || !Sequence->GetDataModel()) return;
 	const TArray<FBoneInfo>& Bones = SourceRig->MeshData.Bones;
-	if (Clip.BoneNames.Num() != Bones.Num() || Clip.ParentIndices.Num() != Bones.Num() || Clip.Frames.IsEmpty() ||
-		Clip.Frames[0].Bones.Num() != Bones.Num())
+	const FReferenceSkeleton& Reference = Sequence->Skeleton->RefSkeleton;
+	TArray<FMatrix> FirstFrame;
+	if (Reference.GetNum() != Bones.Num() || !Sequence->EvaluateGlobalPose(0.0f, FirstFrame) || FirstFrame.Num() != Bones.Num())
 	{
 		Components[0]->InitBoneTransforms();
 		AnimationMessage = "Animation skeleton does not match Source FBX.";
 		return;
 	}
 	for (int32 Index = 0; Index < Bones.Num(); ++Index)
-		if (Clip.BoneNames[Index] != Bones[Index].Name || Clip.ParentIndices[Index] != Bones[Index].ParentIndex)
+		if (Reference.RefBoneInfo[Index].Name != Bones[Index].Name || Reference.RefBoneInfo[Index].ParentIndex != Bones[Index].ParentIndex)
 		{
 			Components[0]->InitBoneTransforms();
 			AnimationMessage = "Animation skeleton does not match Source FBX.";
 			return;
 		}
-	TArray<FMatrix> RootCorrections;
 	RootCorrections.SetNum(Bones.Num());
 	for (int32 Index = 0; Index < Bones.Num(); ++Index)
 	{
 		const int32 Parent = Bones[Index].ParentIndex;
 		RootCorrections[Index] = Parent < 0 ?
-			Clip.Frames[0].Bones[Index].Inverse() * Bones[Index].GlobalBindPose : RootCorrections[Parent];
+			FirstFrame[Index].Inverse() * Bones[Index].GlobalBindPose : RootCorrections[Parent];
 	}
-	AlignedSourceClip = Clip;
-	for (int32 FrameIndex = 0; FrameIndex < Clip.Frames.Num(); ++FrameIndex)
-	{
-		if (Clip.Frames[FrameIndex].Bones.Num() != Bones.Num())
-		{
-			AlignedSourceClip = FAnimationClip{};
-			Components[0]->InitBoneTransforms();
-			AnimationMessage = "Animation skeleton does not match Source FBX.";
-			return;
-		}
-		for (int32 BoneIndex = 0; BoneIndex < Bones.Num(); ++BoneIndex)
-			AlignedSourceClip.Frames[FrameIndex].Bones[BoneIndex] =
-				Clip.Frames[FrameIndex].Bones[BoneIndex] * RootCorrections[BoneIndex];
-	}
+	SelectedSequence = Sequence;
 	SelectedAnimation = ClipIndex;
 	AnimationMessage.clear();
 	ApplyAnimationFrame();
@@ -262,12 +254,18 @@ void FPoseRetargetPanel::SelectAnimation(int32 ClipIndex)
 void FPoseRetargetPanel::ApplyAnimationFrame()
 {
 	if (!SourceRig || !Components[0] || SelectedAnimation < 0) return;
-	const FAnimationClip& Clip = AlignedSourceClip;
-	if (Clip.Frames.IsEmpty()) return;
-	const int32 FrameIndex = AnimationTime >= Clip.DurationSeconds ? Clip.Frames.Num() - 1 :
-		std::clamp(static_cast<int32>(AnimationTime * Clip.FramesPerSecond), 0, Clip.Frames.Num() - 1);
+	if (!SelectedSequence || !SelectedSequence->GetDataModel()) return;
+	const UAnimDataModel* Model = SelectedSequence->GetDataModel();
+	const float FrameRate = Model->FrameRate.AsDecimal();
+	if (Model->NumberOfKeys <= 0 || FrameRate <= 0.0f) return;
+	const int32 FrameIndex = AnimationTime >= Model->PlayLength ? Model->NumberOfKeys - 1 :
+		std::clamp(static_cast<int32>(AnimationTime * FrameRate), 0, Model->NumberOfKeys - 1);
 	if (FrameIndex == LastAnimationFrame) return;
-	Components[0]->SetGlobalBoneTransforms(Clip.Frames[FrameIndex].Bones);
+	TArray<FMatrix> GlobalPose;
+	if (!SelectedSequence->EvaluateGlobalPose(FrameIndex / FrameRate, GlobalPose) || GlobalPose.Num() != RootCorrections.Num()) return;
+	for (int32 BoneIndex = 0; BoneIndex < GlobalPose.Num(); ++BoneIndex)
+		GlobalPose[BoneIndex] = GlobalPose[BoneIndex] * RootCorrections[BoneIndex];
+	Components[0]->SetGlobalBoneTransforms(GlobalPose);
 	Components[0]->UpdateSkinning();
 	if (bResultPoseApplied && Components[2] && TargetMesh)
 	{
@@ -569,43 +567,46 @@ void FPoseRetargetPanel::OnRender()
 	DrawRigPicker(1);
 	if (SourceRig)
 	{
-		if (ImGui::Button("Extract source animations"))
+		if (ImGui::Button("Refresh source animations"))
 		{
 			SelectAnimation(-1);
 			const FString Path = (std::filesystem::path("Assets") / SourceRig->GetPath()).generic_string();
-			const TArray<FAnimationClip>* Clips = UAssetManager::LoadFbxAnimations(Path);
-			AnimationMessage = !Clips ? "Animation extraction failed." :
-				Clips->IsEmpty() ? "No animation clips found in Source FBX." : "Animations extracted.";
+			const TArray<UAnimSequence*>* Sequences = SourceRig->Skeleton ?
+				UAssetManager::LoadFbxAnimSequences(Path, *SourceRig->Skeleton) : nullptr;
+			AnimationMessage = !Sequences ? "No skeleton for source rig." :
+				Sequences->IsEmpty() ? "No AnimSequence uses this skeleton. Import animations with Target Skeleton." : "Animations listed.";
 		}
-		if (const TArray<FAnimationClip>* Clips = UAssetManager::GetFbxAnimations(SourceRig->GetPath()))
+		if (const TArray<UAnimSequence*>* Sequences = UAssetManager::GetFbxAnimSequences(SourceRig->GetPath()))
 		{
 			ImGui::SameLine();
-			ImGui::Text("%d clips", Clips->Num());
-			if (!Clips->IsEmpty())
+			ImGui::Text("%d clips", Sequences->Num());
+			if (!Sequences->IsEmpty())
 			{
-				const char* Current = SelectedAnimation >= 0 && SelectedAnimation < Clips->Num()
-					? (*Clips)[SelectedAnimation].Name.c_str() : "Select animation";
+				// 테이크 이름은 모두 "Unreal Take"처럼 같을 수 있어 파일 이름(AS_...)으로 표시한다.
+				const FString CurrentLabel = SelectedAnimation >= 0 && SelectedAnimation < Sequences->Num()
+					? FbxPath::ToString(FbxPath::FromString((*Sequences)[SelectedAnimation]->GetPath()).stem()) : FString("Select animation");
+				const char* Current = CurrentLabel.c_str();
 				ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 150.0f));
 				if (ImGui::BeginCombo("Source animation", Current))
 				{
 					if (ImGui::Selectable("None", SelectedAnimation < 0)) SelectAnimation(-1);
-					for (int32 ClipIndex = 0; ClipIndex < Clips->Num(); ++ClipIndex)
+					for (int32 ClipIndex = 0; ClipIndex < Sequences->Num(); ++ClipIndex)
 					{
 						ImGui::PushID(ClipIndex);
-						if (ImGui::Selectable((*Clips)[ClipIndex].Name.c_str(), SelectedAnimation == ClipIndex))
+						if (ImGui::Selectable(FbxPath::ToString(FbxPath::FromString((*Sequences)[ClipIndex]->GetPath()).stem()).c_str(), SelectedAnimation == ClipIndex))
 							SelectAnimation(ClipIndex);
 						ImGui::PopID();
 					}
 					ImGui::EndCombo();
 				}
 				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Current);
-				if (SelectedAnimation >= 0 && SelectedAnimation < Clips->Num())
+				if (SelectedAnimation >= 0 && SelectedAnimation < Sequences->Num())
 				{
-					const FAnimationClip& Clip = (*Clips)[SelectedAnimation];
+					const UAnimDataModel* Model = (*Sequences)[SelectedAnimation]->GetDataModel();
 					if (ImGui::Button(bAnimationPlaying ? "Pause" : "Play")) bAnimationPlaying = !bAnimationPlaying;
 					ImGui::SameLine();
-					ImGui::Text("%d frames, %d bones", Clip.Frames.Num(), Clip.BoneNames.Num());
-					if (ImGui::SliderFloat("Time", &AnimationTime, 0.0f, Clip.DurationSeconds, "%.2f s"))
+					ImGui::Text("%d frames, %d bones", Model->NumberOfKeys, Model->BoneAnimationTracks.Num());
+					if (ImGui::SliderFloat("Time", &AnimationTime, 0.0f, Model->PlayLength, "%.2f s"))
 					{
 						LastAnimationFrame = -1;
 						ApplyAnimationFrame();

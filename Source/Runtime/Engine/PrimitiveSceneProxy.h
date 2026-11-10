@@ -39,6 +39,12 @@ public:
 	const FLODSphere& GetLODSphere() const { return LODSphere; }
 	bool IsVisible() const { return bVisible; }
 	bool IsShown(bool bGameView) const { return bVisible && !(bGameView && bHiddenInGame); }
+	// 뷰 Show 플래그까지 반영한 표시 여부 (Skeletal Meshes를 끈 뷰는 스켈레탈 프록시를 빼고 수집한다)
+	bool IsShown(bool bGameView, bool bShowSkeletalMeshes) const
+	{
+		return IsShown(bGameView) && (bShowSkeletalMeshes || !bSkeletalMesh);
+	}
+	bool IsSkeletalMesh() const { return bSkeletalMesh; }
 	uint8 GetLODCount() const { return RenderState ? RenderState->LODCount : 1; }
 	const FMeshRenderState* GetRenderState() const { return RenderState.get(); }
 	const float* GetLODThresholdsSq() const { return RenderState->LODThresholdSq; }
@@ -68,6 +74,7 @@ protected:
 	bool bRenderStateQueued = false;
 	bool bVisible = true;
 	bool bHiddenInGame = false;
+	bool bSkeletalMesh = false;   // FSkeletalMeshSceneProxy 생성자에서 켠다
 };
 
 class FStaticMeshSceneProxy : public FPrimitiveSceneProxy

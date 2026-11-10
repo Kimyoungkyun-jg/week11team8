@@ -1,56 +1,121 @@
 #pragma once
 
+#include "Asset/AnimTransform.h"
 #include "Containers/Array.h"
-#include "Math/Matrix.h"
+#include "Core/EngineString.h"
 
-class USkeletalMesh;
+#include <functional>
 
-struct FAnimationUpdateContext
-{
-	float DeltaSeconds = 0.0f;
-};
-
-struct FPoseContext
-{
-	const USkeletalMesh& Mesh;
-	TArray<FMatrix>& Pose;
-};
+class UAnimSequence;
+class UBlendSpace;
+class USkeleton;
 
 struct FAnimNode_Base
 {
 	virtual ~FAnimNode_Base() = default;
-	virtual void Initialize_AnyThread() {}
-	virtual void Update_AnyThread(const FAnimationUpdateContext& Context) = 0;
-	// 새 로컬 포즈를 썼을 때만 true를 반환한다.
-	virtual bool Evaluate_AnyThread(FPoseContext& Output) = 0;
+	virtual void Reset() {}
+	virtual void Update(float DeltaSeconds) {}
+	virtual bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) = 0;
+	virtual bool ConsumeRootMotion(FMatrix& OutDelta) { return false; }
+
+	// 블렌드 동기화용. 한 주기를 재생하는 데 걸리는 실제 시간(초), 주기 안의 위치(0~1), 반복 여부다.
+	// 지원하지 않는 노드는 0/false를 돌려주고 동기화에서 빠진다.
+	virtual float GetCycleSeconds() const { return 0.0f; }
+	virtual bool GetNormalizedTime(float& OutTime) const { return false; }
+	virtual void SetNormalizedTime(float Time) {}
+	virtual bool IsLooping() const { return false; }
 };
 
-struct FPoseLink
+struct FAnimNode_SequencePlayer : FAnimNode_Base
 {
-	void SetLinkNode(FAnimNode_Base* InNode) { LinkedNode = InNode; }
+	UAnimSequence* Sequence = nullptr;
+	float CurrentTime = 0.0f;
+	float PlayRate = 1.0f;
+	bool bLoop = true;
+	bool bPlaying = true;
+	FMatrix PendingRootMotion = FMatrix::Identity;
+	bool bHasPendingRootMotion = false;
+	bool IsFinished() const;
+	float GetRemainingTime() const;
 
-	void Initialize() const
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+	float GetCycleSeconds() const override;
+	bool GetNormalizedTime(float& OutTime) const override;
+	void SetNormalizedTime(float Time) override;
+	bool IsLooping() const override { return bLoop; }
+};
+
+struct FAnimNode_TwoWayBlend : FAnimNode_Base
+{
+	FAnimNode_Base* A = nullptr;
+	FAnimNode_Base* B = nullptr;
+	float Alpha = 0.0f;
+	// 둘 다 반복 재생이면 가중치가 큰 쪽(리더)의 주기 위치에 다른 쪽을 맞춘다(UE 싱크 그룹과 같은 목적).
+	// 걷기·달리기처럼 길이가 다른 루프를 섞어도 발 위치가 어긋나지 않는다.
+	bool bSyncByNormalizedTime = true;
+
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_BlendSpacePlayer : FAnimNode_Base
+{
+	UBlendSpace* BlendSpace = nullptr;
+	float InputX = 0.0f;
+	float InputY = 0.0f;
+	float NormalizedTime = 0.0f;
+	float PlayRate = 1.0f;
+	bool bLoop = true;
+	bool bPlaying = true;
+	FMatrix PendingRootMotion = FMatrix::Identity;
+	bool bHasPendingRootMotion = false;
+
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+	float GetCycleSeconds() const override;
+	bool GetNormalizedTime(float& OutTime) const override { OutTime = NormalizedTime; return BlendSpace != nullptr; }
+	void SetNormalizedTime(float Time) override { NormalizedTime = std::clamp(Time, 0.0f, 1.0f); }
+	bool IsLooping() const override { return bLoop; }
+};
+
+struct FAnimNode_StateMachine : FAnimNode_Base
+{
+	struct FState
 	{
-		if (LinkedNode)
-		{
-			LinkedNode->Initialize_AnyThread();
-		}
-	}
-
-	void Update(const FAnimationUpdateContext& Context) const
+		FString Name;
+		FAnimNode_Base* Pose = nullptr;
+	};
+	struct FTransition
 	{
-		if (LinkedNode)
-		{
-			LinkedNode->Update_AnyThread(Context);
-		}
-	}
+		int32 FromState = -1;
+		int32 ToState = -1;
+		std::function<bool()> Condition;
+		float BlendTime = 0.0f;
+		std::function<void()> OnCompleted;
+		std::function<void()> OnStarted;
+	};
 
-	bool Evaluate(FPoseContext& Output) const
-	{
-		return LinkedNode && LinkedNode->Evaluate_AnyThread(Output);
-	}
+	TArray<FState> States;
+	TArray<FTransition> Transitions;
+	int32 CurrentState = -1;
+	int32 NextState = -1;
+	float TransitionElapsed = 0.0f;
+	float TransitionDuration = 0.0f;
+	std::function<void()> TransitionOnCompleted;
 
-private:
-	// 인스턴스가 소유하는 노드를 참조한다. 재생 트리에서 노드마다 출력 소비자는 하나다.
-	FAnimNode_Base* LinkedNode = nullptr;
+	int32 AddState(const FString& Name, FAnimNode_Base* PoseNode);
+	bool AddTransition(int32 FromState, int32 ToState, std::function<bool()> Condition,
+		float BlendTime, std::function<void()> OnCompleted = {}, std::function<void()> OnStarted = {});
+	void FinishTransition();
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
 };

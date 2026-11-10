@@ -1,25 +1,42 @@
 #pragma once
-#include "Animation/AnimNode_SequencePlayer.h"
-#include "Animation/AnimNode_TwoWayBlend.h"
-#include "UObject/Object.h"
 
+#include "Containers/Array.h"
+#include "Animation/AnimNodeBase.h"
+#include "Math/Matrix.h"
+#include "UObject/Object.h"
+#include <utility>
+#include "AnimInstance.generated.h"
+
+class AActor;
+class APawn;
+class USkeletalMeshComponent;
+
+UCLASS()
 class UAnimInstance : public UObject
 {
+	GENERATED_BODY()
 public:
-	UAnimInstance() : UObject(false) {}
-	// 링크가 이 인스턴스에 속한 노드의 주소를 참조한다.
-	UAnimInstance(const UAnimInstance&) = delete;
-	UAnimInstance& operator=(const UAnimInstance&) = delete;
+	virtual ~UAnimInstance() override;
+	USkeletalMeshComponent* GetOwningComponent() const;
+	AActor* GetOwningActor() const;
+	virtual APawn* TryGetPawnOwner() const;
 
-	void Play(const UAnimSequence* SequenceA, const UAnimSequence* SequenceB, bool bLoop, float InAlpha);
-	void SetBlendAlpha(float InAlpha);
-	virtual void NativeInitializeAnimation();
-	virtual void NativeUpdateAnimation(float DeltaSeconds);
-	bool EvaluateLocalPose(const USkeletalMesh& Mesh, TArray<FMatrix>& OutLocalPose);
+	void InitializeAnimation();
+	void UpdateAnimation(float DeltaSeconds);
+	virtual bool EvaluatePose(TArray<FMatrix>& OutLocalPose);
+	bool ConsumeRootMotion(FMatrix& OutDelta);
 
+protected:
+	template <typename T, typename... Args>
+	T* CreateNode(Args&&... Arguments)
+	{
+		T* Node = new T(std::forward<Args>(Arguments)...);
+		OwnedNodes.Add(Node);
+		return Node;
+	}
+	FAnimNode_Base* RootNode = nullptr;
+	virtual void NativeInitializeAnimation() {}
+	virtual void NativeUpdateAnimation(float DeltaSeconds) {}
 private:
-	FAnimNode_SequencePlayer SequencePlayerA;
-	FAnimNode_SequencePlayer SequencePlayerB;
-	FAnimNode_TwoWayBlend TwoWayBlend;
-	FPoseLink Root;
+	TArray<FAnimNode_Base*> OwnedNodes;
 };

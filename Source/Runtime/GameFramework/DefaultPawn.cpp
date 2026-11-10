@@ -1,8 +1,6 @@
 #include "EnginePCH.h"
 #include "GameFramework/DefaultPawn.h"
 #include "Camera/CameraComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Asset/AssetManager.h"
 
 ADefaultPawn::ADefaultPawn()
 {
@@ -10,12 +8,7 @@ ADefaultPawn::ADefaultPawn()
 	PrimaryActorTick.TickGroup = ETickingGroup::PostPhysics;
 	SetActorEnableCollision(false);
 	CameraComponent = CreateDefaultSubobject<UCameraComponent>("CameraComponent");
-	StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>("StaticMeshComponent");
-	SetRootComponent(StaticMeshComponent);
-	StaticMeshComponent->SetStaticMesh(UAssetManager::GetAssetByPath<UStaticMesh>("Models/OBJ/Hitori/Hitori.obj"));
-	CameraComponent->SetupAttachment(StaticMeshComponent);
-	CameraComponent->SetRelativeLocation({-5.0f, 0.0f, 8.0f});
-	CameraComponent->SetRelativeRotation({45.0f, 0.0f, 0.0f});
+	SetRootComponent(CameraComponent);
 	CameraComponent->SetExternalInputManaged(true);
 }
 

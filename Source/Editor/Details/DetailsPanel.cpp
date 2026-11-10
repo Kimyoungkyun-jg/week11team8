@@ -36,6 +36,10 @@
 
 #include "Editor/HitoriEd/EditorFileUtils.h"
 #include "Scripting/LuaScriptManager.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimGraphInstance.h"
+#include "Asset/AnimGraphAsset.h"
+#include "UObject/UObjectHash.h"
 
 
 namespace
@@ -669,75 +673,6 @@ namespace
 		}
 	}
 
-	void DrawAnimationSequenceCombo(USkeletalMeshComponent* Component, const char* Label, const char* Id,
-		const FString& SelectedName, void (USkeletalMeshComponent::*SetName)(const FString&))
-	{
-		const char* Preview = SelectedName.empty() ? "None" : SelectedName.c_str();
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextUnformatted(Label);
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(-1.0f);
-		EditorUIScale::LimitNextComboPopupWidth();
-		if (!ImGui::BeginCombo(Id, Preview))
-		{
-			return;
-		}
-
-		if (ImGui::Selectable("None", SelectedName.empty()))
-		{
-			(Component->*SetName)({});
-		}
-		const auto* Sequences = Component->GetAnimationSequences();
-		if (Sequences && !Sequences->IsEmpty())
-		{
-			for (const UAnimSequence& Sequence : *Sequences)
-			{
-				const FString& Name = Sequence.GetName();
-				ImGui::PushID(&Sequence);
-				const bool bSelected = Name == SelectedName;
-				if (ImGui::Selectable(Name.c_str(), bSelected))
-				{
-					(Component->*SetName)(Name);
-				}
-				if (bSelected)
-				{
-					ImGui::SetItemDefaultFocus();
-				}
-				ImGui::PopID();
-			}
-		}
-		else
-		{
-			ImGui::TextDisabled(Component->GetSkeletalMesh() ? "No sequences found." : "Assign a skeletal mesh first.");
-		}
-		ImGui::EndCombo();
-	}
-
-	void DrawAnimationSequenceSlot(USkeletalMeshComponent* Component)
-	{
-		DrawAnimationSequenceCombo(Component, "Animation Sequence", "##AnimationSequence",
-			Component->GetAnimationSequenceName(), &USkeletalMeshComponent::SetAnimationSequenceName);
-		if (Component->GetAnimationSequenceName().empty())
-		{
-			return;
-		}
-
-		DrawAnimationSequenceCombo(Component, "Blend Sequence", "##BlendSequence",
-			Component->GetBlendSequenceName(), &USkeletalMeshComponent::SetBlendSequenceName);
-		if (!Component->GetBlendSequenceName().empty())
-		{
-			float Alpha = Component->GetAnimationBlendAlpha();
-			ImGui::AlignTextToFramePadding();
-			ImGui::TextUnformatted("Blend Alpha");
-			ImGui::SameLine();
-			ImGui::SetNextItemWidth(-1.0f);
-			if (ImGui::SliderFloat("##BlendAlpha", &Alpha, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
-			{
-				Component->SetAnimationBlendAlpha(Alpha);
-			}
-		}
-	}
-
 	UMaterial* EnsureMaterialOverride(UMeshComponent* MeshComponent, int32 Slot, UMaterial* Effective, UMaterial* Override)
 	{
 		// 이 컴포넌트 전용 인스턴스가 아니면 지금 적용 중인 머티리얼을 복제해서 덮어쓰기로 만든다.
@@ -1178,6 +1113,30 @@ namespace
 		case EPropertyType::String:
 		{
 			FString* Value = static_cast<FString*>(ValuePtr);
+			if (Property.Name == "AnimGraphPath" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				auto* Component = static_cast<USkeletalMeshComponent*>(Object);
+				const FString& Current = Component->GetAnimGraphPath();
+				if (ImGui::BeginCombo(Label.c_str(), Current.empty() ? "None" : Current.c_str()))
+				{
+					if (ImGui::Selectable("None", Current.empty())) Component->SetAnimGraphPath({});
+					std::error_code Ec;
+					for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+					{
+						if (It->path().extension() != ".animgraph") continue;
+						const FString Candidate = FbxPath::ToString(It->path());
+						FAnimGraphAsset Graph; FString Error;
+						if (!FAnimGraphAsset::Load(Candidate, Graph, Error)) continue;
+						USkeletalMesh* Mesh = Component->GetSkeletalMesh();
+						if (Mesh && Mesh->Skeleton && !Graph.SkeletonPath.empty() &&
+							Graph.SkeletonPath != Mesh->Skeleton->GetPath()) continue;
+						if (ImGui::Selectable(Candidate.c_str(), Candidate == Current))
+							Component->SetAnimGraphPath(Candidate);
+					}
+					ImGui::EndCombo();
+				}
+				break;
+			}
 
 			char Buffer[256] = {};
 			strncpy_s(Buffer, Value->c_str(), sizeof(Buffer) - 1);
@@ -1218,7 +1177,73 @@ namespace
 		{
 			UObject** ObjPtr = static_cast<UObject**>(ValuePtr);
 
-			if (Property.Class == UMaterial::StaticClass())
+			if (Property.Name == "AnimClass" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				USkeletalMeshComponent* Component = static_cast<USkeletalMeshComponent*>(Object);
+				UClass* Current = Component->GetAnimInstanceClass();
+				if (ImGui::BeginCombo(Label.c_str(), Current ? Current->Name.c_str() : "None"))
+				{
+					if (ImGui::Selectable("None", !Current)) { Component->SetAnimGraphPath({}); Component->SetAnimInstanceClass(nullptr); }
+					TArray<UClass*> Classes;
+					Classes.Add(UAnimInstance::StaticClass());
+					GetDerivedClasses(UAnimInstance::StaticClass(), Classes);
+					for (UClass* Class : Classes)
+						if (Class && Class != UAnimGraphInstance::StaticClass() && Class->Constructor && ImGui::Selectable(Class->Name.c_str(), Current == Class))
+						{
+							Component->SetAnimGraphPath({});
+							Component->SetAnimInstanceClass(Class);
+						}
+					ImGui::EndCombo();
+				}
+			}
+			else if (Property.Name == "AnimSequence" && Object->IsA(USkeletalMeshComponent::StaticClass()))
+			{
+				USkeletalMeshComponent* Component = static_cast<USkeletalMeshComponent*>(Object);
+				UAnimSequence* Current = Component->GetAnimationSequence();
+				// 테이크 이름(예: "Unreal Take")은 파일마다 같을 수 있어 애셋 이름(AS_...)을 보여 준다.
+				const auto SequenceLabel = [](const UAnimSequence* Sequence) { return FbxPath::ToString(FbxPath::FromString(Sequence->GetPath()).stem()); };
+				const FString Preview = Current ? SequenceLabel(Current) : FString("None");
+				if (ImGui::BeginCombo(Label.c_str(), Preview.c_str()))
+				{
+					if (ImGui::Selectable("None", !Current)) Component->SetAnimationSequence(nullptr);
+					TArray<UAnimSequence*> Sequences;
+					USkeletalMesh* Mesh = Component->GetSkeletalMesh();
+					UAssetManager::GetAnimSequencesForSkeleton(Mesh ? Mesh->Skeleton : nullptr, Sequences);
+					for (UAnimSequence* Sequence : Sequences)
+					{
+						const FString Name = SequenceLabel(Sequence);
+						if (ImGui::Selectable(Name.c_str(), Current == Sequence))
+							Component->SetAnimationSequence(Sequence);
+					}
+					ImGui::EndCombo();
+				}
+					if (Current && ImGui::TreeNode("Root Motion"))
+					{
+						const bool OldEnable = Current->bEnableRootMotion;
+						const bool OldForce = Current->bForceRootLock;
+						const bool OldScale = Current->bUseNormalizedRootMotionScale;
+						const ERootMotionRootLock OldLock = Current->RootMotionRootLock;
+						bool Changed = ImGui::Checkbox("Enable Root Motion", &Current->bEnableRootMotion);
+						int Lock = static_cast<int>(Current->RootMotionRootLock);
+						if (ImGui::Combo("Root Motion Root Lock", &Lock, "Ref Pose\0Anim First Frame\0Zero\0"))
+						{
+							Current->RootMotionRootLock = static_cast<ERootMotionRootLock>(Lock);
+							Changed = true;
+						}
+						Changed |= ImGui::Checkbox("Force Root Lock", &Current->bForceRootLock);
+						Changed |= ImGui::Checkbox("Use Normalized Root Motion Scale", &Current->bUseNormalizedRootMotionScale);
+						if (Changed && !UAssetManager::SaveAnimSequence(*Current))
+						{
+							Current->bEnableRootMotion = OldEnable;
+							Current->bForceRootLock = OldForce;
+							Current->bUseNormalizedRootMotionScale = OldScale;
+							Current->RootMotionRootLock = OldLock;
+							HTR_LOG(Error, "Failed to save animation root motion settings: {}", Current->GetPath());
+						}
+						ImGui::TreePop();
+					}
+			}
+			else if (Property.Class == UMaterial::StaticClass())
 			{
 				DrawTextureSlot(reinterpret_cast<UMaterial**>(ObjPtr), 0);
 			}
@@ -1269,8 +1294,6 @@ namespace
 			// 스크립트는 경로 검증을 위한 전용 UI를 같은 클래스 헤더 안에 표시한다.
 			UScriptComponent* ScriptComponent = Class == UScriptComponent::StaticClass()
 				? Cast<UScriptComponent>(Object) : nullptr;
-			USkeletalMeshComponent* SkeletalMeshComponent = Class == USkeletalMeshComponent::StaticClass()
-				? Cast<USkeletalMeshComponent>(Object) : nullptr;
 
 			// 노출할 프로퍼티나 전용 UI가 없으면 헤더도 그리지 않는다.
 			bool bHasVisibleProperty = false;
@@ -1282,7 +1305,7 @@ namespace
 					break;
 				}
 			}
-			if (!bHasVisibleProperty && !ScriptComponent && !SkeletalMeshComponent)
+			if (!bHasVisibleProperty && !ScriptComponent)
 			{
 				continue;
 			}
@@ -1296,7 +1319,6 @@ namespace
 					{
 						continue;
 					}
-
 					const bool bReadOnly = Property.HasAnyFlags(CPF_EditConst);
 					if (bReadOnly) ImGui::BeginDisabled();
 					DrawProperty(Object, Property, CustomFont);
@@ -1305,10 +1327,6 @@ namespace
 				if (ScriptComponent)
 				{
 					DrawScriptSection(ScriptComponent);
-				}
-				if (SkeletalMeshComponent)
-				{
-					DrawAnimationSequenceSlot(SkeletalMeshComponent);
 				}
 			}
 			ImGui::PopID();
