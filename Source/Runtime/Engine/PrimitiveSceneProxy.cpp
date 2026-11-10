@@ -113,6 +113,7 @@ FIndexBuffer* FStaticMeshSceneProxy::GetIndexBuffer(uint8 LOD) const
 FSkeletalMeshSceneProxy::FSkeletalMeshSceneProxy(USkeletalMeshComponent* InComponent)
     : FPrimitiveSceneProxy(InComponent)
 {
+    bSkeletalMesh = true;
 }
 
 FSkeletalMeshSceneProxy::~FSkeletalMeshSceneProxy()

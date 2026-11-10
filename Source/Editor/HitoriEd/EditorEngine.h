@@ -32,6 +32,9 @@
 #include "Editor/UIEditor/UIEditorPanel.h"
 #include "Editor/SkeletalMeshEditor/Retarget/PoseRetargetPanel.h"
 #include "Editor/SkeletalMeshEditor/SkeletalMeshViewer.h"
+#include "Editor/Animation/AnimSequenceViewerPanel.h"
+#include "Editor/Animation/AnimGraphEditorPanel.h"
+#include "Editor/Animation/BlendSpaceEditorPanel.h"
 
 #include "Editor/Rendering/Outline.h"
 #include "Editor/Rendering/OutLineRenderer.h"
@@ -208,6 +211,9 @@ private:
 	FUIEditorPanel* UIEditorPanel = nullptr;
 	FPoseRetargetPanel* PoseRetargetPanel = nullptr;
 	FSkeletalMeshViewerPanel* SkeletalMeshViewerPanel = nullptr;
+	FAnimSequenceViewerPanel* AnimSequenceViewerPanel = nullptr;
+	FAnimGraphEditorPanel* AnimGraphEditorPanel = nullptr;
+	FBlendSpaceEditorPanel* BlendSpaceEditorPanel = nullptr;
 
 	UWorld* EditorWorld = nullptr;
 	UWorld* PlayWorld = nullptr;
@@ -236,6 +242,9 @@ private:
 	FEditorCommand Resume;
 	FEditorCommand StepFrame;
 	FEditorCommand Stop;
+	// UE의 Eject / Possess. 폰에서 빠져나와 에디터 카메라로 보거나(SIE) 다시 폰으로 돌아간다. 키는 F8이다.
+	FEditorCommand Eject;
+	FEditorCommand Possess;
 
 	bool bIsStep = false;
 

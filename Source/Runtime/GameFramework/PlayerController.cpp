@@ -1,6 +1,7 @@
 #include "EnginePCH.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/Character.h"
 #include "GameFramework/DefaultPawn.h"
 #include "Camera/PlayerCameraManager.h" 
 #include "Engine/World.h"               
@@ -86,13 +87,18 @@ void APlayerController::InputKey(int32 Key, bool bDown)
 	if (Key < 0 || Key >= 256) return;
 	const bool bJustPressed = bDown && !bKeyDown[Key];
 	bKeyDown[Key] = bDown;
-	if (Key == static_cast<int32>(EKeyCode::Space) && PossessedPawn)
+	ACharacter* Character = Cast<ACharacter>(PossessedPawn);
+	if (Key == static_cast<int32>(EKeyCode::Space) && Character)
 	{
-		if (!bDown) PossessedPawn->StopJumping();
+		if (!bDown) Character->StopJumping();
 		else if (bJustPressed && GetWorld() && !GetWorld()->IsPaused() &&
 			(!GetWorld()->GetGameMode() || GetWorld()->GetGameMode()->AllowsPlayerControllerInput()))
-			PossessedPawn->Jump();
+			Character->Jump();
 	}
+	if (Key == static_cast<int32>(EKeyCode::F) && bJustPressed && Character &&
+		GetWorld() && !GetWorld()->IsPaused() &&
+		(!GetWorld()->GetGameMode() || GetWorld()->GetGameMode()->AllowsPlayerControllerInput()))
+		Character->Attack();
 	if (!bJustPressed || !PlayerCameraManager) return;
 
 	if (Key == static_cast<int32>(EKeyCode::F6))
@@ -160,7 +166,11 @@ void APlayerController::EndPlay()
 
 void APlayerController::ClearInputState()
 {
-	if (PossessedPawn) { PossessedPawn->StopJumping(); PossessedPawn->ConsumeMovementInputVector(); }
+	if (PossessedPawn)
+	{
+		if (ACharacter* Character = Cast<ACharacter>(PossessedPawn)) Character->StopJumping();
+		PossessedPawn->ConsumeMovementInputVector();
+	}
 	std::memset(bKeyDown, 0, sizeof(bKeyDown));
 	MouseAxisX = MouseAxisY = 0.0f;
 }

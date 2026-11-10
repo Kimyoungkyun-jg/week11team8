@@ -223,6 +223,9 @@ void UObject::SerializeScriptProperties(FStructuredArchive::FSlot Slot)
 	{
 		for (const FProperty& Property : c->GetProperties())
 		{
+			if (Property.HasAnyFlags(CPF_Transient))
+				continue;
+
 			TOptional<FStructuredArchive::FSlot> Slot = Properties.TryEnterField(Property.Name.c_str(), true);
 			if (!Slot.IsSet()) continue;
 

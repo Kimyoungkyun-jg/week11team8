@@ -6,6 +6,8 @@ struct FViewShowFlags
 {
 	bool bPrimitives = true;
 	bool bFog = true;
+	bool bDecals = true;
+	bool bSkeletalMeshes = true;
 	// 원근 뷰는 픽셀 셰이더 그리드, 직교 뷰는 라인 그리드로 그린다 (UE 방식).
 	bool bGrid = true;
 	bool bBounds = false;
@@ -29,6 +31,8 @@ struct FViewShowFlagInfo
 inline constexpr FViewShowFlagInfo ViewShowFlagInfos[] = {
 	{ "Primitives",    "Primitives",              "Common",       &FViewShowFlags::bPrimitives },
 	{ "Fog",           "Exponential Height Fog",  "Common",       &FViewShowFlags::bFog },
+	{ "Decals",        "Decals",                  "Common",       &FViewShowFlags::bDecals },
+	{ "SkeletalMeshes", "Skeletal Meshes",        "Common",       &FViewShowFlags::bSkeletalMeshes },
 	{ "Grid",          "Grid",                    "Editor",       &FViewShowFlags::bGrid },
 	{ "Bounds",        "Bounding Box",            "Editor",       &FViewShowFlags::bBounds },
 	{ "CascadeBounds", "Shadow Cascade Bounds",   "Editor",       &FViewShowFlags::bCascadeBounds },
