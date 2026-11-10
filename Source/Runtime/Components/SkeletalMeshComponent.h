@@ -57,6 +57,7 @@ public:
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	FVertexBuffer* GetSkinnedVertexBuffer() const { return SkinnedVertexBuffer.get(); }
 	FVertexBuffer* GetSkinnedVertexBuffer(uint32 LOD);
+	FStructuredBuffer* GetSkinningMatricesBuffer() const { return AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr; }
 	const TArray<FVertex>& GetSkinnedVertices() const { return SkinnedVertices; }
 
 	virtual bool LineTraceComponent(const FRay& WorldRay, FHitResult& OutHit) override;

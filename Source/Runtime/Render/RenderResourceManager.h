@@ -60,6 +60,7 @@ public:
 	static FShaderProgram* GetWorldNormalShaderProgram(bool bGPUSkinning);
 	static FShaderProgram* GetTranslucentShaderProgram(bool bGPUSkinning);
 	static FShaderProgram* GetShadowDepthShaderProgram();
+	static FShaderProgram* GetGPUSkinningShadowDepthShaderProgram();
 private:
 	
 	void LoadOrCompileShader(const FString& Path);
