@@ -169,8 +169,16 @@ void FAssetEditorPanel::OnRender()
 			Client.Resize(static_cast<uint32>(Size.x), static_cast<uint32>(Size.y));
 			if (Client.GetColorTarget()) ImGui::Image(Client.GetColorTarget()->GetSRV(), Size);
 			const bool Hovered = ImGui::IsItemHovered();
-			Client.TickInput(ImGui::GetIO().DeltaTime, Hovered && ImGui::IsMouseDown(ImGuiMouseButton_Right), Hovered,
-				static_cast<int32>(ImGui::GetIO().MouseWheel * 120), 4, 1);
+			const bool bCaptured = Hovered && ImGui::IsMouseDown(ImGuiMouseButton_Right);
+			float Wheel = ImGui::GetIO().MouseWheel;
+			// 우클릭으로 카메라를 잡은 동안 휠은 이동 속도를 바꾼다.
+			if (bCaptured && Wheel != 0.0f)
+			{
+				CameraSpeed = std::clamp(CameraSpeed + Wheel * 0.5f, 0.1f, 20.0f);
+				Wheel = 0.0f;
+			}
+			Client.TickInputFromImGui(ImGui::GetIO().DeltaTime, bCaptured, Hovered,
+				static_cast<int32>(Wheel * 120), 4.0f * CameraSpeed, 0.2f);
 		}
 	}
 	ImGui::End();

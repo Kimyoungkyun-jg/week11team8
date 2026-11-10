@@ -133,6 +133,14 @@ bool FOutputLogPanel::Init()
 	AutoScroll = true;
 	ScrollToBottom = false;
 
+	// MultiSelect는 표시 순번(필터 적용 후)을 넘겨주므로, 저장할 때는 Items 인덱스로 바꾼다.
+	Selection.UserData = this;
+	Selection.AdapterIndexToStorageId = [](ImGuiSelectionBasicStorage* Self, int Index)
+	{
+		const FOutputLogPanel* Panel = static_cast<const FOutputLogPanel*>(Self->UserData);
+		return static_cast<ImGuiID>(Panel->VisibleItems[Index]);
+	};
+
 	return true;
 }
 
@@ -181,7 +189,9 @@ void FOutputLogPanel::OnRender()
 		ClearLog();
 
 	EditorUIScale::SameLineIfFits(ButtonWidth);
-	bool CopyToClipboard = ImGui::Button("Copy", ImVec2(ButtonWidth, 0.0f));
+	if (ImGui::Button("Copy", ImVec2(ButtonWidth, 0.0f)))
+		ImGui::SetClipboardText(BuildClipboardText(false).c_str());
+	ImGui::SetItemTooltip("Copy all lines that pass the filter.\nTo copy only some lines, select them and press Ctrl+C.");
 	ImGui::PopStyleVar();
 
 	ImGui::Separator();
@@ -192,33 +202,23 @@ void FOutputLogPanel::OnRender()
 	const float footer_height_to_reserve = style.SeparatorSize + style.ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
 	if (ImGui::BeginChild("ScrollingRegion", ImVec2(0, -footer_height_to_reserve), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_HorizontalScrollbar)) // ImGui Window 안에 Child Window를 생성
 	{
+		RenderLogLines();
+
 		if (ImGui::BeginPopupContextWindow())
 		{
+			if (ImGui::Selectable("Copy Selected", false, Selection.Size > 0 ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled))
+				ImGui::SetClipboardText(BuildClipboardText(true).c_str());
+			if (ImGui::Selectable("Copy All"))
+				ImGui::SetClipboardText(BuildClipboardText(false).c_str());
+			ImGui::Separator();
 			if (ImGui::Selectable("Clear"))
 				ClearLog();
 			ImGui::EndPopup();
 		}
 
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(EditorUIScale::Px(4.0f), EditorUIScale::Px(1.0f))); // Tighten spacing
-		if (CopyToClipboard)
-			ImGui::LogToClipboard();
-		for (const FLogData& item : Items)
-		{
-			if (!Filter.PassFilter(item.message.c_str()))
-				continue;
-
-			ImVec4 color = item.Color;
-			ImGui::PushStyleColor(ImGuiCol_Text, color);
-			ImGui::TextUnformatted(item.message.c_str());
-			ImGui::PopStyleColor();
-		}
-		if (CopyToClipboard)
-			ImGui::LogFinish();
 		if (ScrollToBottom || (AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()))
 			ImGui::SetScrollHereY(1.0f);
 		ScrollToBottom = false;
-
-		ImGui::PopStyleVar();
 	}
 	ImGui::EndChild();
 	ImGui::Separator();
@@ -253,9 +253,85 @@ void FOutputLogPanel::OnRender()
 	ImGui::End();
 }
 
+// 줄마다 Selectable을 두고 MultiSelect로 묶는다. 클릭, Shift/Ctrl 클릭, 드래그(Box Select), Ctrl+A로 고르고 Ctrl+C로 복사한다.
+// Selectable 라벨에 메시지를 그대로 넣으면 "##"이 ID 구분자로 해석되므로, 라벨은 비우고 글자는 따로 그린다.
+void FOutputLogPanel::RenderLogLines()
+{
+	VisibleItems.Reset();
+	for (int32 Index = 0; Index < Items.Num(); ++Index)
+		if (Filter.PassFilter(Items[Index].message.c_str()))
+			VisibleItems.Add(Index);
+
+	const ImGuiMultiSelectFlags Flags = ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_ClearOnClickVoid | ImGuiMultiSelectFlags_BoxSelect1d;
+	ImGuiMultiSelectIO* MultiSelectIO = ImGui::BeginMultiSelect(Flags, Selection.Size, VisibleItems.Num());
+	Selection.ApplyRequests(MultiSelectIO);
+
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(EditorUIScale::Px(4.0f), EditorUIScale::Px(1.0f))); // Tighten spacing
+	ImDrawList* DrawList = ImGui::GetWindowDrawList();
+	const float AvailableWidth = ImGui::GetContentRegionAvail().x;
+
+	ImGuiListClipper Clipper;
+	Clipper.Begin(VisibleItems.Num());
+	if (MultiSelectIO->RangeSrcItem != -1)
+		Clipper.IncludeItemByIndex(static_cast<int>(MultiSelectIO->RangeSrcItem)); // Shift 범위 선택의 시작 줄이 잘려 나가지 않게
+	while (Clipper.Step())
+	{
+		for (int Row = Clipper.DisplayStart; Row < Clipper.DisplayEnd; ++Row)
+		{
+			const int32 ItemIndex = VisibleItems[Row];
+			const FLogData& Item = Items[ItemIndex];
+
+			// 명령 출력처럼 끝에 줄바꿈을 붙인 메시지가 빈 줄을 만들지 않게 잘라서 그린다.
+			const char* TextBegin = Item.message.c_str();
+			const char* TextEnd = TextBegin + Item.message.size();
+			while (TextEnd > TextBegin && (TextEnd[-1] == '\n' || TextEnd[-1] == '\r'))
+				--TextEnd;
+			const ImVec2 TextSize = ImGui::CalcTextSize(TextBegin, TextEnd);
+
+			ImGui::PushID(ItemIndex);
+			ImGui::SetNextItemSelectionUserData(Row);
+			// Selectable은 판정 영역을 ItemSpacing 절반만큼 왼쪽으로 넓히므로 호출 전 커서 위치에 글자를 그린다.
+			const ImVec2 TextPos = ImGui::GetCursorScreenPos();
+			// 가로 스크롤이 생기도록 긴 줄은 글자 폭만큼 넓힌다.
+			ImGui::Selectable("##LogLine", Selection.Contains(static_cast<ImGuiID>(ItemIndex)), ImGuiSelectableFlags_None,
+				ImVec2(std::max(AvailableWidth, TextSize.x), std::max(TextSize.y, ImGui::GetTextLineHeight())));
+			DrawList->AddText(TextPos, ImGui::ColorConvertFloat4ToU32(Item.Color), TextBegin, TextEnd);
+			ImGui::PopID();
+		}
+	}
+	ImGui::PopStyleVar();
+
+	MultiSelectIO = ImGui::EndMultiSelect();
+	Selection.ApplyRequests(MultiSelectIO);
+
+	if (Selection.Size > 0 && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+		ImGui::SetClipboardText(BuildClipboardText(true).c_str());
+}
+
+FString FOutputLogPanel::BuildClipboardText(bool bSelectedOnly) const
+{
+	FString Text;
+	for (int32 Index = 0; Index < Items.Num(); ++Index)
+	{
+		const FLogData& Item = Items[Index];
+		if (!Filter.PassFilter(Item.message.c_str()))
+			continue;
+		if (bSelectedOnly && !Selection.Contains(static_cast<ImGuiID>(Index)))
+			continue;
+
+		size_t Length = Item.message.size();
+		while (Length > 0 && (Item.message[Length - 1] == '\n' || Item.message[Length - 1] == '\r'))
+			--Length;
+		Text.append(Item.message, 0, Length);
+		Text.push_back('\n');
+	}
+	return Text;
+}
+
 void FOutputLogPanel::ClearLog()
 {
 	Items.Reset();
+	Selection.Clear();
 }
 
 void FOutputLogPanel::ExecCommand(const FString& CommandLine)

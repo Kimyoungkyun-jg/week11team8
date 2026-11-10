@@ -4,8 +4,8 @@
 // Resources = 엔진·에디터 내장 파일(셰이더, 폰트, 아이콘, 스플래시, 기본 하늘). 스캔하지 않고 여기 적힌 경로로만 불러온다.
 //             Assets 폴더가 없어도 엔진이 떠야 하므로 ResourcePaths는 Assets를 가리키면 안 된다.
 // Assets    = 사용자 콘텐츠(모델, 텍스처, 씬, 스크립트). 시작할 때 통째로 스캔하고 Content Drawer에 보인다.
-// Settings  = 사용자별 에디터 설정. Logs = 실행 로그. 두 폴더 모두 저장소에서 제외한다.
-// Saved     = 작업 백업과 기타 임시 산출물.
+// Settings  = 사용자별 에디터 설정. 저장소에서 제외한다.
+// Saved     = 실행 로그(Saved/Logs), 작업 백업과 기타 임시 산출물. 저장소에서 제외한다.
 // 에디터 전용 경로는 Editor/HitoriEd/EditorResourcePaths.h에 둔다.
 namespace ResourcePaths
 {

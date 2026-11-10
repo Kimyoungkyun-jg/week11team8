@@ -82,6 +82,43 @@ bool DescendsFrom(FbxNode* Node, FbxNode* Root)
 	return false;
 }
 
+// 어느 스택에서든 노드의 TRS 값이 실제로 변하면 참이다. 일정한 값으로 구운 커브는 움직임이 아니다.
+bool HasTransformAnimation(FbxScene* Scene, FbxNode* Node)
+{
+	constexpr float Tolerance = 1.e-4f;
+	const char* Channels[]{ FBXSDK_CURVENODE_COMPONENT_X, FBXSDK_CURVENODE_COMPONENT_Y, FBXSDK_CURVENODE_COMPONENT_Z };
+	FbxProperty Properties[]{ Node->LclTranslation, Node->LclRotation, Node->LclScaling };
+	for (int S = 0; S < Scene->GetSrcObjectCount<FbxAnimStack>(); ++S)
+	{
+		auto* Stack = Scene->GetSrcObject<FbxAnimStack>(S);
+		for (int L = 0; L < Stack->GetMemberCount<FbxAnimLayer>(); ++L)
+		{
+			auto* Layer = Stack->GetMember<FbxAnimLayer>(L);
+			for (FbxProperty& Property : Properties) for (const char* Channel : Channels)
+			{
+				FbxAnimCurve* Curve = Property.GetCurve(Layer, Channel);
+				if (!Curve || Curve->KeyGetCount() < 2) continue;
+				float Min = Curve->KeyGetValue(0), Max = Min;
+				for (int K = 1; K < Curve->KeyGetCount(); ++K)
+				{
+					const float Value = Curve->KeyGetValue(K);
+					Min = std::min(Min, Value); Max = std::max(Max, Value);
+				}
+				if (Max - Min > Tolerance) return true;
+			}
+		}
+	}
+	return false;
+}
+
+// 부모가 움직여도 메시는 따라 움직인다.
+bool MovesWithAnimation(FbxScene* Scene, FbxNode* Node)
+{
+	for (; Node && Node != Scene->GetRootNode(); Node = Node->GetParent())
+		if (HasTransformAnimation(Scene, Node)) return true;
+	return false;
+}
+
 bool CollisionName(FString Name)
 {
 	Name = Lower(Name);
@@ -454,6 +491,10 @@ void FImport::FindRigs()
 			}
 		}
 	}
+	// 본도 Skin도 없이 키만 있는 메시는 노드를 본으로 삼는다. 웨이트는 AppendMesh가 자기 노드에 1로 준다.
+	if (Options.bImportRigidAnimation)
+		for (const auto& Item : Meshes)
+			if (!Item.Mesh->GetDeformerCount(FbxDeformer::eSkin) && MovesWithAnimation(Scene, Item.Node)) Links.insert(Item.Node);
 	for (FbxNode* Link : Links)
 	{
 		FbxNode* Root = FindRoot(Scene, Link, bBlender);
@@ -1129,6 +1170,9 @@ bool FImport::Run()
 	if (!Options.bImportStaticMeshes && !Options.bImportSkeletalMeshes) { Error = "Select Static or Skeletal mesh import"; return false; }
 	// 리그를 찾지 않으면 스킨 메시도 Static 경로로 들어간다.
 	if (Options.bImportSkeletalMeshes) { FindRigs(); if (!Error.empty()) return false; }
+	for (const auto& Item : Meshes)
+		if (!Item.Rig && MovesWithAnimation(Scene, Item.Node))
+			Warn("Transform animation is ignored; enable Import Rigid Animation: " + NodePath(Item.Node));
 	if (!Options.bImportStaticMeshes)
 	{
 		std::erase_if(Meshes, [](const FMeshItem& Item) { return !Item.Rig; });

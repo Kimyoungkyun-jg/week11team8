@@ -212,7 +212,10 @@ void UAssetManager::ScanAssets(const fs::path& AssetRoot, const FAssetLoadProgre
 	for (const FString& Path : FbxFiles)
 	{
 		FString Key, Error;
-		if (FbxPath::GetAssetKey(Path, Key, Error) && !IsFbxImported(Key)) FbxImportCandidates.Add(Path);
+		if (FbxPath::GetAssetKey(Path, Key, Error) && !IsFbxImported(Key))
+		{
+			FbxImportCandidates.Add(Path);
+		}
 	}
 }
 

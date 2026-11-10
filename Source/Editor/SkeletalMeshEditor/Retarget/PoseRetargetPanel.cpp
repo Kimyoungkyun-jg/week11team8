@@ -331,7 +331,13 @@ void FPoseRetargetPanel::DrawViewport(int32 Index, const char* Label)
 	if (ImGui::IsItemHovered())
 	{
 		const float Wheel = ImGui::GetIO().MouseWheel;
-		if (Wheel != 0.0f)
+		const bool bCaptured = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+		// 우클릭으로 카메라를 잡은 동안 휠은 이동 속도를 바꾼다.
+		if (bCaptured && Wheel != 0.0f)
+		{
+			CameraSpeed = std::clamp(CameraSpeed + Wheel * 0.5f, 0.1f, 20.0f);
+		}
+		else if (Wheel != 0.0f)
 		{
 			const FVector Center = Mesh
 				? Components[Index]->GetWorldMatrix().TransformPosition(
@@ -343,8 +349,8 @@ void FPoseRetargetPanel::DrawViewport(int32 Index, const char* Label)
 			if (Step > 0.0f) Step = std::min(Step, Distance * 0.8f);
 			Viewports[Index].SetViewLocation(Location + Viewports[Index].GetViewForward() * Step);
 		}
-		Viewports[Index].TickInput(ImGui::GetIO().DeltaTime,
-			FInputSystem::IsMouseDown(EMouseButton::Right), true, 0, 10.0f, 0.2f);
+		Viewports[Index].TickInputFromImGui(ImGui::GetIO().DeltaTime,
+			bCaptured, true, 0, 10.0f * CameraSpeed, 0.2f);
 	}
 	ImGui::PopID();
 }

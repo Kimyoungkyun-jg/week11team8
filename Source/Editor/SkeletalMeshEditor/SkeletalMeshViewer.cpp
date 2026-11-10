@@ -789,7 +789,7 @@ void FSkeletalMeshViewerPanel::DrawViewport(FSkeletalMeshViewer& Viewer)
 			Viewer.CameraSpeed = std::clamp(Viewer.CameraSpeed + ImGui::GetIO().MouseWheel * 0.5f, 0.1f, 20.0f);
 		}
 		const float MoveSpeed = 2.5f * Viewer.CameraSpeed;
-		Viewer.Client.TickInput(ImGui::GetIO().DeltaTime, ImGui::IsMouseDown(ImGuiMouseButton_Right), true, 0, MoveSpeed, 0.2f);
+		Viewer.Client.TickInputFromImGui(ImGui::GetIO().DeltaTime, ImGui::IsMouseDown(ImGuiMouseButton_Right), true, 0, MoveSpeed, 0.2f);
 	}
 }
 
