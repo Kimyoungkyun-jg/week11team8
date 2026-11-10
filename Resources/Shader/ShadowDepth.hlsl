@@ -1,5 +1,6 @@
 // Resources/Shader/ShadowDepth.hlsl
 #pragma pack_matrix(row_major)
+#include "Skinning.hlsli"
 
 cbuffer ViewConstants : register(b0)
 {
@@ -25,6 +26,11 @@ struct VS_INPUT
 {
     float3 Position : POSITION;
     float3 Normal : NORMAL;
+#if GPU_SKINNING
+    float4 Tangent : TANGENT;
+    int4 BoneIndices : BLENDINDICES;
+    float4 BoneWeights : BLENDWEIGHT;
+#endif
 };
 struct VS_OUTPUT
 {
@@ -44,6 +50,9 @@ float ComputeDepthBias(float3 WorldNormal)
 
 VS_OUTPUT mainVS(VS_INPUT Input)
 {
+#if GPU_SKINNING
+    SkinVertex(Input.Position, Input.Normal, Input.Tangent, Input.BoneIndices, Input.BoneWeights);
+#endif
     VS_OUTPUT Output;
     const float4 WorldPosition = mul(float4(Input.Position, 1.0f), World);
     const float3 WorldNormal = normalize(mul(float4(Input.Normal, 0.0f), NormalMatrix).xyz);

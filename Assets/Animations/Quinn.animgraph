@@ -26,15 +26,15 @@
       "PoseConnected": true,
       "SpeedOffsetX": 0.0,
       "SpeedOffsetY": 0.0,
-      "X": 80.0,
-      "Y": 240.0
+      "X": -115.71428680419922,
+      "Y": 252.85707092285156
     },
     {
       "Asset": "Assets/Animations/simple.blendspace",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
-      "DirectionOffsetX": -19.333332061767578,
-      "DirectionOffsetY": -38.66666793823242,
+      "DirectionOffsetX": -166.0,
+      "DirectionOffsetY": -128.66664123535156,
       "Id": 2,
       "InputX": 2,
       "InputY": 1,
@@ -49,10 +49,10 @@
       "Players": [],
       "Pose": 2,
       "PoseConnected": true,
-      "SpeedOffsetX": -106.0,
-      "SpeedOffsetY": 54.0000114440918,
-      "X": 350.0,
-      "Y": 240.0
+      "SpeedOffsetX": -184.00006103515625,
+      "SpeedOffsetY": 80.66665649414063,
+      "X": 326.4285583496094,
+      "Y": 250.0001220703125
     },
     {
       "Asset": "Models/UnrealModel/MM_Jump.animseq",
