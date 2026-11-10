@@ -26,6 +26,7 @@ public:
 
 	// 액터 이벤트를 Lua로 넘긴다. 함수가 없으면 무시된다.
 	void CallScript(const char* Name, AActor* Other);
+	void CallScript(const char* Name, float Value);
 
 	const FString& GetScriptPath() const { return ScriptPath; }
 	void SetScriptPath(const FString& InPath) { ScriptPath = InPath; }

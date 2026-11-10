@@ -2,7 +2,6 @@
 #include "GameFramework/TestCharacter.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/CharacterMovementComponent.h"
-#include "Animation/TestAnimInstance.h"
 #include "Asset/AssetManager.h"
 
 ATestCharacter::ATestCharacter()
@@ -18,19 +17,4 @@ ATestCharacter::ATestCharacter()
 	}
 	else HTR_LOG(Error, "Failed to load SK_SKM_Quinn_Simple_root.fbxbin for ATestCharacter");
 	GetCharacterMovement()->MaxWalkSpeed = 6.0f;
-}
-
-void ATestCharacter::Attack()
-{
-	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (bJumpLocked || bAttackLocked || !Movement || !Movement->CanJump()) return;
-	if (UTestAnimInstance* Anim = Cast<UTestAnimInstance>(GetSkeletalMeshComponent()->GetAnimInstance());
-		Anim && Anim->HasAttackAnimation())
-		Anim->RequestAttack();
-}
-
-void ATestCharacter::Jump()
-{
-	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (!bJumpLocked && !bAttackLocked && Movement && Movement->CanJump()) ACharacter::Jump();
 }

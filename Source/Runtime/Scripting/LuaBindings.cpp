@@ -33,6 +33,8 @@
 #include "Components/AudioComponent.h"
 #include "Engine/Classes/Sound/SoundWave.h"
 #include "Camera/CameraShakeBase.h"
+#include "Animation/LuaAnimInstance.h"
+#include "Components/SkeletalMeshComponent.h"
 
 #include "LevelSequence/LevelSequenceActor.h" 
 #include "LevelSequence/LevelSequencePlayer.h"
@@ -581,6 +583,106 @@ namespace
 			});
 	}
 
+	// 액터의 스켈레탈 메시에 붙은 ULuaAnimInstance를 가리키는 안전 핸들. 컴포넌트가 사라지면 Get()이 nullptr이다.
+	struct FLuaAnimRef
+	{
+		FLuaComponentRef Mesh;
+	};
+
+	ULuaAnimInstance& AnimOf(const FLuaAnimRef& Ref)
+	{
+		USkeletalMeshComponent* Mesh = Cast<USkeletalMeshComponent>(Ref.Mesh.Get());
+		if (!Mesh) throw sol::error("Anim state machine's skeletal mesh component was destroyed.");
+		ULuaAnimInstance* Anim = Cast<ULuaAnimInstance>(Mesh->GetAnimInstance());
+		if (!Anim) throw sol::error("Skeletal mesh no longer uses ULuaAnimInstance. Call obj:GetAnimStateMachine() again.");
+		return *Anim;
+	}
+
+	void CheckState(const ULuaAnimInstance& Anim, const FString& Name)
+	{
+		if (!Anim.HasState(Name)) throw sol::error("Unknown anim state: " + Name);
+	}
+
+	// 액터의 첫 스켈레탈 메시를 ULuaAnimInstance로 바꾸고 그 핸들을 돌려준다. 이미 바뀌어 있으면 그대로 쓴다.
+	sol::optional<FLuaAnimRef> GetAnimStateMachine(const FLuaActorRef& Ref)
+	{
+		for (UActorComponent* Component : Deref(Ref).GetComponents())
+		{
+			USkeletalMeshComponent* Mesh = Cast<USkeletalMeshComponent>(Component);
+			if (!Mesh || !Mesh->IsRegistered()) continue;
+			if (!Cast<ULuaAnimInstance>(Mesh->GetAnimInstance()) &&
+				!Mesh->SetAnimInstanceClass(ULuaAnimInstance::StaticClass()))
+				throw sol::error("Failed to switch the skeletal mesh to ULuaAnimInstance.");
+			return FLuaAnimRef{ FLuaComponentRef::Make(Mesh) };
+		}
+		return sol::nullopt;
+	}
+
+	void RegisterAnimation(sol::state& Lua)
+	{
+		Lua.new_usertype<FLuaAnimRef>("AnimStateMachine",
+			sol::no_constructor,
+			"IsValid", [](const FLuaAnimRef& Ref)
+			{
+				USkeletalMeshComponent* Mesh = Cast<USkeletalMeshComponent>(Ref.Mesh.Get());
+				return Mesh && Cast<ULuaAnimInstance>(Mesh->GetAnimInstance()) != nullptr;
+			},
+			// 상태 등록. 같은 이름을 같은 내용으로 다시 등록하면 무시하므로 핫 리로드 때 다시 불러도 된다.
+			"AddSequenceState", [](const FLuaAnimRef& Ref, const FString& Name, const FString& Path,
+				sol::optional<bool> Loop, sol::optional<float> PlayRate)
+			{
+				return AnimOf(Ref).AddSequenceState(Name, Path, Loop.value_or(false), PlayRate.value_or(1.0f));
+			},
+			"AddBlendSpaceState", [](const FLuaAnimRef& Ref, const FString& Name, const FString& Path,
+				sol::optional<bool> Loop, sol::optional<float> PlayRate)
+			{
+				return AnimOf(Ref).AddBlendSpaceState(Name, Path, Loop.value_or(true), PlayRate.value_or(1.0f));
+			},
+			"HasState", [](const FLuaAnimRef& Ref, const FString& Name) { return AnimOf(Ref).HasState(Name); },
+			"TransitionTo", [](const FLuaAnimRef& Ref, const FString& Name, sol::optional<float> BlendTime,
+				sol::optional<bool> Restart)
+			{
+				ULuaAnimInstance& Anim = AnimOf(Ref);
+				CheckState(Anim, Name);
+				return Anim.TransitionTo(Name, BlendTime.value_or(0.2f), Restart.value_or(false));
+			},
+			"SetInput", [](const FLuaAnimRef& Ref, const FString& Name, float X, sol::optional<float> Y)
+			{
+				ULuaAnimInstance& Anim = AnimOf(Ref);
+				CheckState(Anim, Name);
+				return Anim.SetInput(Name, X, Y.value_or(0.0f));
+			},
+			"State", sol::property([](const FLuaAnimRef& Ref) { return AnimOf(Ref).GetState(); }),
+			"IsInTransition", [](const FLuaAnimRef& Ref) { return AnimOf(Ref).IsInTransition(); },
+			"IsFinished", [](const FLuaAnimRef& Ref, const FString& Name)
+			{
+				ULuaAnimInstance& Anim = AnimOf(Ref);
+				CheckState(Anim, Name);
+				return Anim.IsFinished(Name);
+			},
+			"GetRemainingTime", [](const FLuaAnimRef& Ref, const FString& Name)
+			{
+				ULuaAnimInstance& Anim = AnimOf(Ref);
+				CheckState(Anim, Name);
+				return Anim.GetRemainingTime(Name);
+			},
+			"IsNearEnd", [](const FLuaAnimRef& Ref, const FString& Name, float Time)
+			{
+				ULuaAnimInstance& Anim = AnimOf(Ref);
+				CheckState(Anim, Name);
+				return Anim.IsNearEnd(Name, Time);
+			},
+			"Speed", sol::property([](const FLuaAnimRef& Ref) { return AnimOf(Ref).GetSpeed(); }),
+			"Direction", sol::property([](const FLuaAnimRef& Ref) { return AnimOf(Ref).GetDirection(); }),
+			"IsGrounded", sol::property([](const FLuaAnimRef& Ref) { return AnimOf(Ref).IsGrounded(); }),
+			"IsFalling", sol::property([](const FLuaAnimRef& Ref) { return AnimOf(Ref).IsFalling(); }),
+			"JumpCounter", sol::property([](const FLuaAnimRef& Ref) { return AnimOf(Ref).GetJumpCounter(); })
+		);
+		// Actor 타입은 RegisterActor에서 만들었으므로 거기에 메서드만 더한다.
+		sol::usertype<FLuaActorRef> ActorType = Lua["Actor"];
+		ActorType.set_function("GetAnimStateMachine", &GetAnimStateMachine);
+	}
+
 	void RegisterComponent(sol::state& Lua)
 	{
 		Lua.new_usertype<FLuaComponentRef>("Component",
@@ -964,6 +1066,7 @@ namespace FLuaBindings
 		RegisterMath(Lua);
 		RegisterActor(Lua);
 		RegisterComponent(Lua);
+		RegisterAnimation(Lua);
 		RegisterInput(Lua);
 		RegisterCoroutine(Lua);
 		RegisterWidget(Lua);

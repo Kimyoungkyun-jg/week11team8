@@ -109,10 +109,20 @@ struct FAnimNode_StateMachine : FAnimNode_Base
 	float TransitionElapsed = 0.0f;
 	float TransitionDuration = 0.0f;
 	std::function<void()> TransitionOnCompleted;
+	// 섞는 도중에 새 전환이 들어오면 From으로 쓸 노드가 없다. 그때 마지막으로 내보낸 포즈를 고정해 From으로 쓴다.
+	TArray<FAnimBoneTransform> LastPose;
+	TArray<FAnimBoneTransform> SnapshotPose;
+	bool bBlendFromSnapshot = false;
 
 	int32 AddState(const FString& Name, FAnimNode_Base* PoseNode);
+	int32 FindState(const FString& Name) const;
 	bool AddTransition(int32 FromState, int32 ToState, std::function<bool()> Condition,
 		float BlendTime, std::function<void()> OnCompleted = {}, std::function<void()> OnStarted = {});
+	// 조건 검사 없이 바깥(스크립트)에서 바로 전환을 건다. 이미 그 상태로 가는 중이면 bRestart일 때만 처음부터 다시 튼다.
+	bool RequestTransition(int32 ToState, float BlendTime, bool bRestart = false);
+	bool IsInTransition() const { return NextState >= 0; }
+	// 전환 중이면 들어가는 중인 상태, 아니면 현재 상태
+	int32 GetTargetState() const { return NextState >= 0 ? NextState : CurrentState; }
 	void FinishTransition();
 	void Reset() override;
 	void Update(float DeltaSeconds) override;

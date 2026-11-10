@@ -216,6 +216,31 @@ int32 FAnimNode_StateMachine::AddState(const FString& Name, FAnimNode_Base* Pose
 	return Index;
 }
 
+int32 FAnimNode_StateMachine::FindState(const FString& Name) const
+{
+	for (int32 Index = 0; Index < States.Num(); ++Index)
+		if (States[Index].Name == Name) return Index;
+	return -1;
+}
+
+bool FAnimNode_StateMachine::RequestTransition(int32 ToState, float BlendTime, bool bRestart)
+{
+	if (!States.IsValidIndex(ToState) || !std::isfinite(BlendTime) || BlendTime < 0.0f) return false;
+	if (ToState == GetTargetState() && !bRestart) return true;
+	// 섞는 도중이거나 지금 상태를 처음부터 다시 틀면 From 노드가 없다(또는 To와 같은 노드다).
+	const bool bNeedSnapshot = NextState >= 0 || ToState == CurrentState;
+	if (NextState >= 0) FinishTransition();
+	bBlendFromSnapshot = bNeedSnapshot && BlendTime > 0.0f && !LastPose.IsEmpty();
+	if (bBlendFromSnapshot) SnapshotPose = LastPose;
+	NextState = ToState;
+	TransitionDuration = BlendTime;
+	TransitionElapsed = 0.0f;
+	TransitionOnCompleted = {};
+	if (States[ToState].Pose) States[ToState].Pose->Reset();
+	if (BlendTime <= 0.0f) FinishTransition();
+	return true;
+}
+
 bool FAnimNode_StateMachine::AddTransition(int32 FromState, int32 ToState,
 	std::function<bool()> Condition, float BlendTime, std::function<void()> OnCompleted,
 	std::function<void()> OnStarted)
@@ -231,6 +256,8 @@ void FAnimNode_StateMachine::FinishTransition()
 {
 	CurrentState = NextState;
 	NextState = -1;
+	bBlendFromSnapshot = false;
+	SnapshotPose.Reset();
 	std::function<void()> Completed = std::move(TransitionOnCompleted);
 	TransitionOnCompleted = {};
 	if (Completed) Completed();
@@ -243,6 +270,9 @@ void FAnimNode_StateMachine::Reset()
 	TransitionElapsed = 0.0f;
 	TransitionDuration = 0.0f;
 	TransitionOnCompleted = {};
+	LastPose.Reset();
+	SnapshotPose.Reset();
+	bBlendFromSnapshot = false;
 	for (const FState& State : States) if (State.Pose) State.Pose->Reset();
 }
 
@@ -250,7 +280,9 @@ void FAnimNode_StateMachine::Update(float DeltaSeconds)
 {
 	if (!States.IsValidIndex(CurrentState) || !std::isfinite(DeltaSeconds)) return;
 	DeltaSeconds = std::max(0.0f, DeltaSeconds);
-	if (States[CurrentState].Pose) States[CurrentState].Pose->Update(DeltaSeconds);
+	// 스냅샷에서 섞는 중이면 현재 상태 포즈는 쓰이지 않는다. 같은 노드를 다시 트는 경우 두 번 진행하지 않도록 건너뛴다.
+	const bool bCurrentUnused = NextState >= 0 && (bBlendFromSnapshot || NextState == CurrentState);
+	if (!bCurrentUnused && States[CurrentState].Pose) States[CurrentState].Pose->Update(DeltaSeconds);
 	if (NextState >= 0)
 	{
 		if (States[NextState].Pose) States[NextState].Pose->Update(DeltaSeconds);
@@ -281,12 +313,22 @@ void FAnimNode_StateMachine::Update(float DeltaSeconds)
 bool FAnimNode_StateMachine::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
 {
 	if (!States.IsValidIndex(CurrentState)) return false;
-	if (NextState < 0) return States[CurrentState].Pose &&
-		States[CurrentState].Pose->Evaluate(Skeleton, OutPose);
-	TArray<FAnimBoneTransform> From, To;
-	return States[CurrentState].Pose && States[NextState].Pose &&
-		States[CurrentState].Pose->Evaluate(Skeleton, From) && States[NextState].Pose->Evaluate(Skeleton, To) &&
-		BlendAnimPoses(From, To, TransitionElapsed / TransitionDuration, OutPose);
+	FAnimNode_Base* Current = States[CurrentState].Pose;
+	bool bEvaluated = false;
+	if (NextState < 0) bEvaluated = Current && Current->Evaluate(Skeleton, OutPose);
+	else
+	{
+		FAnimNode_Base* Next = States[NextState].Pose;
+		const float Alpha = TransitionElapsed / TransitionDuration;
+		TArray<FAnimBoneTransform> From, To;
+		if (bBlendFromSnapshot)
+			bEvaluated = Next && Next->Evaluate(Skeleton, To) && BlendAnimPoses(SnapshotPose, To, Alpha, OutPose);
+		else
+			bEvaluated = Current && Next && Current->Evaluate(Skeleton, From) && Next->Evaluate(Skeleton, To) &&
+				BlendAnimPoses(From, To, Alpha, OutPose);
+	}
+	if (bEvaluated) LastPose = OutPose;
+	return bEvaluated;
 }
 
 bool FAnimNode_StateMachine::ConsumeRootMotion(FMatrix& OutDelta)
@@ -294,6 +336,9 @@ bool FAnimNode_StateMachine::ConsumeRootMotion(FMatrix& OutDelta)
 	if (!States.IsValidIndex(CurrentState)) return false;
 	FAnimNode_Base* Current = States[CurrentState].Pose;
 	if (NextState < 0) return Current && Current->ConsumeRootMotion(OutDelta);
-	return BlendRootMotion(Current, States[NextState].Pose,
-		TransitionDuration > 0.0f ? TransitionElapsed / TransitionDuration : 1.0f, OutDelta);
+	const float Alpha = TransitionDuration > 0.0f ? TransitionElapsed / TransitionDuration : 1.0f;
+	// 스냅샷에는 이동량이 없으므로 제자리(Identity)와 섞는다.
+	if (bBlendFromSnapshot || NextState == CurrentState)
+		return BlendRootMotion(nullptr, States[NextState].Pose, Alpha, OutDelta);
+	return BlendRootMotion(Current, States[NextState].Pose, Alpha, OutDelta);
 }
