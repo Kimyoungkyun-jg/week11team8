@@ -270,7 +270,7 @@ bool UEditorEngine::Init()
 	AnimSequenceViewerPanel = EditorUI->AddEditorPanel<FAnimSequenceViewerPanel>();
 	ContentDrawerPanel->SetOpenAnimSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
 	AnimGraphEditorPanel = EditorUI->AddEditorPanel<FAnimGraphEditorPanel>();
-	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->NewAsset(Path); });
+	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path, const FString& SkeletonKey) { AnimGraphEditorPanel->NewAsset(Path, SkeletonKey); });
 	ContentDrawerPanel->SetOpenAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->OpenAsset(Path); });
 	BlendSpaceEditorPanel = EditorUI->AddEditorPanel<FBlendSpaceEditorPanel>();
 	AnimGraphEditorPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
