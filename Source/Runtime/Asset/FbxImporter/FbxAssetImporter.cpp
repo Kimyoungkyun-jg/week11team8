@@ -920,7 +920,13 @@ FbxAMatrix FImport::Bind(FbxNode* Node)
 	}
 	if (!Found)
 	{
-		Result = Node->EvaluateGlobalTransform(FBXSDK_TIME_ZERO);
+		// BindPose에도 Cluster에도 없는 노드(웨이트 없는 _end 본 등)는 부모 바인드에 0초 로컬을 붙인다.
+		// 0초 글로벌을 그대로 쓰면 장면의 0초 자세가 바인드 자세와 다를 때 부모에서 떨어져 나간다.
+		FbxNode* Parent = Node->GetParent();
+		const FbxAMatrix Global = Node->EvaluateGlobalTransform(FBXSDK_TIME_ZERO);
+		Result = Parent && Parent != Scene->GetRootNode()
+			? Bind(Parent) * Parent->EvaluateGlobalTransform(FBXSDK_TIME_ZERO).Inverse() * Global
+			: Global;
 	}
 	BindCache.emplace(Node, Result);
 	return Result;
