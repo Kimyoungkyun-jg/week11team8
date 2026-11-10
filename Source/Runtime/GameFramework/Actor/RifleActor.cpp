@@ -2,6 +2,8 @@
 #include "GameFramework/Actor/RifleActor.h"
 #include "GameFramework/Actor/ProjectileActor.h"
 #include "Components/ProjectileMovementComponent.h"
+#include "Collision/HitResult.h"
+#include "Collision/Ray.h"
 #include "Asset/AssetManager.h"
 #include "Engine/World.h"
 
@@ -17,10 +19,28 @@ ARifleActor::ARifleActor()
 	StaticMeshComponent->SetStaticMesh(RifleMesh);
 }
 
-AProjectileActor* ARifleActor::Fire()
+AProjectileActor* ARifleActor::Fire(const FVector& CameraOrigin, const FVector& CameraDirection)
 {
 	UWorld* World = GetWorld();
 	if (!World || !World->IsGameWorld() || MaxProjectiles <= 0 || ProjectileSpeed <= 0.0f || IsActorBeingDestroyed()) return nullptr;
+	const FVector CameraForward = CameraDirection.GetSafeNormal();
+	if (CameraForward.SizeSquared() <= SMALL_NUMBER) return nullptr;
+	constexpr float AimTraceDistance = 500.0f;
+	FVector Target = CameraOrigin + CameraForward * AimTraceDistance;
+	for (AProjectileActor* ExistingProjectile : Projectiles)
+	{
+		if (IsValid(ExistingProjectile)) ExistingProjectile->SetActorEnableCollision(false);
+	}
+	FHitResult Hit;
+	if (World->SweepSingle(FRay(CameraOrigin, CameraForward), AimTraceDistance, 0.0f,
+		Hit, GetAttachParentActor()))
+	{
+		Target = Hit.ImpactPoint;
+	}
+	for (AProjectileActor* ExistingProjectile : Projectiles)
+	{
+		if (IsValid(ExistingProjectile)) ExistingProjectile->SetActorEnableCollision(true);
+	}
 
 	AProjectileActor* Projectile = nullptr;
 	for (AProjectileActor* Candidate : Projectiles)
@@ -46,8 +66,10 @@ AProjectileActor* ARifleActor::Fire()
 	Movement->MaxSpeed = ProjectileSpeed;
 	Movement->ProjectileGravityScale = 0.0f;
 	Movement->bShouldBounce = false;
-	const FVector Forward = GetActorQuat().GetForwardVector();
-	Projectile->Launch(GetActorLocation() + Forward * MuzzleDistance, Forward, true);
+	const FVector Muzzle = GetActorLocation() + GetActorQuat().GetForwardVector() * MuzzleDistance;
+	FVector FireDirection = (Target - Muzzle).GetSafeNormal();
+	if (FireDirection.SizeSquared() <= SMALL_NUMBER) FireDirection = CameraForward;
+	Projectile->Launch(Muzzle, FireDirection, true);
 	return Projectile;
 }
 

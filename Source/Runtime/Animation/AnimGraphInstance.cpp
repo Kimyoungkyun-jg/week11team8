@@ -78,30 +78,31 @@ void UAnimGraphInstance::RequestAttack()
 	bAttackRequested = true;
 }
 
-bool UAnimGraphInstance::PlayMontage(const FString& MontagePath, float InPlayRate, const FString& StartSection)
+float UAnimGraphInstance::PlayMontage(const FString& MontagePath, float InPlayRate, const FString& StartSection)
 {
-	if (MontagePath.empty() || !std::isfinite(InPlayRate) || InPlayRate <= 0.0f) return false;
+	if (MontagePath.empty() || !std::isfinite(InPlayRate) || InPlayRate <= 0.0f) return 0.0f;
 	USkeletalMeshComponent* Component = GetOwningComponent();
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
-	if (!Mesh || !Mesh->Skeleton) return false;
+	if (!Mesh || !Mesh->Skeleton) return 0.0f;
 
 	FAnimMontageAsset Asset;
 	FString Error;
 	if (!FAnimMontageAsset::Load(MontagePath, Asset, Error))
 	{
 		HTR_LOG(Warning, "Montage load failed: {} ({})", MontagePath, Error);
-		return false;
+		return 0.0f;
 	}
 	if (!Asset.SkeletonPath.empty() && Asset.SkeletonPath != Mesh->Skeleton->GetPath())
 	{
 		HTR_LOG(Warning, "Montage skeleton mismatch: {}", MontagePath);
-		return false;
+		return 0.0f;
 	}
 	UAnimSequence* Sequence = UAssetManager::LoadAnimSequence(Asset.SequencePath);
-	if (!Sequence || Sequence->Skeleton != Mesh->Skeleton || !Sequence->GetDataModel())
+	if (!Sequence || Sequence->Skeleton != Mesh->Skeleton || !Sequence->GetDataModel() ||
+		Sequence->GetDataModel()->PlayLength <= 0.0f)
 	{
 		HTR_LOG(Warning, "Montage sequence failed to load: {}", Asset.SequencePath);
-		return false;
+		return 0.0f;
 	}
 
 	int32 SectionIdx = -1;
@@ -151,19 +152,10 @@ bool UAnimGraphInstance::PlayMontage(const FString& MontagePath, float InPlayRat
 	Target->StopDuration = Target->Asset.BlendOutTime;
 	Target->StopStartWeight = 1.0f;
 	Target->bPlaying = true;
-	return true;
-}
-
-bool UAnimGraphInstance::PlaySlotDefaultMontage(const FString& SlotName)
-{
-	for (const auto& Entry : SlotDefaults)
-	{
-		if ((SlotName.empty() || Entry.SlotName == SlotName) && !Entry.MontagePath.empty())
-		{
-			return PlayMontage(Entry.MontagePath, 1.0f, "");
-		}
-	}
-	return PlayMontage("Assets/Animations/RifleFire.animmontage", 1.0f, "");
+	const float RateScale = std::isfinite(Sequence->RateScale) && Sequence->RateScale > 0.0f
+		? Sequence->RateScale : 1.0f;
+	return Sequence->GetDataModel()->PlayLength /
+		std::max(0.001f, InPlayRate * Target->Asset.PlayRate * RateScale);
 }
 
 void UAnimGraphInstance::StopMontage(const FString& SlotName, float BlendOutOverride)
@@ -371,12 +363,15 @@ float UAnimGraphInstance::InputValue(EAnimGraphInput Input, float Constant) cons
 	case EAnimGraphInput::HitRequested: return bHitRequested ? 1.0f : 0.0f;
 	case EAnimGraphInput::AttackRequested: return bAttackRequested ? 1.0f : 0.0f;
 	case EAnimGraphInput::AimPitch: return AimPitch;
+	case EAnimGraphInput::IsAiming: return bIsAiming ? 1.0f : 0.0f;
 	default: return Constant;
 	}
 }
 
 void UAnimGraphInstance::NativeUpdateAnimation(float DeltaSeconds)
 {
+	if (std::isfinite(DeltaSeconds) && DeltaSeconds > 0.0f)
+		AimBlendAlpha = std::clamp(AimBlendAlpha + (bIsAiming ? 1.0f : -1.0f) * DeltaSeconds / 0.18f, 0.0f, 1.0f);
 	Speed = Direction = 0.0f;
 	bJumpRequested |= bManualJumpRequested;
 	bManualJumpRequested = false;
@@ -432,6 +427,9 @@ void UAnimGraphInstance::NativeUpdateAnimation(float DeltaSeconds)
 			AimBinding.Node->Pitch = InputValue(AimBinding.PitchInput, AimBinding.ConstantPitch);
 		}
 	}
+	for (const FAlphaBinding& Binding : AlphaBindings)
+		if (Binding.Alpha) *Binding.Alpha = Binding.Input == EAnimGraphInput::IsAiming
+			? AimBlendAlpha : InputValue(Binding.Input);
 	UpdateMontages(DeltaSeconds);
 }
 
@@ -439,7 +437,7 @@ void UAnimGraphInstance::BuildGraph()
 {
 	Bindings.clear();
 	AimOffsetBindings.clear();
-	SlotDefaults.clear();
+	AlphaBindings.clear();
 	StateIds.clear();
 	SequencePlayers.clear();
 	GraphMachine = nullptr;
@@ -583,26 +581,42 @@ void UAnimGraphInstance::BuildGraph()
 		{
 			RuntimeNodes[NodeDef.Id] = GraphMachine;
 		}
+		else if (NodeDef.Type == ERootAnimNodeType::SequencePlayer)
+		{
+			UAnimSequence* Sequence = UAssetManager::LoadAnimSequence(NodeDef.SequencePath);
+			if (!Sequence || Sequence->Skeleton != Mesh->Skeleton || !Sequence->GetDataModel())
+			{
+				HTR_LOG(Warning, "AnimGraph root sequence is missing or incompatible: {}", NodeDef.SequencePath);
+				continue;
+			}
+			auto* Player = CreateNode<FAnimNode_SequencePlayer>();
+			Player->Sequence = Sequence;
+			Player->PlayRate = NodeDef.PlayRate;
+			RuntimeNodes[NodeDef.Id] = Player;
+		}
 		else if (NodeDef.Type == ERootAnimNodeType::Slot)
 		{
 			auto* SlotNode = CreateNode<FAnimNode_Slot>();
 			SlotNode->SlotName = NodeDef.SlotName.empty() ? "UpperBody" : NodeDef.SlotName;
 			SlotNode->GraphInstance = this;
 			RuntimeNodes[NodeDef.Id] = SlotNode;
-			SlotDefaults.push_back({ SlotNode->SlotName, NodeDef.MontagePath });
 		}
 		else if (NodeDef.Type == ERootAnimNodeType::LayeredBlendPerBone)
 		{
 			auto* BlendNode = CreateNode<FAnimNode_LayeredBoneBlend>();
 			BlendNode->StartBoneName = NodeDef.StartBoneName.empty() ? "spine_01" : NodeDef.StartBoneName;
 			BlendNode->Alpha = NodeDef.Alpha;
+			BlendNode->bMeshSpaceRotationBlend = NodeDef.bMeshSpaceRotationBlend;
+			if (NodeDef.AlphaInput != EAnimGraphInput::Constant)
+				AlphaBindings.push_back({ &BlendNode->Alpha, NodeDef.AlphaInput });
 			RuntimeNodes[NodeDef.Id] = BlendNode;
 		}
 		else if (NodeDef.Type == ERootAnimNodeType::AimOffset)
 		{
 			auto* AimNode = CreateNode<FAnimNode_AimOffset1D>();
-			AimNode->StartBoneName = NodeDef.StartBoneName.empty() ? "spine_01" : NodeDef.StartBoneName;
 			AimNode->Alpha = NodeDef.Alpha;
+			if (NodeDef.AlphaInput != EAnimGraphInput::Constant)
+				AlphaBindings.push_back({ &AimNode->Alpha, NodeDef.AlphaInput });
 			if (!NodeDef.AimOffsetPath.empty())
 			{
 				FString AimError;

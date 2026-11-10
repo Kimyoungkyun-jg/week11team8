@@ -169,7 +169,7 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 	{
 		if (Transition.Id <= 0 || !TransitionIds.insert(Transition.Id).second ||
 			(Transition.From != -1 && !StateIds.contains(Transition.From)) || !StateIds.contains(Transition.To) || Transition.From == Transition.To ||
-			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > 12 ||
+			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > 13 ||
 			(Transition.From == -1 && (Transition.Input != EAnimGraphInput::HitRequested ||
 				Transition.Compare != EAnimGraphCompare::Greater || Transition.Threshold != 0.0f || bHasAnyHitTransition)) ||
 			(Transition.Compare != EAnimGraphCompare::Always && Transition.Input == EAnimGraphInput::Constant) ||
@@ -206,9 +206,13 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 		for (const auto& Node : RootNodes)
 		{
 			if (Node.Id <= 0 || !RootIds.insert(Node.Id).second ||
-				static_cast<int>(Node.Type) < 0 || static_cast<int>(Node.Type) > 4 ||
+				static_cast<int>(Node.Type) < 0 || static_cast<int>(Node.Type) > 5 ||
 				!std::isfinite(Node.X) || !std::isfinite(Node.Y) ||
-				!std::isfinite(Node.Alpha) || !std::isfinite(Node.ConstantPitch))
+				!std::isfinite(Node.Alpha) || !std::isfinite(Node.ConstantPitch) ||
+				!std::isfinite(Node.PlayRate) || Node.PlayRate <= 0.0f ||
+				(Node.AlphaInput != EAnimGraphInput::Constant && Node.AlphaInput != EAnimGraphInput::IsAiming) ||
+				(Node.Type == ERootAnimNodeType::SequencePlayer &&
+				(Node.SequencePath.empty() || !HasPoseAssetExtension(EAnimGraphPose::Sequence, Node.SequencePath))))
 			{ Error = "Invalid root graph node."; return false; }
 			if (Node.Type == ERootAnimNodeType::StateMachine) ++SmCount;
 			if (Node.Type == ERootAnimNodeType::OutputPose) ++OutCount;
@@ -330,10 +334,17 @@ bool FAnimGraphAsset::Load(const FString& Path, FAnimGraphAsset& Out, FString& E
 			if (Item.contains("SourceNodeId")) ReadInt(Item, "SourceNodeId", Node.SourceNodeId);
 			if (Item.contains("SecondarySourceNodeId")) ReadInt(Item, "SecondarySourceNodeId", Node.SecondarySourceNodeId);
 			if (Item.contains("SlotName") && Item["SlotName"].is_string()) Node.SlotName = Item["SlotName"].get<FString>();
-			if (Item.contains("MontagePath") && Item["MontagePath"].is_string()) Node.MontagePath = Item["MontagePath"].get<FString>();
-			if (Item.contains("StartBoneName") && Item["StartBoneName"].is_string()) Node.StartBoneName = Item["StartBoneName"].get<FString>();
+			if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone && Item.contains("StartBoneName") && Item["StartBoneName"].is_string())
+				Node.StartBoneName = Item["StartBoneName"].get<FString>();
+			if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone && Item.contains("MeshSpaceRotationBlend") && Item["MeshSpaceRotationBlend"].is_boolean())
+				Node.bMeshSpaceRotationBlend = Item["MeshSpaceRotationBlend"].get<bool>();
 			if (Item.contains("AimOffsetPath") && Item["AimOffsetPath"].is_string()) Node.AimOffsetPath = Item["AimOffsetPath"].get<FString>();
+			if (Item.contains("SequencePath") && Item["SequencePath"].is_string()) Node.SequencePath = Item["SequencePath"].get<FString>();
 			if (Item.contains("Alpha")) ReadFloat(Item, "Alpha", Node.Alpha);
+			int32 AlphaInputInt = static_cast<int32>(EAnimGraphInput::Constant);
+			if (Item.contains("AlphaInput") && ReadInt(Item, "AlphaInput", AlphaInputInt))
+				Node.AlphaInput = static_cast<EAnimGraphInput>(AlphaInputInt);
+			if (Item.contains("PlayRate")) ReadFloat(Item, "PlayRate", Node.PlayRate);
 			int32 PitchInputInt = static_cast<int32>(EAnimGraphInput::AimPitch);
 			if (Item.contains("PitchInput") && ReadInt(Item, "PitchInput", PitchInputInt))
 				Node.PitchInput = static_cast<EAnimGraphInput>(PitchInputInt);
@@ -378,15 +389,22 @@ bool FAnimGraphAsset::Save(const FString& Path, FString& Error) const
 		{ "RootNodes", json::array() }, { "RootLinks", json::array() } };
 	for (const auto& Node : RootNodes)
 	{
-		Data["RootNodes"].push_back({
+		json NodeData = {
 			{ "Id", Node.Id }, { "Type", static_cast<int>(Node.Type) }, { "Name", Node.Name },
 			{ "X", Node.X }, { "Y", Node.Y },
 			{ "SourceNodeId", Node.SourceNodeId }, { "SecondarySourceNodeId", Node.SecondarySourceNodeId },
-			{ "SlotName", Node.SlotName }, { "MontagePath", Node.MontagePath },
-			{ "StartBoneName", Node.StartBoneName }, { "AimOffsetPath", Node.AimOffsetPath },
-			{ "Alpha", Node.Alpha }, { "PitchInput", static_cast<int>(Node.PitchInput) },
+			{ "SlotName", Node.SlotName },
+			{ "AimOffsetPath", Node.AimOffsetPath }, { "SequencePath", Node.SequencePath },
+			{ "Alpha", Node.Alpha }, { "AlphaInput", static_cast<int>(Node.AlphaInput) },
+			{ "PlayRate", Node.PlayRate }, { "PitchInput", static_cast<int>(Node.PitchInput) },
 			{ "ConstantPitch", Node.ConstantPitch }
-		});
+		};
+		if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone)
+		{
+			NodeData["StartBoneName"] = Node.StartBoneName;
+			NodeData["MeshSpaceRotationBlend"] = Node.bMeshSpaceRotationBlend;
+		}
+		Data["RootNodes"].push_back(std::move(NodeData));
 	}
 	for (const auto& Link : RootLinks)
 	{
@@ -576,7 +594,6 @@ bool FAimOffsetAsset::Load(const FString& Path, FAimOffsetAsset& Out, FString& E
 	if (Data.contains("Skeleton") && Data["Skeleton"].is_string()) Loaded.SkeletonPath = Data["Skeleton"].get<FString>();
 	if (Data.contains("BaseSequence") && Data["BaseSequence"].is_string()) Loaded.BaseSequencePath = Data["BaseSequence"].get<FString>();
 	if (Data.contains("BaseFrameIndex")) ReadInt(Data, "BaseFrameIndex", Loaded.BaseFrameIndex);
-	if (Data.contains("StartBoneName") && Data["StartBoneName"].is_string()) Loaded.StartBoneName = Data["StartBoneName"].get<FString>();
 	if (Data.contains("MinPitch") && !ReadFloat(Data, "MinPitch", Loaded.MinPitch)) { Error = "Invalid MinPitch."; return false; }
 	if (Data.contains("MaxPitch") && !ReadFloat(Data, "MaxPitch", Loaded.MaxPitch)) { Error = "Invalid MaxPitch."; return false; }
 	if (Data.contains("Samples") && Data["Samples"].is_array())
@@ -607,7 +624,6 @@ bool FAimOffsetAsset::Save(const FString& Path, FString& Error) const
 		{ "Skeleton", SkeletonPath },
 		{ "BaseSequence", BaseSequencePath },
 		{ "BaseFrameIndex", BaseFrameIndex },
-		{ "StartBoneName", StartBoneName },
 		{ "MinPitch", MinPitch },
 		{ "MaxPitch", MaxPitch },
 		{ "Samples", json::array() }

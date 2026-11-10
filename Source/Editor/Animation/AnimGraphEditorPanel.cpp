@@ -33,7 +33,7 @@ namespace
 	constexpr const char* InputNames[] = {
 		"Constant", "Speed", "Direction", "Jump Requested", "Falling", "Grounded",
 		"Moving On Ground", "Sequence Ending", "Hit Requested",
-		"Sequence Ending + Grounded", "Sequence Ending + Airborne", "Attack Requested", "AimPitch"
+		"Sequence Ending + Grounded", "Sequence Ending + Airborne", "Attack Requested", "AimPitch", "IsAiming"
 	};
 	constexpr const char* CompareNames[] = { "Always", ">", ">=", "<", "<=" };
 
@@ -58,6 +58,7 @@ namespace
 		case ERootAnimNodeType::LayeredBlendPerBone: return ImVec2(215.0f, 94.0f);
 		case ERootAnimNodeType::AimOffset: return ImVec2(205.0f, 84.0f);
 		case ERootAnimNodeType::OutputPose: return ImVec2(160.0f, 70.0f);
+		case ERootAnimNodeType::SequencePlayer: return ImVec2(215.0f, 84.0f);
 		}
 		return ImVec2(180.0f, 70.0f);
 	}
@@ -71,6 +72,7 @@ namespace
 		case ERootAnimNodeType::LayeredBlendPerBone: return 2;
 		case ERootAnimNodeType::AimOffset: return 1;
 		case ERootAnimNodeType::OutputPose: return 1;
+		case ERootAnimNodeType::SequencePlayer: return 0;
 		}
 		return 0;
 	}
@@ -207,7 +209,6 @@ void FAnimGraphEditorPanel::NewAimOffsetAsset(const FString& InPath)
 		? Graph.SkeletonPath : "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin";
 	NewAim.BaseSequencePath = "Models/UnrealModel/AS_MF_Rifle_Idle_ADS.fbxbin";
 	NewAim.BaseFrameIndex = 0;
-	NewAim.StartBoneName = "spine_01";
 	NewAim.MinPitch = -90.0f;
 	NewAim.MaxPitch = 90.0f;
 	NewAim.Samples.push_back({ -90.0f, "Models/UnrealModel/AS_MF_Rifle_Aim_Down.fbxbin", 0 });
@@ -340,6 +341,7 @@ void FAnimGraphEditorPanel::RefreshPreviewGraph()
 			if (NotifyName == "Fire") ++PreviewFireCount;
 		});
 		Instance->SetPreviewAimPitch(PreviewAimPitch);
+		Instance->SetIsAiming(bPreviewAiming);
 		if (!Instance->SetPreviewGraph(Graph)) Status = "Preview: animation asset or skeleton is incompatible.";
 		else if (Status.starts_with("Preview:")) Status.clear();
 	}
@@ -360,6 +362,7 @@ void FAnimGraphEditorPanel::Tick(float DeltaTime)
 	{
 		Instance->SetPreviewFalling(bPreviewFalling);
 		Instance->SetPreviewAimPitch(PreviewAimPitch);
+		Instance->SetIsAiming(bPreviewAiming);
 	}
 	PreviewWorld->Tick(DeltaTime);
 	PreviewCharacter->GetSkeletalMeshComponent()->TickComponent(DeltaTime);
@@ -385,17 +388,29 @@ void FAnimGraphEditorPanel::DrawPreview()
 	if (ImGui::Button("Fire") && PreviewCharacter)
 	{
 		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
-			Instance->PlaySlotDefaultMontage("UpperBody");
+			Instance->PlayMontage(MontageEditPath);
 	}
 	ImGui::SameLine();
 	if (ImGui::Button("Stop Montage") && PreviewCharacter)
 	{
 		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
-			Instance->StopMontage("UpperBody");
+			Instance->StopMontage();
+	}
+	if (ImGui::BeginCombo("Preview Montage", MontageEditPath.c_str()))
+	{
+		std::error_code Ec;
+		for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+		{
+			if (It->path().extension() != ".animmontage") continue;
+			const FString Candidate = FbxPath::ToString(It->path());
+			if (ImGui::Selectable(Candidate.c_str(), MontageEditPath == Candidate)) MontageEditPath = Candidate;
+		}
+		ImGui::EndCombo();
 	}
 
 	ImGui::SliderFloat("Speed", &PreviewSpeed, 0.0f, 600.0f, "%.0f");
 	ImGui::SliderFloat("Direction", &PreviewDirection, -180.0f, 180.0f, "%.0f");
+	ImGui::Checkbox("IsAiming", &bPreviewAiming);
 	if (ImGui::SliderFloat("AimPitch", &PreviewAimPitch, -90.0f, 90.0f, "%.1f deg"))
 	{
 		if (PreviewCharacter)
@@ -422,7 +437,7 @@ void FAnimGraphEditorPanel::DrawPreview()
 		PreviewSpeed = 300.0f; bPreviewFalling = false;
 		if (PreviewCharacter)
 			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
-				Instance->PlaySlotDefaultMontage("UpperBody");
+				Instance->PlayMontage(MontageEditPath);
 	}
 	ImGui::SameLine();
 	if (ImGui::SmallButton("AimUp+Fire"))
@@ -432,7 +447,7 @@ void FAnimGraphEditorPanel::DrawPreview()
 			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
 			{
 				Instance->SetPreviewAimPitch(PreviewAimPitch);
-				Instance->PlaySlotDefaultMontage("UpperBody");
+				Instance->PlayMontage(MontageEditPath);
 			}
 	}
 	ImGui::SameLine();
@@ -443,7 +458,7 @@ void FAnimGraphEditorPanel::DrawPreview()
 			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
 			{
 				Instance->RequestJump();
-				Instance->PlaySlotDefaultMontage("UpperBody");
+				Instance->PlayMontage(MontageEditPath);
 			}
 	}
 
@@ -575,6 +590,7 @@ void FAnimGraphEditorPanel::DrawTree()
 	ImGui::BulletText("Speed (%.1f)", PreviewSpeed);
 	ImGui::BulletText("Direction (%.1f)", PreviewDirection);
 	ImGui::BulletText("AimPitch (%.1f)", PreviewAimPitch);
+	ImGui::BulletText("IsAiming (%s)", bPreviewAiming ? "true" : "false");
 	ImGui::Separator();
 	if (ImGui::Button("Montage Editor")) bMontageEditorOpen = true;
 	ImGui::SameLine();
@@ -631,7 +647,7 @@ void FAnimGraphEditorPanel::DrawRoot(ImDrawList* Draw, ImVec2 Origin, ImVec2 Siz
 		{
 			FillColor = IM_COL32(62, 48, 72, 255);
 			TypeHeader = "Slot";
-			SubLabel = Node.SlotName + (Node.MontagePath.empty() ? "" : (" (" + FbxPath::FromString(Node.MontagePath).stem().string() + ")"));
+			SubLabel = Node.SlotName;
 		}
 		else if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone)
 		{
@@ -652,6 +668,12 @@ void FAnimGraphEditorPanel::DrawRoot(ImDrawList* Draw, ImVec2 Origin, ImVec2 Siz
 			FillColor = IM_COL32(64, 55, 47, 255);
 			TypeHeader = "Output Pose";
 			SubLabel = "Result";
+		}
+		else if (Node.Type == ERootAnimNodeType::SequencePlayer)
+		{
+			FillColor = IM_COL32(42, 66, 58, 255);
+			TypeHeader = "Sequence Player";
+			SubLabel = FbxPath::FromString(Node.SequencePath).stem().string();
 		}
 
 		Draw->AddRectFilled(Min, Max, FillColor, 6.0f);
@@ -710,11 +732,6 @@ void FAnimGraphEditorPanel::DrawRoot(ImDrawList* Draw, ImVec2 Origin, ImVec2 Siz
 		if (Double && Inside(Mouse, Min, Max))
 		{
 			if (Node.Type == ERootAnimNodeType::StateMachine) View = EView::Machine;
-			else if (Node.Type == ERootAnimNodeType::Slot)
-			{
-				if (!Node.MontagePath.empty()) OpenMontageAsset(Node.MontagePath);
-				else bMontageEditorOpen = true;
-			}
 			else if (Node.Type == ERootAnimNodeType::AimOffset)
 			{
 				if (!Node.AimOffsetPath.empty()) OpenAimOffsetAsset(Node.AimOffsetPath);
@@ -1167,7 +1184,6 @@ void FAnimGraphEditorPanel::DrawCanvas()
 			Node.Type = ERootAnimNodeType::Slot;
 			Node.Name = "Slot UpperBody";
 			Node.SlotName = "UpperBody";
-			Node.MontagePath = "Assets/Animations/RifleFire.animmontage";
 			Node.X = SpawnX; Node.Y = SpawnY;
 			Graph.RootNodes.push_back(std::move(Node));
 			SelectedRootNodeId = Graph.RootNodes.back().Id;
@@ -1188,13 +1204,24 @@ void FAnimGraphEditorPanel::DrawCanvas()
 			Graph.SyncRootLinksFromNodes();
 			bDirty = bPreviewRefreshRequested = true;
 		}
+		if (ImGui::MenuItem("Add Sequence Player"))
+		{
+			FRootAnimGraphNode Node;
+			Node.Id = NextRootNodeId();
+			Node.Type = ERootAnimNodeType::SequencePlayer;
+			Node.Name = "Sequence Player";
+			Node.X = SpawnX; Node.Y = SpawnY;
+			Graph.RootNodes.push_back(std::move(Node));
+			SelectedRootNodeId = Graph.RootNodes.back().Id;
+			Graph.SyncRootLinksFromNodes();
+			bDirty = bPreviewRefreshRequested = true;
+		}
 		if (ImGui::MenuItem("Add Aim Offset 1D"))
 		{
 			FRootAnimGraphNode Node;
 			Node.Id = NextRootNodeId();
 			Node.Type = ERootAnimNodeType::AimOffset;
 			Node.Name = "Aim Offset 1D";
-			Node.StartBoneName = "spine_01";
 			Node.AimOffsetPath = "Assets/Animations/RifleAimOffset.aimoffset";
 			Node.PitchInput = EAnimGraphInput::AimPitch;
 			Node.Alpha = 1.0f;
@@ -1223,11 +1250,13 @@ void FAnimGraphEditorPanel::DrawCanvas()
 		{
 			Graph.RootNodes.clear();
 			FRootAnimGraphNode Sm; Sm.Id = 1; Sm.Type = ERootAnimNodeType::StateMachine; Sm.Name = "Locomotion"; Sm.X = 30.0f; Sm.Y = 120.0f;
-			FRootAnimGraphNode Slot; Slot.Id = 2; Slot.Type = ERootAnimNodeType::Slot; Slot.Name = "UpperBody Slot"; Slot.SlotName = "UpperBody"; Slot.MontagePath = "Assets/Animations/RifleFire.animmontage"; Slot.SourceNodeId = 1; Slot.X = 250.0f; Slot.Y = 210.0f;
-			FRootAnimGraphNode Layer; Layer.Id = 3; Layer.Type = ERootAnimNodeType::LayeredBlendPerBone; Layer.Name = "Layered Blend per Bone"; Layer.StartBoneName = "spine_01"; Layer.Alpha = 1.0f; Layer.SourceNodeId = 1; Layer.SecondarySourceNodeId = 2; Layer.X = 480.0f; Layer.Y = 130.0f;
-			FRootAnimGraphNode Aim; Aim.Id = 4; Aim.Type = ERootAnimNodeType::AimOffset; Aim.Name = "Aim Offset 1D"; Aim.StartBoneName = "spine_01"; Aim.AimOffsetPath = "Assets/Animations/RifleAimOffset.aimoffset"; Aim.PitchInput = EAnimGraphInput::AimPitch; Aim.Alpha = 1.0f; Aim.SourceNodeId = 3; Aim.X = 735.0f; Aim.Y = 135.0f;
-			FRootAnimGraphNode Out; Out.Id = 5; Out.Type = ERootAnimNodeType::OutputPose; Out.Name = "Output Pose"; Out.SourceNodeId = 4; Out.X = 980.0f; Out.Y = 140.0f;
-			Graph.RootNodes = { Sm, Slot, Layer, Aim, Out };
+			FRootAnimGraphNode Slot; Slot.Id = 2; Slot.Type = ERootAnimNodeType::Slot; Slot.Name = "UpperBody Slot"; Slot.SlotName = "UpperBody"; Slot.SourceNodeId = 7; Slot.X = 520.0f; Slot.Y = 230.0f;
+			FRootAnimGraphNode Layer; Layer.Id = 3; Layer.Type = ERootAnimNodeType::LayeredBlendPerBone; Layer.Name = "UpperBody Result"; Layer.StartBoneName = "spine_01"; Layer.Alpha = 1.0f; Layer.SourceNodeId = 7; Layer.SecondarySourceNodeId = 4; Layer.X = 1030.0f; Layer.Y = 120.0f;
+			FRootAnimGraphNode Aim; Aim.Id = 4; Aim.Type = ERootAnimNodeType::AimOffset; Aim.Name = "Aim Offset 1D"; Aim.AimOffsetPath = "Assets/Animations/RifleAimOffset.aimoffset"; Aim.PitchInput = EAnimGraphInput::AimPitch; Aim.AlphaInput = EAnimGraphInput::IsAiming; Aim.SourceNodeId = 2; Aim.X = 780.0f; Aim.Y = 230.0f;
+			FRootAnimGraphNode Out; Out.Id = 5; Out.Type = ERootAnimNodeType::OutputPose; Out.Name = "Output Pose"; Out.SourceNodeId = 3; Out.X = 1280.0f; Out.Y = 140.0f;
+			FRootAnimGraphNode Ads; Ads.Id = 6; Ads.Type = ERootAnimNodeType::SequencePlayer; Ads.Name = "ADS Idle"; Ads.SequencePath = "Models/UnrealModel/AS_MF_Rifle_Idle_ADS.fbxbin"; Ads.X = 30.0f; Ads.Y = 320.0f;
+			FRootAnimGraphNode AimLayer; AimLayer.Id = 7; AimLayer.Type = ERootAnimNodeType::LayeredBlendPerBone; AimLayer.Name = "ADS UpperBody"; AimLayer.StartBoneName = "spine_01"; AimLayer.bMeshSpaceRotationBlend = true; AimLayer.AlphaInput = EAnimGraphInput::IsAiming; AimLayer.SourceNodeId = 1; AimLayer.SecondarySourceNodeId = 6; AimLayer.X = 280.0f; AimLayer.Y = 120.0f;
+			Graph.RootNodes = { Sm, Slot, Layer, Aim, Out, Ads, AimLayer };
 			Graph.SyncRootLinksFromNodes();
 			SelectedRootNodeId = 3;
 			bDirty = bPreviewRefreshRequested = true;
@@ -1304,7 +1333,7 @@ void FAnimGraphEditorPanel::DrawDetails()
 		{
 			int Input = std::max(1, static_cast<int>(Transition->Input)) - 1;
 			if (ImGui::Combo("Condition Source", &Input,
-				"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0Hit Requested\0Sequence Ending + Grounded\0Sequence Ending + Airborne\0Attack Requested\0AimPitch\0"))
+				"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0Hit Requested\0Sequence Ending + Grounded\0Sequence Ending + Airborne\0Attack Requested\0AimPitch\0IsAiming\0"))
 			{ Transition->Input = static_cast<EAnimGraphInput>(Input + 1); bDirty = bPreviewRefreshRequested = true; }
 		}
 		const bool bSequenceEnding = Transition->Input == EAnimGraphInput::SequenceEnding ||
@@ -1400,41 +1429,54 @@ void FAnimGraphEditorPanel::DrawDetails()
 				RootNode->SlotName = SlotBuf;
 				bDirty = bPreviewRefreshRequested = true;
 			}
-			if (ImGui::BeginCombo("Montage Asset", RootNode->MontagePath.empty() ? "Select .animmontage" : RootNode->MontagePath.c_str()))
-			{
-				std::error_code Ec;
-				for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
-				{
-					if (It->path().extension() != ".animmontage") continue;
-					const FString Candidate = FbxPath::ToString(It->path());
-					if (ImGui::Selectable(Candidate.c_str(), RootNode->MontagePath == Candidate))
-					{
-						RootNode->MontagePath = Candidate;
-						bDirty = bPreviewRefreshRequested = true;
-					}
-				}
-				ImGui::EndCombo();
-			}
+			ImGui::TextWrapped("Gameplay selects a montage with PlayMontage. The montage's Slot routes it here.");
 			if (ImGui::Button("Edit Montage"))
-			{
-				if (!RootNode->MontagePath.empty()) OpenMontageAsset(RootNode->MontagePath);
-				else bMontageEditorOpen = true;
-			}
+				OpenMontageAsset(MontageEditPath);
 			ImGui::SameLine();
-			if (ImGui::Button("Play Slot Montage") && PreviewCharacter)
+			if (ImGui::Button("Play Preview Montage") && PreviewCharacter)
 			{
 				if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
-					Instance->PlaySlotDefaultMontage(RootNode->SlotName);
+					Instance->PlayMontage(MontageEditPath);
 			}
 		}
 		else if (RootNode->Type == ERootAnimNodeType::LayeredBlendPerBone)
 		{
 			ImGui::TextUnformatted("Type: Layered Blend per Bone");
 			DrawBoneSelector("Start Bone", RootNode->StartBoneName);
-			if (ImGui::SliderFloat("Alpha", &RootNode->Alpha, 0.0f, 1.0f, "%.2f"))
+			if (ImGui::Checkbox("Mesh Space Rotation Blend", &RootNode->bMeshSpaceRotationBlend))
+				bDirty = bPreviewRefreshRequested = true;
+			int AlphaMode = RootNode->AlphaInput == EAnimGraphInput::IsAiming ? 1 : 0;
+			if (ImGui::Combo("Alpha Input", &AlphaMode, "Constant\0IsAiming\0"))
+			{
+				RootNode->AlphaInput = AlphaMode ? EAnimGraphInput::IsAiming : EAnimGraphInput::Constant;
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			if (RootNode->AlphaInput == EAnimGraphInput::Constant &&
+				ImGui::SliderFloat("Alpha", &RootNode->Alpha, 0.0f, 1.0f, "%.2f"))
 			{
 				bDirty = bPreviewRefreshRequested = true;
 			}
+		}
+		else if (RootNode->Type == ERootAnimNodeType::SequencePlayer)
+		{
+			ImGui::TextUnformatted("Type: Sequence Player");
+			if (ImGui::BeginCombo("Animation", RootNode->SequencePath.empty() ? "Select sequence" : RootNode->SequencePath.c_str()))
+			{
+				TArray<UAnimSequence*> Sequences;
+				UAssetManager::GetAllAnimSequences(Sequences);
+				for (UAnimSequence* Sequence : Sequences)
+					if (Sequence && Sequence->Skeleton &&
+						(Graph.SkeletonPath.empty() || Graph.SkeletonPath == Sequence->Skeleton->GetPath()) &&
+						ImGui::Selectable(Sequence->GetPath().c_str(), RootNode->SequencePath == Sequence->GetPath()))
+					{
+						RootNode->SequencePath = Sequence->GetPath();
+						Graph.SkeletonPath = Sequence->Skeleton->GetPath();
+						bDirty = bPreviewRefreshRequested = true;
+					}
+				ImGui::EndCombo();
+			}
+			if (ImGui::DragFloat("Play Rate", &RootNode->PlayRate, 0.01f, 0.01f, 10.0f))
+				bDirty = bPreviewRefreshRequested = true;
 		}
 		else if (RootNode->Type == ERootAnimNodeType::AimOffset)
 		{
@@ -1454,7 +1496,6 @@ void FAnimGraphEditorPanel::DrawDetails()
 				}
 				ImGui::EndCombo();
 			}
-			DrawBoneSelector("Start Bone", RootNode->StartBoneName);
 			int PitchMode = (RootNode->PitchInput == EAnimGraphInput::AimPitch) ? 0 : 1;
 			if (ImGui::Combo("Pitch Input", &PitchMode, "AimPitch (Camera Pitch)\0Constant Pitch\0"))
 			{
@@ -1466,7 +1507,14 @@ void FAnimGraphEditorPanel::DrawDetails()
 				if (ImGui::SliderFloat("Constant Pitch", &RootNode->ConstantPitch, -90.0f, 90.0f, "%.1f"))
 					bDirty = bPreviewRefreshRequested = true;
 			}
-			if (ImGui::SliderFloat("Alpha", &RootNode->Alpha, 0.0f, 1.0f, "%.2f"))
+			int AlphaMode = RootNode->AlphaInput == EAnimGraphInput::IsAiming ? 1 : 0;
+			if (ImGui::Combo("Alpha Input", &AlphaMode, "Constant\0IsAiming\0"))
+			{
+				RootNode->AlphaInput = AlphaMode ? EAnimGraphInput::IsAiming : EAnimGraphInput::Constant;
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			if (RootNode->AlphaInput == EAnimGraphInput::Constant &&
+				ImGui::SliderFloat("Alpha", &RootNode->Alpha, 0.0f, 1.0f, "%.2f"))
 			{
 				bDirty = bPreviewRefreshRequested = true;
 			}
@@ -1590,14 +1638,9 @@ void FAnimGraphEditorPanel::DrawAssetBrowser()
 			{
 				if (It->path().extension() != ".animmontage") continue;
 				const FString Candidate = FbxPath::ToString(It->path());
-				const bool bSelected = RootNode && RootNode->Type == ERootAnimNodeType::Slot && RootNode->MontagePath == Candidate;
+				const bool bSelected = MontageEditPath == Candidate;
 				if (ImGui::Selectable(Candidate.c_str(), bSelected))
 				{
-					if (RootNode && RootNode->Type == ERootAnimNodeType::Slot)
-					{
-						RootNode->MontagePath = Candidate;
-						bDirty = bPreviewRefreshRequested = true;
-					}
 					OpenMontageAsset(Candidate);
 				}
 			}
@@ -1882,9 +1925,6 @@ void FAnimGraphEditorPanel::DrawAimOffsetEditorWindow()
 		ImGui::EndCombo();
 	}
 
-	char BoneBuf[128]{};
-	strncpy_s(BoneBuf, EditingAimOffset.StartBoneName.c_str(), sizeof(BoneBuf) - 1);
-	if (ImGui::InputText("Additive Start Bone", BoneBuf, sizeof(BoneBuf))) EditingAimOffset.StartBoneName = BoneBuf;
 	ImGui::DragFloat("Min Pitch", &EditingAimOffset.MinPitch, 1.0f, -180.0f, 0.0f);
 	ImGui::DragFloat("Max Pitch", &EditingAimOffset.MaxPitch, 1.0f, 0.0f, 180.0f);
 

@@ -141,7 +141,6 @@ void FAnimationAssetEditorPanel::EvaluatePreview()
 	Node.BasePose = &BasePlayer;
 	Node.Asset = AimOffset;
 	Node.BaseSequence = Base;
-	Node.StartBoneName = AimOffset.StartBoneName;
 	Node.Pitch = PreviewPitch;
 	for (const auto& Sample : AimOffset.Samples)
 	{
@@ -242,9 +241,6 @@ void FAnimationAssetEditorPanel::DrawAssetDetails()
 	bDirty |= ImGui::DragFloat("Minimum", &AimOffset.MinPitch, 1.0f, -180.0f, 180.0f);
 	bDirty |= ImGui::DragFloat("Maximum", &AimOffset.MaxPitch, 1.0f, -180.0f, 180.0f);
 	ImGui::SeparatorText("Additive Settings");
-	char Bone[128]{};
-	strncpy_s(Bone, AimOffset.StartBoneName.c_str(), sizeof(Bone) - 1);
-	if (ImGui::InputText("Start Bone", Bone, sizeof(Bone))) { AimOffset.StartBoneName = Bone; bDirty = true; }
 	ImGui::TextWrapped("Base Pose: %s", AimOffset.BaseSequencePath.empty() ? "Drag a sequence here." : AimOffset.BaseSequencePath.c_str());
 	bDirty |= ImGui::DragInt("Base Frame", &AimOffset.BaseFrameIndex, 1.0f, 0, 10000);
 	ImGui::Button("Drop Base Reference Pose", { -1, EditorUIScale::Px(28) });

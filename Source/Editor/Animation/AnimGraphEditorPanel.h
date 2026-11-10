@@ -92,6 +92,7 @@ private:
 	float PreviewSpeed = 0.0f;
 	float PreviewDirection = 0.0f;
 	float PreviewAimPitch = 0.0f;
+	bool bPreviewAiming = false;
 	bool bPreviewFalling = false;
 	bool bPreviewPlaying = true;
 	bool bVisible = false;

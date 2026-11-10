@@ -22,6 +22,7 @@ public:
 	virtual void Jump();
 	virtual void StopJumping();
 	virtual void Attack() {}
+	float PlayAnimMontage(const FString& MontagePath, float InPlayRate = 1.0f, const FString& StartSection = "");
 	UCapsuleComponent* GetCapsuleComponent() const { return CapsuleComponent; }
 	UCameraComponent* GetCameraComponent() const { return CameraComponent; }
 	UCharacterMovementComponent* GetCharacterMovement() const { return CharacterMovement; }

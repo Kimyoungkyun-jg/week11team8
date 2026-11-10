@@ -17,14 +17,15 @@ public:
 	float GetSpeed() const { return Speed; }
 	float GetDirection() const { return Direction; }
 	float GetAimPitch() const { return AimPitch; }
+	void SetIsAiming(bool bValue) { bIsAiming = bValue; }
+	bool IsAiming() const { return bIsAiming; }
 	void RequestJump() { bManualJumpRequested = true; }
 	void RequestHit();
 	void RequestAttack();
 	bool SetPreviewGraph(const FAnimGraphAsset& InGraph);
 	void SetPreviewFalling(bool bInFalling) { bPreviewMovementOverride = true; bPreviewFalling = bInFalling; }
 	void SetPreviewAimPitch(float InPitch) { bPreviewAimPitchOverride = true; PreviewAimPitch = InPitch; AimPitch = InPitch; }
-	bool PlayMontage(const FString& MontagePath, float InPlayRate = 1.0f, const FString& StartSection = "");
-	bool PlaySlotDefaultMontage(const FString& SlotName = "UpperBody");
+	float PlayMontage(const FString& MontagePath, float InPlayRate = 1.0f, const FString& StartSection = "");
 	void StopMontage(const FString& SlotName = "", float BlendOutOverride = -1.0f);
 	bool IsPlayingMontage(const FString& SlotName = "") const;
 	float GetMontagePosition(const FString& SlotName = "UpperBody") const;
@@ -53,10 +54,10 @@ private:
 		EAnimGraphInput PitchInput = EAnimGraphInput::AimPitch;
 		float ConstantPitch = 0.0f;
 	};
-	struct FSlotDefaultBinding
+	struct FAlphaBinding
 	{
-		FString SlotName;
-		FString MontagePath;
+		float* Alpha = nullptr;
+		EAnimGraphInput Input = EAnimGraphInput::Constant;
 	};
 	struct FActiveMontage
 	{
@@ -78,7 +79,7 @@ private:
 	bool bUsePreviewGraph = false;
 	std::vector<FInputBinding> Bindings;
 	std::vector<FAimOffsetBinding> AimOffsetBindings;
-	std::vector<FSlotDefaultBinding> SlotDefaults;
+	std::vector<FAlphaBinding> AlphaBindings;
 	std::vector<FActiveMontage> ActiveMontages;
 	std::function<void(const FString&)> OnMontageNotify;
 	FString LastTriggeredNotify;
@@ -91,6 +92,7 @@ private:
 	float Direction = 0.0f;
 	float AimPitch = 0.0f;
 	float PreviewAimPitch = 0.0f;
+	float AimBlendAlpha = 0.0f;
 	uint32 LastJumpCounter = 0;
 	bool bJumpRequested = false;
 	bool bManualJumpRequested = false;
@@ -102,6 +104,7 @@ private:
 	bool bPreviewMovementOverride = false;
 	bool bPreviewFalling = false;
 	bool bPreviewAimPitchOverride = false;
+	bool bIsAiming = false;
 	float InputValue(EAnimGraphInput Input, float Constant = 0.0f) const;
 	void UpdateMontages(float DeltaSeconds);
 };

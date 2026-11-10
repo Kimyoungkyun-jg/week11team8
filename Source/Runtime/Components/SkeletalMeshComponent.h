@@ -39,6 +39,8 @@ public:
 	static void SetSkinningMode(ESkinningMode Mode) { SkinningMode = Mode; }
 	static ESkinningMode GetSkinningMode() { return SkinningMode; }
 	ESkinningMode GetAppliedSkinningMode() const { return AppliedMode; }
+	FStructuredBuffer* GetSkinningMatricesBuffer() const
+	{ return AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr; }
 	// stat skinning: 등록된 컴포넌트를 세어 프레임 스탯을 마감한다. 프레임 끝에 한 번 부른다.
 	static void EndSkinningStatsFrame();
 	// r.Skinning.ForceUpdate: 포즈가 바뀌지 않아도 매 프레임 스키닝을 다시 한다 (애니메이션 재생과 같은 부하로 CPU/GPU 비교).

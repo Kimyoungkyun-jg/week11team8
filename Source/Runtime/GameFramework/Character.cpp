@@ -5,6 +5,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Animation/AnimGraphInstance.h"
 
 ACharacter::ACharacter()
 {
@@ -63,3 +64,9 @@ void ACharacter::AddControllerPitchInput(float Value)
 
 void ACharacter::Jump() { if (CharacterMovement) CharacterMovement->RequestJump(); }
 void ACharacter::StopJumping() { if (CharacterMovement) CharacterMovement->StopJumping(); }
+
+float ACharacter::PlayAnimMontage(const FString& MontagePath, float InPlayRate, const FString& StartSection)
+{
+	UAnimGraphInstance* AnimGraph = Cast<UAnimGraphInstance>(SkeletalMeshComponent ? SkeletalMeshComponent->GetAnimInstance() : nullptr);
+	return AnimGraph ? AnimGraph->PlayMontage(MontagePath, InPlayRate, StartSection) : 0.0f;
+}

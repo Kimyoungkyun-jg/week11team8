@@ -395,13 +395,47 @@ bool FAnimNode_LayeredBoneBlend::Evaluate(const USkeleton* Skeleton, TArray<FAni
 	TArray<uint8> BranchMask;
 	BuildBranchMask(Skeleton->RefSkeleton, StartBoneIndex, BranchMask);
 	const int32 NumBones = OutPose.Num();
+	TArray<FQuat> BaseCSRot, BlendCSRot, ResultCSRot;
+	if (bMeshSpaceRotationBlend)
+	{
+		BaseCSRot.SetNum(NumBones);
+		BlendCSRot.SetNum(NumBones);
+		ResultCSRot.SetNum(NumBones);
+		for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
+		{
+			const int32 ParentIdx = Skeleton->RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
+			const FQuat BaseLocal = OutPose[BoneIdx].Rotation.Normalized();
+			const FQuat BlendLocal = BlendPoseOut[BoneIdx].Rotation.Normalized();
+			BaseCSRot[BoneIdx] = ParentIdx >= 0 && ParentIdx < BoneIdx
+				? (BaseCSRot[ParentIdx] * BaseLocal).Normalized() : BaseLocal;
+			BlendCSRot[BoneIdx] = ParentIdx >= 0 && ParentIdx < BoneIdx
+				? (BlendCSRot[ParentIdx] * BlendLocal).Normalized() : BlendLocal;
+		}
+	}
 	for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
 	{
 		if (BranchMask[BoneIdx] != 0)
 		{
 			OutPose[BoneIdx].Position = FMath::Lerp(OutPose[BoneIdx].Position, BlendPoseOut[BoneIdx].Position, Weight);
-			OutPose[BoneIdx].Rotation = FMath::Slerp(OutPose[BoneIdx].Rotation, BlendPoseOut[BoneIdx].Rotation, Weight);
+			if (!bMeshSpaceRotationBlend)
+				OutPose[BoneIdx].Rotation = FMath::Slerp(OutPose[BoneIdx].Rotation, BlendPoseOut[BoneIdx].Rotation, Weight);
 			OutPose[BoneIdx].Scale = FMath::Lerp(OutPose[BoneIdx].Scale, BlendPoseOut[BoneIdx].Scale, Weight);
+		}
+	}
+	if (bMeshSpaceRotationBlend)
+	{
+		for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
+		{
+			if (BranchMask[BoneIdx] == 0)
+			{
+				ResultCSRot[BoneIdx] = BaseCSRot[BoneIdx];
+				continue;
+			}
+			const int32 ParentIdx = Skeleton->RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
+			const FQuat BlendedCS = FQuat::Slerp(BaseCSRot[BoneIdx], BlendCSRot[BoneIdx], Weight).Normalized();
+			OutPose[BoneIdx].Rotation = ParentIdx >= 0 && ParentIdx < BoneIdx
+				? (ResultCSRot[ParentIdx].UnitInverse() * BlendedCS).Normalized() : BlendedCS;
+			ResultCSRot[BoneIdx] = BlendedCS;
 		}
 	}
 	return true;
@@ -515,9 +549,6 @@ bool FAnimNode_AimOffset1D::Evaluate(const USkeleton* Skeleton, TArray<FAnimBone
 	if (!BasePose || !Skeleton || !BasePose->Evaluate(Skeleton, OutPose)) return false;
 	const float Weight = std::clamp(Alpha, 0.0f, 1.0f);
 	if (Weight <= 0.0f || Samples.IsEmpty()) return true;
-	const FString& EffectiveStartBone = !StartBoneName.empty() ? StartBoneName : Asset.StartBoneName;
-	const int32 StartBoneIndex = Skeleton->RefSkeleton.FindBoneIndex(EffectiveStartBone);
-	if (StartBoneIndex == INDEX_NONE) return true;
 
 	TArray<FAnimBoneTransform> RefPose, AimPose;
 	if (!EvaluateReferencePose(Skeleton, RefPose) || !SamplePoseAtPitch(Skeleton, Pitch, AimPose))
@@ -530,10 +561,7 @@ bool FAnimNode_AimOffset1D::Evaluate(const USkeleton* Skeleton, TArray<FAnimBone
 		return true;
 	}
 
-	TArray<uint8> BranchMask;
-	BuildBranchMask(Skeleton->RefSkeleton, StartBoneIndex, BranchMask);
-
-	// 메시 스페이스 기준 회전 차이를 구해 시작 본 이하 상체에 가산한다
+	// 메시 스페이스 기준 회전 차이를 구해 입력 포즈 전체에 가산한다. 본 범위는 Layered Blend 노드가 정한다.
 	TArray<FQuat> BaseCSRot;
 	TArray<FQuat> RefCSRot;
 	TArray<FQuat> AimCSRot;
@@ -562,21 +590,13 @@ bool FAnimNode_AimOffset1D::Evaluate(const USkeleton* Skeleton, TArray<FAnimBone
 			AimCSRot[BoneIdx] = AimLocal;
 		}
 
-		if (BranchMask[BoneIdx] != 0)
-		{
-			const FQuat FullDeltaCS = (AimCSRot[BoneIdx] * RefCSRot[BoneIdx].UnitInverse()).Normalized();
-			const FQuat WeightedDeltaCS = FQuat::Slerp(FQuat::Identity(), FullDeltaCS, Weight);
-			NewCSRot[BoneIdx] = (WeightedDeltaCS * BaseCSRot[BoneIdx]).Normalized();
-		}
-		else
-		{
-			NewCSRot[BoneIdx] = BaseCSRot[BoneIdx];
-		}
+		const FQuat FullDeltaCS = (AimCSRot[BoneIdx] * RefCSRot[BoneIdx].UnitInverse()).Normalized();
+		const FQuat WeightedDeltaCS = FQuat::Slerp(FQuat::Identity(), FullDeltaCS, Weight);
+		NewCSRot[BoneIdx] = (WeightedDeltaCS * BaseCSRot[BoneIdx]).Normalized();
 	}
 
 	for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
 	{
-		if (BranchMask[BoneIdx] == 0) continue;
 		const int32 ParentIdx = Skeleton->RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
 		if (ParentIdx >= 0 && ParentIdx < BoneIdx)
 		{

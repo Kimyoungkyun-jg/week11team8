@@ -4,6 +4,7 @@
 #include "TestCharacter.generated.h"
 
 class ARifleActor;
+class UUserWidget;
 
 UCLASS()
 class ATestCharacter : public ACharacter
@@ -16,6 +17,8 @@ public:
 	void EndPlay() override;
 	void Jump() override;
 	void Attack() override;
+	void StartAim();
+	void StopAim();
 	void LockJumpUntilLandingAnimation() { bJumpLocked = true; }
 	void OnLandingAnimationFinished() { bJumpLocked = false; }
 	void OnAttackAnimationStarted() { bAttackLocked = true; }
@@ -30,4 +33,13 @@ private:
 	FRotator RifleGripRotation = FRotator(0.0f, 0.0f, 0.0f);
 	bool bJumpLocked = false;
 	bool bAttackLocked = false;
+	bool bIsAiming = false;
+	float AimBlendAlpha = 0.0f;
+	float NormalArmLength = 2.8f;
+	float NormalFOV = 60.0f;
+	UPROPERTY(EditAnywhere)
+	float AimArmLength = 1.5f;
+	UPROPERTY(EditAnywhere)
+	float AimFOV = 70.0f;
+	UUserWidget* AimWidget = nullptr;
 };

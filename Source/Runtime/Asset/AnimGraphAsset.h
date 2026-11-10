@@ -4,10 +4,10 @@
 #include "Core/Types.h"
 #include <vector>
 
-enum class EAnimGraphInput { Constant, Speed, Direction, JumpRequested, Falling, Grounded, MovingOnGround, SequenceEnding, HitRequested, SequenceEndingGrounded, SequenceEndingAirborne, AttackRequested, AimPitch };
+enum class EAnimGraphInput { Constant, Speed, Direction, JumpRequested, Falling, Grounded, MovingOnGround, SequenceEnding, HitRequested, SequenceEndingGrounded, SequenceEndingAirborne, AttackRequested, AimPitch, IsAiming };
 enum class EAnimGraphPose { Sequence, BlendSpace1D, BlendSpace2D };
 enum class EAnimGraphCompare { Always, Greater, GreaterEqual, Less, LessEqual };
-enum class ERootAnimNodeType { StateMachine, Slot, LayeredBlendPerBone, AimOffset, OutputPose };
+enum class ERootAnimNodeType { StateMachine, Slot, LayeredBlendPerBone, AimOffset, OutputPose, SequencePlayer };
 
 struct FRootAnimGraphNode
 {
@@ -19,10 +19,13 @@ struct FRootAnimGraphNode
 	int32 SourceNodeId = 0;
 	int32 SecondarySourceNodeId = 0;
 	FString SlotName = "UpperBody";
-	FString MontagePath;
 	FString StartBoneName = "spine_01";
+	bool bMeshSpaceRotationBlend = false;
 	FString AimOffsetPath;
+	FString SequencePath;
 	float Alpha = 1.0f;
+	EAnimGraphInput AlphaInput = EAnimGraphInput::Constant;
+	float PlayRate = 1.0f;
 	EAnimGraphInput PitchInput = EAnimGraphInput::AimPitch;
 	float ConstantPitch = 0.0f;
 };
@@ -77,7 +80,6 @@ struct FAimOffsetAsset
 	FString SkeletonPath;
 	FString BaseSequencePath;
 	int32 BaseFrameIndex = 0;
-	FString StartBoneName = "spine_01";
 	float MinPitch = -90.0f;
 	float MaxPitch = 90.0f;
 	std::vector<FAimOffsetSample> Samples;

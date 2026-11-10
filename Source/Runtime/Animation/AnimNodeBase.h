@@ -130,6 +130,7 @@ struct FAnimNode_LayeredBoneBlend : FAnimNode_Base
 	FAnimNode_Base* BlendPose = nullptr;
 	FString StartBoneName = "spine_01";
 	float Alpha = 1.0f;
+	bool bMeshSpaceRotationBlend = false;
 	bool bGraphManaged = false;
 
 	void Reset() override;
@@ -164,7 +165,6 @@ struct FAnimNode_AimOffset1D : FAnimNode_Base
 	FAimOffsetAsset Asset;
 	UAnimSequence* BaseSequence = nullptr;
 	TArray<FSampleEntry> Samples;
-	FString StartBoneName = "spine_01";
 	float Pitch = 0.0f;
 	float Alpha = 1.0f;
 	bool bGraphManaged = false;

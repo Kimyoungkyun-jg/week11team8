@@ -78,6 +78,7 @@ void APlayerController::Possess(APawn* InPawn)
 
 void APlayerController::UnPossess()
 {
+	if (ATestCharacter* Character = Cast<ATestCharacter>(PossessedPawn)) Character->StopAim();
 	if (PossessedPawn) PossessedPawn->UnPossessed();
 	PossessedPawn = nullptr;
 	if (PlayerCameraManager) PlayerCameraManager->SetViewTarget(nullptr);
@@ -89,6 +90,16 @@ void APlayerController::InputKey(int32 Key, bool bDown)
 	const bool bJustPressed = bDown && !bKeyDown[Key];
 	bKeyDown[Key] = bDown;
 	ACharacter* Character = Cast<ACharacter>(PossessedPawn);
+	if (Key == static_cast<int32>(EKeyCode::RButton))
+	{
+		if (ATestCharacter* TestCharacter = Cast<ATestCharacter>(PossessedPawn))
+		{
+			if (!bDown) TestCharacter->StopAim();
+			else if (bJustPressed && GetWorld() && !GetWorld()->IsPaused() &&
+				(!GetWorld()->GetGameMode() || GetWorld()->GetGameMode()->AllowsPlayerControllerInput()))
+				TestCharacter->StartAim();
+		}
+	}
 	if (Key == static_cast<int32>(EKeyCode::Space) && Character)
 	{
 		if (!bDown) Character->StopJumping();
@@ -173,6 +184,7 @@ void APlayerController::ClearInputState()
 {
 	if (PossessedPawn)
 	{
+		if (ATestCharacter* Character = Cast<ATestCharacter>(PossessedPawn)) Character->StopAim();
 		if (ACharacter* Character = Cast<ACharacter>(PossessedPawn)) Character->StopJumping();
 		PossessedPawn->ConsumeMovementInputVector();
 	}

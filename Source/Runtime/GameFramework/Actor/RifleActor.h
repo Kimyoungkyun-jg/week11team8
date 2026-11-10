@@ -14,7 +14,7 @@ public:
 	ARifleActor();
 	void EndPlay() override;
 
-	AProjectileActor* Fire();
+	AProjectileActor* Fire(const FVector& CameraOrigin, const FVector& CameraDirection);
 	UStaticMeshComponent* GetStaticMeshComponent() const { return StaticMeshComponent; }
 	const TArray<AProjectileActor*>& GetProjectiles() const { return Projectiles; }
 
