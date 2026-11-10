@@ -17,6 +17,9 @@ local pendingHit = false
 
 local States = {}
 
+-- 공중 동작. 이 상태들은 떨어지는 중이어도 FallLoop로 끊지 않는다.
+local Airborne = { Jump = true, FallLoop = true, Hit = true }
+
 -- 상태를 바꾼다. exit → 전환 요청 → enter 순서로 부른다.
 local function Change(name, blend, restart)
     if current and States[current].exit then States[current].exit() end
@@ -29,15 +32,13 @@ States.Locomotion = {
     update = function(dt, input)
         -- simple.blendspace: X = 이동 방향(도), Y = 속력
         anim:SetInput("Locomotion", anim.Direction, math.min(anim.Speed, 600))
-        if input.jumped then return "Jump", 0.08 end
-        if anim.IsFalling then return "FallLoop", 0.10 end
         if input.attack and anim.IsGrounded then return "Attack", 0.08 end
     end,
 }
 
 States.Jump = {
     update = function(dt, input)
-        if anim.IsGrounded and not input.jumped then return "Land", 0.08 end
+        if anim.IsGrounded then return "Land", 0.08 end
         if anim:IsNearEnd("Jump", 0.12) then return "FallLoop", 0.12 end
     end,
 }
@@ -76,6 +77,9 @@ function OnHit()
 end
 
 function BeginPlay()
+    -- 엔진은 기본 폰일 때만 커서를 잠근다. 캐릭터도 시작하자마자 마우스로 시점을 돌리게 한다(PIE에서 Shift+F1로 해제).
+    SetCursorMode(CursorMode.Locked)
+
     anim = obj:GetAnimStateMachine()
     if not anim then
         print("[LuaAnim] 스켈레탈 메시가 없는 액터입니다: " .. obj.Name)
@@ -125,6 +129,17 @@ function AnimTick(dt)
     -- Any State: 어느 상태에서든 피격이 먼저다. 이미 피격 중이면 처음부터 다시 튼다.
     if input.hit and States.Hit then
         Change("Hit", 0.05, true)
+        return
+    end
+
+    -- 점프와 낙하도 어느 상태에서든 걸린다. 몸은 캐릭터 이동이 이미 띄웠으므로 동작이 따라가야 한다.
+    -- (착지·공격 도중에 점프해도 점프 입력을 버리지 않는다)
+    if input.jumped and States.Jump then
+        Change("Jump", 0.08)
+        return
+    end
+    if anim.IsFalling and not Airborne[current] and States.FallLoop then
+        Change("FallLoop", 0.10)
         return
     end
 
