@@ -128,6 +128,31 @@
       "SpeedOffsetY": 0.0,
       "X": 650.0,
       "Y": 240.0
+    },
+    {
+      "Asset": "Models/UnrealModel/AS_MM_HitReact_Front_Med_01.fbxbin",
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "DirectionOffsetX": 0.0,
+      "DirectionOffsetY": 0.0,
+      "Id": 6,
+      "InputX": 0,
+      "InputY": 0,
+      "Loop": false,
+      "Name": "Hit",
+      "OutputOffsetX": 0.0,
+      "OutputOffsetY": 0.0,
+      "OutputPlayerId": 0,
+      "PlayRate": 1.0,
+      "PlayerOffsetX": 0.0,
+      "PlayerOffsetY": 0.0,
+      "Players": [],
+      "Pose": 0,
+      "PoseConnected": true,
+      "SpeedOffsetX": 0.0,
+      "SpeedOffsetY": 0.0,
+      "X": 900.0,
+      "Y": 440.0
     }
   ],
   "Transitions": [
@@ -229,7 +254,36 @@
       "Input": 7,
       "Threshold": 0.11999999731779099,
       "To": 2
+    },
+    {
+      "Id": 12,
+      "From": -1,
+      "To": 6,
+      "Input": 8,
+      "Compare": 1,
+      "Threshold": 0.0,
+      "BlendTime": 0.08
+    },
+    {
+      "Id": 13,
+      "From": 6,
+      "To": 2,
+      "Input": 9,
+      "Compare": 1,
+      "Threshold": 0.12,
+      "BlendTime": 0.1
+    },
+    {
+      "Id": 14,
+      "From": 6,
+      "To": 4,
+      "Input": 10,
+      "Compare": 1,
+      "Threshold": 0.12,
+      "BlendTime": 0.1
     }
   ],
-  "Version": 1
+  "Version": 1,
+  "AnyStateX": 30.0,
+  "AnyStateY": 440.0
 }

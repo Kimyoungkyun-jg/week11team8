@@ -451,12 +451,15 @@ void FBlendSpaceEditorPanel::DrawGraph()
 		Samples[SelectedSample].Y = b2D ? Snap(Value.y, YAxis) : 0.0f;
 		bDirty = true; RebuildBlendSpace();
 	}
-	if (Hovered && ImGui::BeginDragDropTarget())
+	if (ImGui::BeginDragDropTarget())
 	{
 		if (const ImGuiPayload* Payload = ImGui::AcceptDragDropPayload(SequencePayload))
 		{
-			const ImVec2 Value = FromScreen(Mouse);
-			AddSample(static_cast<const char*>(Payload->Data), Value.x, Value.y);
+			if (InRect(Mouse, Min, Max))
+			{
+				const ImVec2 Value = FromScreen(Mouse);
+				AddSample(static_cast<const char*>(Payload->Data), Value.x, Value.y);
+			}
 		}
 		ImGui::EndDragDropTarget();
 	}

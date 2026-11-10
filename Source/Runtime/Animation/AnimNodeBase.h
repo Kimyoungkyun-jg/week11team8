@@ -109,6 +109,8 @@ struct FAnimNode_StateMachine : FAnimNode_Base
 	float TransitionElapsed = 0.0f;
 	float TransitionDuration = 0.0f;
 	std::function<void()> TransitionOnCompleted;
+	TArray<FAnimBoneTransform> InterruptedPose;
+	TArray<FAnimBoneTransform> LastEvaluatedPose;
 
 	int32 AddState(const FString& Name, FAnimNode_Base* PoseNode);
 	bool AddTransition(int32 FromState, int32 ToState, std::function<bool()> Condition,

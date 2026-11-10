@@ -4,7 +4,7 @@
 #include "Core/Types.h"
 #include <vector>
 
-enum class EAnimGraphInput { Constant, Speed, Direction, JumpRequested, Falling, Grounded, MovingOnGround, SequenceEnding };
+enum class EAnimGraphInput { Constant, Speed, Direction, JumpRequested, Falling, Grounded, MovingOnGround, SequenceEnding, HitRequested, SequenceEndingGrounded, SequenceEndingAirborne, AttackRequested };
 enum class EAnimGraphPose { Sequence, BlendSpace1D, BlendSpace2D };
 enum class EAnimGraphCompare { Always, Greater, GreaterEqual, Less, LessEqual };
 
@@ -64,6 +64,8 @@ struct FAnimGraphTransition
 struct FAnimGraphAsset
 {
 	FString SkeletonPath;
+	float AnyStateX = 20.0f;
+	float AnyStateY = 20.0f;
 	bool bRootPoseConnected = true;
 	bool bInvertDirection = false;
 	int32 EntryState = 0;

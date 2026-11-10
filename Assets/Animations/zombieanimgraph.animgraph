@@ -1,0 +1,93 @@
+{
+  "Version": 1,
+  "Skeleton": "Models/Zombie/SKEL_Zombie Idle_mixamorig_Hips.fbxbin",
+  "RootPoseConnected": true,
+  "EntryState": 1,
+  "AnyStateX": 30.0,
+  "AnyStateY": 420.0,
+  "States": [
+    {
+      "Id": 1,
+      "Name": "Locomotion",
+      "X": 120.0,
+      "Y": 220.0,
+      "Pose": 1,
+      "Asset": "Assets/Animations/zombie.blendspace",
+      "InputX": 1,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": true,
+      "PoseConnected": true
+    },
+    {
+      "Id": 2,
+      "Name": "Attack",
+      "X": 470.0,
+      "Y": 120.0,
+      "Pose": 0,
+      "Asset": "Models/Zombie/AS_Zombie Attack_IdleSkeleton.fbxbin",
+      "InputX": 0,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": false,
+      "PoseConnected": true
+    },
+    {
+      "Id": 3,
+      "Name": "Hit",
+      "X": 470.0,
+      "Y": 420.0,
+      "Pose": 0,
+      "Asset": "Models/Zombie/AS_Zombie Reaction Hit_IdleSkeleton.fbxbin",
+      "InputX": 0,
+      "InputY": 0,
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "PlayRate": 1.0,
+      "Loop": false,
+      "PoseConnected": true
+    }
+  ],
+  "Transitions": [
+    {
+      "Id": 1,
+      "From": 1,
+      "To": 2,
+      "Input": 11,
+      "Compare": 1,
+      "Threshold": 0.0,
+      "BlendTime": 0.1
+    },
+    {
+      "Id": 2,
+      "From": 2,
+      "To": 1,
+      "Input": 7,
+      "Compare": 1,
+      "Threshold": 0.1,
+      "BlendTime": 0.1
+    },
+    {
+      "Id": 3,
+      "From": -1,
+      "To": 3,
+      "Input": 8,
+      "Compare": 1,
+      "Threshold": 0.0,
+      "BlendTime": 0.08
+    },
+    {
+      "Id": 4,
+      "From": 3,
+      "To": 1,
+      "Input": 7,
+      "Compare": 1,
+      "Threshold": 0.1,
+      "BlendTime": 0.1
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 #include "EnginePCH.h"
 #include "GameFramework/Actor/ProjectileActor.h"
+#include "GameFramework/Actor/ZombieActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/ProjectileMovementComponent.h"
@@ -48,6 +49,17 @@ AProjectileActor::AProjectileActor()
     ProjectileMovementComponent->bInitialVelocityInLocalSpace = false;
     ProjectileMovementComponent->bSimulationEnabled = false;
     ProjectileMovementComponent->PrimaryComponentTick.bStartWithTickEnabled = false;
+}
+
+void AProjectileActor::BeginPlay()
+{
+    Super::BeginPlay();
+    ProjectileMovementComponent->OnProjectileImpact.AddDynamic(this, &AProjectileActor::HandleProjectileImpact);
+    if (bInFlight)
+    {
+        ProjectileMovementComponent->Activate(true);
+        PrimaryActorTick.SetTickFunctionEnable(true);
+    }
 }
 
 void AProjectileActor::Launch(const FVector& Position, const FVector& Direction, bool bUseStaticMesh)
@@ -119,4 +131,14 @@ void AProjectileActor::Tick(float DeltaTime)
     if (!bInFlight) return;
     RemainingLife -= DeltaTime;
     if (RemainingLife <= 0.0f || !ProjectileMovementComponent->bSimulationEnabled) ReturnToPool();
+}
+
+void AProjectileActor::HandleProjectileImpact(AActor* OtherActor)
+{
+    if (!bInFlight) return;
+    if (AZombieActor* Zombie = Cast<AZombieActor>(OtherActor))
+    {
+        Zombie->ReactToHit();
+        ReturnToPool();
+    }
 }

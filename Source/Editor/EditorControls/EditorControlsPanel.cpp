@@ -24,6 +24,8 @@
 #include "LevelSequence/LevelSequenceActor.h"
 #include "GameFramework/Actor/ExponentialHeightFogActor.h"
 #include "GameFramework/Actor/ProjectileActor.h"
+#include "GameFramework/Actor/RifleActor.h"
+#include "GameFramework/Actor/ZombieActor.h"
 #include "GameFramework/Actor/SkeletalMeshActor.h"
 #include "GameFramework/Actor/DecalActor.h"
 #include "GameFramework/Actor/FakeSpotLightActor.h"
@@ -54,6 +56,8 @@ namespace
 		{ "Effects",  "Particle",          &AParticleActor::StaticClass },
 		{ "Effects",  "Height Fog",        &AExponentialHeightFogActor::StaticClass },
 		{ "Gameplay", "Projectile",        &AProjectileActor::StaticClass },
+		{ "Gameplay", "Rifle",             &ARifleActor::StaticClass },
+		{ "Gameplay", "Zombie",            &AZombieActor::StaticClass },
 		{ "Gameplay", "Player Start",      &APlayerStart::StaticClass },
 		{ "Gameplay", "Level Sequence",    &ALevelSequenceActor::StaticClass },
 	};

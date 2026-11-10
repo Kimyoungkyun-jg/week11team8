@@ -41,6 +41,7 @@ namespace
 bool FAnimGraphAsset::Validate(FString& Error) const
 {
 	if (States.empty()) { Error = "Graph needs at least one state."; return false; }
+	if (!std::isfinite(AnyStateX) || !std::isfinite(AnyStateY)) { Error = "Invalid Any State position."; return false; }
 	if (States.size() > 256 || Transitions.size() > 1024) { Error = "Graph is too large."; return false; }
 	std::set<int32> StateIds, TransitionIds;
 	for (const auto& State : States)
@@ -81,16 +82,22 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 		}
 	}
 	if (!StateIds.contains(EntryState)) { Error = "Entry state is missing."; return false; }
+	bool bHasAnyHitTransition = false;
 	for (const auto& Transition : Transitions)
 	{
 		if (Transition.Id <= 0 || !TransitionIds.insert(Transition.Id).second ||
-			!StateIds.contains(Transition.From) || !StateIds.contains(Transition.To) || Transition.From == Transition.To ||
-			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > 7 ||
+			(Transition.From != -1 && !StateIds.contains(Transition.From)) || !StateIds.contains(Transition.To) || Transition.From == Transition.To ||
+			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > 11 ||
+			(Transition.From == -1 && (Transition.Input != EAnimGraphInput::HitRequested ||
+				Transition.Compare != EAnimGraphCompare::Greater || Transition.Threshold != 0.0f || bHasAnyHitTransition)) ||
 			(Transition.Compare != EAnimGraphCompare::Always && Transition.Input == EAnimGraphInput::Constant) ||
 			static_cast<int>(Transition.Compare) < 0 || static_cast<int>(Transition.Compare) > 4 ||
 			!std::isfinite(Transition.Threshold) || !std::isfinite(Transition.BlendTime) || Transition.BlendTime < 0)
 		{ Error = "Invalid transition."; return false; }
-		if (Transition.Input == EAnimGraphInput::SequenceEnding)
+		if (Transition.From == -1) bHasAnyHitTransition = true;
+		if (Transition.Input == EAnimGraphInput::SequenceEnding ||
+			Transition.Input == EAnimGraphInput::SequenceEndingGrounded ||
+			Transition.Input == EAnimGraphInput::SequenceEndingAirborne)
 		{
 			const auto From = std::find_if(States.begin(), States.end(),
 				[&](const FAnimGraphState& State) { return State.Id == Transition.From; });
@@ -127,6 +134,9 @@ bool FAnimGraphAsset::Load(const FString& Path, FAnimGraphAsset& Out, FString& E
 	{ Error = "Invalid AnimGraph format."; return false; }
 	FAnimGraphAsset Loaded;
 	Loaded.SkeletonPath = Data["Skeleton"].get<FString>();
+	if ((Data.contains("AnyStateX") && !ReadFloat(Data, "AnyStateX", Loaded.AnyStateX)) ||
+		(Data.contains("AnyStateY") && !ReadFloat(Data, "AnyStateY", Loaded.AnyStateY)))
+	{ Error = "Invalid Any State position."; return false; }
 	if (Data.contains("RootPoseConnected"))
 	{
 		if (!Data["RootPoseConnected"].is_boolean()) { Error = "Invalid root pose connection."; return false; }
@@ -216,7 +226,7 @@ bool FAnimGraphAsset::Save(const FString& Path, FString& Error) const
 	if (!Validate(Error)) return false;
 	const fs::path File = ResolvePath(Path);
 	if (File.empty()) { Error = "Invalid AnimGraph path."; return false; }
-	json Data = { { "Version", 1 }, { "Skeleton", SkeletonPath }, { "RootPoseConnected", bRootPoseConnected },
+	json Data = { { "Version", 1 }, { "Skeleton", SkeletonPath }, { "AnyStateX", AnyStateX }, { "AnyStateY", AnyStateY }, { "RootPoseConnected", bRootPoseConnected },
 		{ "InvertDirection", bInvertDirection }, { "EntryState", EntryState },
 		{ "States", json::array() }, { "Transitions", json::array() } };
 	for (const auto& State : States)

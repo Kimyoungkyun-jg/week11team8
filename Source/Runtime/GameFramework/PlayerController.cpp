@@ -2,6 +2,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/TestCharacter.h"
 #include "GameFramework/DefaultPawn.h"
 #include "Camera/PlayerCameraManager.h" 
 #include "Engine/World.h"               
@@ -68,8 +69,8 @@ void APlayerController::Possess(APawn* InPawn)
 	{
 		PossessedPawn->PossessedBy(this);
 		ControlRotation = PossessedPawn->GetActorRotation();
-		// 기본 폰은 UE PIE처럼 시작하자마자 마우스로 시점을 돌린다.
-		if (Cast<ADefaultPawn>(PossessedPawn))
+		// 기본 폰과 테스트 캐릭터는 UE PIE처럼 시작하자마자 마우스로 시점을 돌린다.
+		if (Cast<ADefaultPawn>(PossessedPawn) || Cast<ATestCharacter>(PossessedPawn))
 			SetCursorMode(ECursorMode::Locked);
 	}
 	if (PlayerCameraManager) PlayerCameraManager->SetViewTarget(PossessedPawn);
@@ -97,6 +98,10 @@ void APlayerController::InputKey(int32 Key, bool bDown)
 	}
 	if (Key == static_cast<int32>(EKeyCode::F) && bJustPressed && Character &&
 		GetWorld() && !GetWorld()->IsPaused() &&
+		(!GetWorld()->GetGameMode() || GetWorld()->GetGameMode()->AllowsPlayerControllerInput()))
+		Character->Attack();
+	if (Key == static_cast<int32>(EKeyCode::LButton) && bJustPressed &&
+		Cast<ATestCharacter>(PossessedPawn) && GetWorld() && !GetWorld()->IsPaused() &&
 		(!GetWorld()->GetGameMode() || GetWorld()->GetGameMode()->AllowsPlayerControllerInput()))
 		Character->Attack();
 	if (!bJustPressed || !PlayerCameraManager) return;

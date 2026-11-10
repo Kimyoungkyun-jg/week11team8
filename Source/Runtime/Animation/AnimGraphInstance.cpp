@@ -32,6 +32,30 @@ int32 UAnimGraphInstance::GetTargetStateId() const
 	return Index >= 0 && static_cast<size_t>(Index) < StateIds.size() ? StateIds[Index] : 0;
 }
 
+bool UAnimGraphInstance::IsStateActiveOrPending(const FString& Name) const
+{
+	const int32 ActiveId = GetActiveStateId();
+	const int32 TargetId = GetTargetStateId();
+	for (const FAnimGraphState& State : Graph.States)
+		if ((State.Id == ActiveId || State.Id == TargetId) && State.Name == Name) return true;
+	return false;
+}
+
+void UAnimGraphInstance::RequestHit()
+{
+	if (GraphMachine && HitStateIndex >= 0 &&
+		(GraphMachine->CurrentState == HitStateIndex || GraphMachine->NextState == HitStateIndex)) return;
+	bAttackRequested = false;
+	bHitRequested = true;
+}
+
+void UAnimGraphInstance::RequestAttack()
+{
+	if (GraphMachine && AttackStateIndex >= 0 &&
+		(GraphMachine->CurrentState == AttackStateIndex || GraphMachine->NextState == AttackStateIndex)) return;
+	bAttackRequested = true;
+}
+
 float UAnimGraphInstance::InputValue(EAnimGraphInput Input, float Constant) const
 {
 	switch (Input)
@@ -42,6 +66,8 @@ float UAnimGraphInstance::InputValue(EAnimGraphInput Input, float Constant) cons
 	case EAnimGraphInput::Falling: return bFalling ? 1.0f : 0.0f;
 	case EAnimGraphInput::Grounded: return bGrounded ? 1.0f : 0.0f;
 	case EAnimGraphInput::MovingOnGround: return bMovingOnGround ? 1.0f : 0.0f;
+	case EAnimGraphInput::HitRequested: return bHitRequested ? 1.0f : 0.0f;
+	case EAnimGraphInput::AttackRequested: return bAttackRequested ? 1.0f : 0.0f;
 	default: return Constant;
 	}
 }
@@ -88,8 +114,9 @@ void UAnimGraphInstance::NativeUpdateAnimation(float DeltaSeconds)
 
 void UAnimGraphInstance::BuildGraph()
 {
-	Bindings.clear(); StateIds.clear(); SequencePlayers.clear(); GraphMachine = nullptr;
+	Bindings.clear(); StateIds.clear(); SequencePlayers.clear(); GraphMachine = nullptr; HitStateIndex = AttackStateIndex = -1;
 	bJumpRequested = bManualJumpRequested = false;
+	bHitRequested = bAttackRequested = false;
 	USkeletalMeshComponent* Component = GetOwningComponent();
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
 	if (!Component || !Mesh || !Mesh->Skeleton || (!bUsePreviewGraph && Component->GetAnimGraphPath().empty())) return;
@@ -168,18 +195,28 @@ void UAnimGraphInstance::BuildGraph()
 	{
 		auto From = std::find(StateIds.begin(), StateIds.end(), Transition.From);
 		auto To = std::find(StateIds.begin(), StateIds.end(), Transition.To);
-		if (From == StateIds.end() || To == StateIds.end()) continue;
+		if ((Transition.From != -1 && From == StateIds.end()) || To == StateIds.end()) continue;
+		if (Transition.From == -1 && Transition.Input == EAnimGraphInput::HitRequested)
+			HitStateIndex = static_cast<int32>(To - StateIds.begin());
+		if (Transition.Input == EAnimGraphInput::AttackRequested)
+			AttackStateIndex = static_cast<int32>(To - StateIds.begin());
 		FAnimNode_SequencePlayer* FromPlayer = nullptr;
 		for (const auto& Entry : SequencePlayers) if (Entry.first == Transition.From) { FromPlayer = Entry.second; break; }
-		GraphMachine->AddTransition(static_cast<int32>(From - StateIds.begin()), static_cast<int32>(To - StateIds.begin()),
+		GraphMachine->AddTransition(Transition.From == -1 ? -1 : static_cast<int32>(From - StateIds.begin()),
+			static_cast<int32>(To - StateIds.begin()),
 			[this, Transition, FromPlayer]
 			{
-			if (Transition.Input == EAnimGraphInput::SequenceEnding)
+			if (Transition.Input == EAnimGraphInput::SequenceEnding ||
+				Transition.Input == EAnimGraphInput::SequenceEndingGrounded ||
+				Transition.Input == EAnimGraphInput::SequenceEndingAirborne)
 			{
 				if (!FromPlayer || !FromPlayer->Sequence || !FromPlayer->Sequence->GetDataModel()) return false;
 				const float TriggerTime = std::min(Transition.Threshold,
 					FromPlayer->Sequence->GetDataModel()->PlayLength * 0.5f);
-				return FromPlayer->IsFinished() || FromPlayer->GetRemainingTime() <= TriggerTime;
+				const bool bEnding = FromPlayer->IsFinished() || FromPlayer->GetRemainingTime() <= TriggerTime;
+				return bEnding && (Transition.Input == EAnimGraphInput::SequenceEnding ||
+					(Transition.Input == EAnimGraphInput::SequenceEndingGrounded && bGrounded) ||
+					(Transition.Input == EAnimGraphInput::SequenceEndingAirborne && !bGrounded));
 			}
 			const float Value = InputValue(Transition.Input);
 			switch (Transition.Compare)
@@ -192,7 +229,11 @@ void UAnimGraphInstance::BuildGraph()
 			}
 			return false;
 			}, Transition.BlendTime, {}, Transition.Input == EAnimGraphInput::JumpRequested
-				? std::function<void()>([this] { bJumpRequested = false; }) : std::function<void()>{});
+				? std::function<void()>([this] { bJumpRequested = false; }) :
+				Transition.Input == EAnimGraphInput::HitRequested
+				? std::function<void()>([this] { bHitRequested = false; }) :
+				Transition.Input == EAnimGraphInput::AttackRequested
+				? std::function<void()>([this] { bAttackRequested = false; }) : std::function<void()>{});
 	}
 	RootNode = GraphMachine;
 }

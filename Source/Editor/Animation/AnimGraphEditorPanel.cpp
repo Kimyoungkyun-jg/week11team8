@@ -27,7 +27,7 @@
 namespace
 {
 	constexpr const char* PoseNames[] = { "Sequence Player", "BlendSpace 1D Player", "BlendSpace 2D Player" };
-	constexpr const char* InputNames[] = { "Constant", "Speed", "Direction", "Jump Requested", "Falling", "Grounded", "Moving On Ground", "Sequence Ending" };
+	constexpr const char* InputNames[] = { "Constant", "Speed", "Direction", "Jump Requested", "Falling", "Grounded", "Moving On Ground", "Sequence Ending", "Hit Requested", "Sequence Ending + Grounded", "Sequence Ending + Airborne", "Attack Requested" };
 	constexpr const char* CompareNames[] = { "Always", ">", ">=", "<", "<=" };
 	bool Inside(ImVec2 P, ImVec2 Min, ImVec2 Max)
 	{
@@ -211,6 +211,10 @@ void FAnimGraphEditorPanel::DrawPreview()
 			Instance->RequestJump();
 	}
 	ImGui::SameLine();
+	if (ImGui::Button("Hit") && PreviewCharacter)
+		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			Instance->RequestHit();
+	ImGui::SameLine();
 	ImGui::Checkbox("Falling", &bPreviewFalling);
 	if (PreviewCharacter)
 		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
@@ -248,6 +252,7 @@ FAnimGraphState* FAnimGraphEditorPanel::SelectedState()
 
 FString FAnimGraphEditorPanel::StateName(int32 Id) const
 {
+	if (Id == -1) return "Any State";
 	for (const auto& State : Graph.States) if (State.Id == Id) return State.Name;
 	return "Unknown State";
 }
@@ -273,6 +278,8 @@ void FAnimGraphEditorPanel::DrawTree()
 	if (ImGui::TreeNodeEx("State Machine", ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		if (ImGui::Selectable("Main States", View == EView::Machine)) View = EView::Machine;
+		if (ImGui::Selectable("Any State", View == EView::Machine && SelectedId == -1))
+		{ SelectedId = -1; View = EView::Machine; }
 		for (const auto& State : Graph.States)
 		{
 			ImGui::PushID(State.Id);
@@ -345,19 +352,26 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 	const int32 ActiveState = PreviewInstance ? PreviewInstance->GetActiveStateId() : 0;
 	const int32 TargetState = PreviewInstance ? PreviewInstance->GetTargetStateId() : 0;
 	if (PendingFrom && bLinkDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left))
-		for (const auto& State : Graph.States) if (State.Id == PendingFrom)
+	{
+		if (PendingFrom == -1)
+			Draw->AddLine(ToScreen(Graph.AnyStateX + 120.0f, Graph.AnyStateY + 32.0f), Mouse,
+				IM_COL32(120, 210, 130, 255), 2.0f);
+		else for (const auto& State : Graph.States) if (State.Id == PendingFrom)
 		{
 			const ImVec2 Start = ToScreen(State.X + 160.0f, State.Y + 32.0f);
 			Draw->AddLine(Start, Mouse, IM_COL32(120, 210, 130, 255), 2.0f);
 			break;
 		}
+	}
 	if (PendingFrom && bLinkDragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
 	{
 		for (const auto& State : Graph.States)
 		{
 			const ImVec2 Min = ToScreen(State.X, State.Y);
 			if (State.Id == PendingFrom || !Inside(Mouse, Min, { Min.x + 160 * Zoom, Min.y + 64 * Zoom })) continue;
-			Graph.Transitions.push_back({ NextTransitionId(), PendingFrom, State.Id });
+			FAnimGraphTransition NewTransition{ NextTransitionId(), PendingFrom, State.Id };
+			if (PendingFrom == -1) NewTransition.Input = EAnimGraphInput::HitRequested;
+			Graph.Transitions.push_back(NewTransition);
 			SelectedId = Graph.Transitions.back().Id; View = EView::Transition; bDirty = bPreviewRefreshRequested = true;
 			break;
 		}
@@ -376,16 +390,19 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 			if (State.Id == Transition.From) From = &State;
 			if (State.Id == Transition.To) To = &State;
 		}
-		if (!From || !To) continue;
-		const float DX = To->X - From->X;
-		const float DY = To->Y - From->Y;
+		if ((!From && Transition.From != -1) || !To) continue;
+		const float FromX = From ? From->X : Graph.AnyStateX;
+		const float FromY = From ? From->Y : Graph.AnyStateY;
+		const float FromWidth = From ? 160.0f : 120.0f;
+		const float DX = To->X - FromX;
+		const float DY = To->Y - FromY;
 		const bool Horizontal = std::abs(DX) >= std::abs(DY);
 		const float Lane = (Transition.From < Transition.To ? -14.0f : 14.0f) * Zoom;
 		ImVec2 A, B, C1, C2;
 		if (Horizontal)
 		{
 			const bool Right = DX >= 0.0f;
-			A = ToScreen(From->X + (Right ? 160.0f : 0.0f), From->Y + 32.0f);
+			A = ToScreen(FromX + (Right ? FromWidth : 0.0f), FromY + 32.0f);
 			B = ToScreen(To->X + (Right ? 0.0f : 160.0f), To->Y + 32.0f);
 			A.y += Lane; B.y += Lane;
 			const float Handle = std::max(45.0f * Zoom, std::abs(B.x - A.x) * 0.4f);
@@ -395,14 +412,14 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		else
 		{
 			const bool Down = DY >= 0.0f;
-			A = ToScreen(From->X + 80.0f, From->Y + (Down ? 64.0f : 0.0f));
+			A = ToScreen(FromX + FromWidth * 0.5f, FromY + (Down ? 64.0f : 0.0f));
 			B = ToScreen(To->X + 80.0f, To->Y + (Down ? 0.0f : 64.0f));
 			A.x += Lane; B.x += Lane;
 			const float Handle = std::max(45.0f * Zoom, std::abs(B.y - A.y) * 0.4f);
 			C1 = { A.x, A.y + (Down ? Handle : -Handle) };
 			C2 = { B.x, B.y - (Down ? Handle : -Handle) };
 		}
-		const bool ActiveTransition = Transition.From == ActiveState && Transition.To == TargetState;
+		const bool ActiveTransition = (Transition.From == ActiveState || Transition.From == -1) && Transition.To == TargetState;
 		const bool SelectedTransition = View == EView::Transition &&
 			std::any_of(Rules.begin(), Rules.end(), [&](const auto* Rule) { return Rule->Id == SelectedId; });
 		const ImU32 Color = ActiveTransition ? IM_COL32(85, 220, 110, 255) :
@@ -429,7 +446,7 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		}
 		if (ImGui::IsItemHovered() && Inside(Mouse, { Mid.x - 13 * Zoom, Mid.y - 13 * Zoom },
 			{ Mid.x + 13 * Zoom, Mid.y + 13 * Zoom }))
-			ImGui::SetTooltip("%s -> %s (%d rule%s)", From->Name.c_str(), To->Name.c_str(),
+			ImGui::SetTooltip("%s -> %s (%d rule%s)", StateName(Transition.From).c_str(), To->Name.c_str(),
 				static_cast<int>(Rules.size()), Rules.size() == 1 ? "" : "s");
 		if (ImGui::BeginPopup("Transition Rules"))
 		{
@@ -445,6 +462,20 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		}
 		ImGui::PopID();
 	}
+	const ImVec2 AnyMin = ToScreen(Graph.AnyStateX, Graph.AnyStateY);
+	const ImVec2 AnyMax(AnyMin.x + 120.0f * Zoom, AnyMin.y + 64.0f * Zoom);
+	Draw->AddRectFilled(AnyMin, AnyMax, IM_COL32(58, 51, 67, 255), 6.0f);
+	Draw->AddRect(AnyMin, AnyMax, SelectedId == -1 && View == EView::Machine
+		? IM_COL32(240, 170, 80, 255) : IM_COL32(145, 125, 160, 255), 6.0f, ImDrawFlags_None, 2.0f);
+	Draw->AddText({ AnyMin.x + 12 * Zoom, AnyMin.y + 23 * Zoom }, IM_COL32_WHITE, "Any State");
+	const ImVec2 AnyPin(AnyMax.x, (AnyMin.y + AnyMax.y) * 0.5f);
+	Draw->AddCircleFilled(AnyPin, 6 * Zoom, IM_COL32(120, 200, 135, 255));
+	if (Click && Inside(Mouse, { AnyPin.x - 10, AnyPin.y - 10 }, { AnyPin.x + 10, AnyPin.y + 10 }))
+	{ PendingFrom = -1; bLinkDragging = true; SelectedId = -1; View = EView::Machine; }
+	else if (Click && Inside(Mouse, AnyMin, AnyMax))
+	{ SelectedId = -1; View = EView::Machine; DraggingState = -1; }
+	if (View == EView::Machine && DraggingState == -1 && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+	{ Graph.AnyStateX += ImGui::GetIO().MouseDelta.x / Zoom; Graph.AnyStateY += ImGui::GetIO().MouseDelta.y / Zoom; bDirty = true; }
 	for (const auto& State : Graph.States) if (State.Id == Graph.EntryState)
 	{
 		const ImVec2 Entry = ToScreen(State.X - 120.0f, State.Y + 16.0f);
@@ -475,7 +506,9 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		{
 			if (PendingFrom && PendingFrom != State.Id)
 			{
-				Graph.Transitions.push_back({ NextTransitionId(), PendingFrom, State.Id });
+				FAnimGraphTransition NewTransition{ NextTransitionId(), PendingFrom, State.Id };
+				if (PendingFrom == -1) NewTransition.Input = EAnimGraphInput::HitRequested;
+				Graph.Transitions.push_back(NewTransition);
 				SelectedId = Graph.Transitions.back().Id; View = EView::Transition; PendingFrom = 0; bDirty = bPreviewRefreshRequested = true;
 			}
 			else { SelectedId = State.Id; View = EView::Machine; DraggingState = State.Id; }
@@ -778,16 +811,24 @@ void FAnimGraphEditorPanel::DrawDetails()
 		FAnimGraphTransition* Transition = SelectedTransition();
 		if (!Transition) return;
 		ImGui::Text("Transition %s -> %s", StateName(Transition->From).c_str(), StateName(Transition->To).c_str());
-		int Input = std::max(1, static_cast<int>(Transition->Input)) - 1;
-		if (ImGui::Combo("Condition Source", &Input,
-			"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0"))
-		{ Transition->Input = static_cast<EAnimGraphInput>(Input + 1); bDirty = bPreviewRefreshRequested = true; }
-		if (Transition->Input != EAnimGraphInput::SequenceEnding)
+		if (Transition->From == -1)
+			ImGui::TextUnformatted("Condition: Hit Requested");
+		else
+		{
+			int Input = std::max(1, static_cast<int>(Transition->Input)) - 1;
+			if (ImGui::Combo("Condition Source", &Input,
+				"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0Hit Requested\0Sequence Ending + Grounded\0Sequence Ending + Airborne\0Attack Requested\0"))
+			{ Transition->Input = static_cast<EAnimGraphInput>(Input + 1); bDirty = bPreviewRefreshRequested = true; }
+		}
+		const bool bSequenceEnding = Transition->Input == EAnimGraphInput::SequenceEnding ||
+			Transition->Input == EAnimGraphInput::SequenceEndingGrounded ||
+			Transition->Input == EAnimGraphInput::SequenceEndingAirborne;
+		if (!bSequenceEnding && Transition->From != -1)
 		{
 			int Compare = static_cast<int>(Transition->Compare);
 			if (ImGui::Combo("Compare", &Compare, CompareNames, 5)) { Transition->Compare = static_cast<EAnimGraphCompare>(Compare); bDirty = bPreviewRefreshRequested = true; }
 		}
-		if (Transition->Compare != EAnimGraphCompare::Always || Transition->Input == EAnimGraphInput::SequenceEnding)
+		if (bSequenceEnding || (Transition->From != -1 && Transition->Compare != EAnimGraphCompare::Always))
 			if (ImGui::DragFloat("Threshold", &Transition->Threshold, 0.1f)) bDirty = bPreviewRefreshRequested = true;
 		if (ImGui::DragFloat("Blend Time", &Transition->BlendTime, 0.01f, 0.0f, 10.0f)) bDirty = bPreviewRefreshRequested = true;
 		const auto It = std::find_if(Graph.Transitions.begin(), Graph.Transitions.end(),

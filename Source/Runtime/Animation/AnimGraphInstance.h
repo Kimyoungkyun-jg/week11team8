@@ -12,9 +12,12 @@ class UAnimGraphInstance : public UAnimInstance
 public:
 	int32 GetActiveStateId() const;
 	int32 GetTargetStateId() const;
+	bool IsStateActiveOrPending(const FString& Name) const;
 	float GetSpeed() const { return Speed; }
 	float GetDirection() const { return Direction; }
 	void RequestJump() { bManualJumpRequested = true; }
+	void RequestHit();
+	void RequestAttack();
 	bool SetPreviewGraph(const FAnimGraphAsset& InGraph);
 	void SetPreviewFalling(bool bInFalling) { bPreviewMovementOverride = true; bPreviewFalling = bInFalling; }
 protected:
@@ -38,11 +41,15 @@ private:
 	std::vector<int32> StateIds;
 	std::vector<std::pair<int32, FAnimNode_SequencePlayer*>> SequencePlayers;
 	FAnimNode_StateMachine* GraphMachine = nullptr;
+	int32 HitStateIndex = -1;
+	int32 AttackStateIndex = -1;
 	float Speed = 0.0f;
 	float Direction = 0.0f;
 	uint32 LastJumpCounter = 0;
 	bool bJumpRequested = false;
 	bool bManualJumpRequested = false;
+	bool bHitRequested = false;
+	bool bAttackRequested = false;
 	bool bFalling = false;
 	bool bGrounded = false;
 	bool bMovingOnGround = false;

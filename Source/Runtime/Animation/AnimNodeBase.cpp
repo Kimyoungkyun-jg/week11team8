@@ -220,7 +220,7 @@ bool FAnimNode_StateMachine::AddTransition(int32 FromState, int32 ToState,
 	std::function<bool()> Condition, float BlendTime, std::function<void()> OnCompleted,
 	std::function<void()> OnStarted)
 {
-	if (!States.IsValidIndex(FromState) || !States.IsValidIndex(ToState) ||
+	if ((FromState != -1 && !States.IsValidIndex(FromState)) || !States.IsValidIndex(ToState) ||
 		FromState == ToState || !Condition || !std::isfinite(BlendTime) || BlendTime < 0.0f) return false;
 	Transitions.Add({ FromState, ToState, std::move(Condition), BlendTime,
 		std::move(OnCompleted), std::move(OnStarted) });
@@ -231,6 +231,7 @@ void FAnimNode_StateMachine::FinishTransition()
 {
 	CurrentState = NextState;
 	NextState = -1;
+	InterruptedPose.Reset();
 	std::function<void()> Completed = std::move(TransitionOnCompleted);
 	TransitionOnCompleted = {};
 	if (Completed) Completed();
@@ -243,6 +244,8 @@ void FAnimNode_StateMachine::Reset()
 	TransitionElapsed = 0.0f;
 	TransitionDuration = 0.0f;
 	TransitionOnCompleted = {};
+	InterruptedPose.Reset();
+	LastEvaluatedPose.Reset();
 	for (const FState& State : States) if (State.Pose) State.Pose->Reset();
 }
 
@@ -251,14 +254,34 @@ void FAnimNode_StateMachine::Update(float DeltaSeconds)
 	if (!States.IsValidIndex(CurrentState) || !std::isfinite(DeltaSeconds)) return;
 	DeltaSeconds = std::max(0.0f, DeltaSeconds);
 	if (States[CurrentState].Pose) States[CurrentState].Pose->Update(DeltaSeconds);
-	if (NextState >= 0)
+	const bool bWasTransitioning = NextState >= 0;
+	if (bWasTransitioning)
 	{
 		if (States[NextState].Pose) States[NextState].Pose->Update(DeltaSeconds);
 		TransitionElapsed += DeltaSeconds;
 		if (TransitionElapsed >= TransitionDuration)
 			FinishTransition();
+	}
+	for (const FTransition& Transition : Transitions) // anystate 검사
+	{
+		if (Transition.FromState != -1 || Transition.ToState == CurrentState ||
+			Transition.ToState == NextState || !Transition.Condition()) continue;
+		InterruptedPose = NextState >= 0 ? LastEvaluatedPose : TArray<FAnimBoneTransform>{};
+		NextState = Transition.ToState;
+		TransitionDuration = Transition.BlendTime;
+		TransitionElapsed = DeltaSeconds;
+		TransitionOnCompleted = Transition.OnCompleted;
+		if (Transition.OnStarted) Transition.OnStarted();
+		if (States[NextState].Pose)
+		{
+			States[NextState].Pose->Reset();
+			States[NextState].Pose->Update(DeltaSeconds);
+		}
+		if (TransitionElapsed >= TransitionDuration)
+			FinishTransition();
 		return;
 	}
+	if (bWasTransitioning) return;
 	for (const FTransition& Transition : Transitions)
 	{
 		if (Transition.FromState != CurrentState || !Transition.Condition()) continue;
@@ -281,12 +304,20 @@ void FAnimNode_StateMachine::Update(float DeltaSeconds)
 bool FAnimNode_StateMachine::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
 {
 	if (!States.IsValidIndex(CurrentState)) return false;
-	if (NextState < 0) return States[CurrentState].Pose &&
-		States[CurrentState].Pose->Evaluate(Skeleton, OutPose);
+	if (NextState < 0)
+	{
+		if (!States[CurrentState].Pose || !States[CurrentState].Pose->Evaluate(Skeleton, OutPose)) return false;
+		LastEvaluatedPose = OutPose;
+		return true;
+	}
 	TArray<FAnimBoneTransform> From, To;
-	return States[CurrentState].Pose && States[NextState].Pose &&
-		States[CurrentState].Pose->Evaluate(Skeleton, From) && States[NextState].Pose->Evaluate(Skeleton, To) &&
-		BlendAnimPoses(From, To, TransitionElapsed / TransitionDuration, OutPose);
+	if (InterruptedPose.IsEmpty() && (!States[CurrentState].Pose ||
+		!States[CurrentState].Pose->Evaluate(Skeleton, From))) return false;
+	if (!InterruptedPose.IsEmpty()) From = InterruptedPose;
+	if (!States[NextState].Pose || !States[NextState].Pose->Evaluate(Skeleton, To) ||
+		!BlendAnimPoses(From, To, TransitionElapsed / TransitionDuration, OutPose)) return false;
+	LastEvaluatedPose = OutPose;
+	return true;
 }
 
 bool FAnimNode_StateMachine::ConsumeRootMotion(FMatrix& OutDelta)
@@ -294,6 +325,6 @@ bool FAnimNode_StateMachine::ConsumeRootMotion(FMatrix& OutDelta)
 	if (!States.IsValidIndex(CurrentState)) return false;
 	FAnimNode_Base* Current = States[CurrentState].Pose;
 	if (NextState < 0) return Current && Current->ConsumeRootMotion(OutDelta);
-	return BlendRootMotion(Current, States[NextState].Pose,
+	return BlendRootMotion(InterruptedPose.IsEmpty() ? Current : nullptr, States[NextState].Pose,
 		TransitionDuration > 0.0f ? TransitionElapsed / TransitionDuration : 1.0f, OutDelta);
 }

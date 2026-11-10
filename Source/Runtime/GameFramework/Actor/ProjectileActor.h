@@ -14,6 +14,7 @@ class AProjectileActor : public AActor
     GENERATED_BODY()
 public:
     AProjectileActor();
+    void BeginPlay() override;
     void Tick(float DeltaTime) override;
     void Launch(const FVector& Position, const FVector& Direction, bool bUseStaticMesh = false);
     void ReturnToPool();
@@ -23,6 +24,7 @@ public:
     UPointLightComponent* GetFireBallLightComponent() const { return FireBallLightComponent; }
     UProjectileMovementComponent* GetProjectileMovementComponent() const { return ProjectileMovementComponent; }
 private:
+    void HandleProjectileImpact(AActor* OtherActor);
     UStaticMeshComponent* StaticMeshComponent = nullptr;
     UStaticMeshComponent* FireBallMeshComponent = nullptr;
     UPointLightComponent* FireBallLightComponent = nullptr;
