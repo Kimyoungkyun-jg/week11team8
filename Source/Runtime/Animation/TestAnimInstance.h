@@ -3,14 +3,11 @@
 #include "Animation/AnimGraphInstance.h"
 #include "TestAnimInstance.generated.h"
 
-class USimpleBlendSpace2D;
-
 UCLASS()
 class UTestAnimInstance : public UAnimGraphInstance
 {
 	GENERATED_BODY()
 public:
-	~UTestAnimInstance() override;
 	void RequestAttack() { bAttackRequested = true; }
 	bool HasAttackAnimation() const { return AttackPlayer != nullptr; }
 
@@ -19,7 +16,6 @@ protected:
 	void NativeUpdateAnimation(float DeltaSeconds) override;
 
 private:
-	USimpleBlendSpace2D* SimpleBlendSpace = nullptr;
 	FAnimNode_BlendSpacePlayer* LocomotionPlayer = nullptr;
 	FAnimNode_SequencePlayer* JumpPlayer = nullptr;
 	FAnimNode_SequencePlayer* FallLoopPlayer = nullptr;

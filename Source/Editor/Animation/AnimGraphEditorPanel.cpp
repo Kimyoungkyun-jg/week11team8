@@ -2,6 +2,7 @@
 #include "Editor/Animation/AnimGraphEditorPanel.h"
 #include "Editor/HitoriEd/EditorEngine.h"
 #include "Editor/EditorUI/EditorUIScale.h"
+#include "Editor/Animation/AnimationEditorSplitter.h"
 #include "Asset/AssetManager.h"
 #include "Asset/BlendSpace1D.h"
 #include "Asset/BlendSpace2D.h"
@@ -31,6 +32,12 @@ namespace
 	bool Inside(ImVec2 P, ImVec2 Min, ImVec2 Max)
 	{
 		return P.x >= Min.x && P.y >= Min.y && P.x <= Max.x && P.y <= Max.y;
+	}
+	FString BlendSpaceFilePath(const FString& AssetPath)
+	{
+		const fs::path File = FbxPath::FromString(AssetPath);
+		return FbxPath::ToString(File.is_absolute() || AssetPath.starts_with("Assets/")
+			? File : fs::path("Assets") / File);
 	}
 }
 
@@ -185,7 +192,8 @@ void FAnimGraphEditorPanel::DrawPreview()
 	ImGui::TextUnformatted("Preview");
 	if (PreviewWorld && Client.GetColorTarget())
 	{
-		const ImVec2 Size(ImGui::GetContentRegionAvail().x, EditorUIScale::Px(250));
+		const ImVec2 Size(ImGui::GetContentRegionAvail().x,
+			std::max(EditorUIScale::Px(80), ImGui::GetContentRegionAvail().y - EditorUIScale::Px(145)));
 		Client.Resize(static_cast<uint32>(std::max(1.0f, Size.x)), static_cast<uint32>(Size.y));
 		ImGui::Image(Client.GetColorTarget()->GetSRV(), Size);
 		Client.TickInput(ImGui::GetIO().DeltaTime, ImGui::IsItemHovered() && ImGui::IsMouseDown(ImGuiMouseButton_Right),
@@ -509,6 +517,10 @@ void FAnimGraphEditorPanel::DrawState(ImDrawList* Draw, ImVec2 Origin, ImVec2 Si
 	if (SelectedPoseNode == 1) Draw->AddRect(Player, { Player.x + 185 * Scale, Player.y + 125 * Scale }, IM_COL32(240, 170, 80, 255), 6.0f, 2.0f, ImDrawFlags_None);
 	Draw->AddText({ Player.x + 10, Player.y + 10 }, IM_COL32_WHITE, PoseNames[static_cast<int>(State->Pose)]);
 	Draw->AddText({ Player.x + 10, Player.y + 37 }, IM_COL32(180, 190, 180, 255), State->AssetPath.c_str());
+	if (OnOpenBlendSpace && State->Pose != EAnimGraphPose::Sequence && !State->AssetPath.empty() &&
+		ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+		Inside(ImGui::GetMousePos(), Player, { Player.x + 185 * Scale, Player.y + 125 * Scale }))
+		OnOpenBlendSpace(BlendSpaceFilePath(State->AssetPath));
 	const int Inputs = State->Pose == EAnimGraphPose::Sequence ? 0 : State->Pose == EAnimGraphPose::BlendSpace1D ? 1 : 2;
 	const ImVec2 Mouse = ImGui::GetMousePos();
 	const bool Click = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -592,6 +604,10 @@ void FAnimGraphEditorPanel::DrawState(ImDrawList* Draw, ImVec2 Origin, ImVec2 Si
 			Draw->AddRect(Position, Max, IM_COL32(240, 170, 80, 255), 6.0f, 2.0f, ImDrawFlags_None);
 		Draw->AddText({ Position.x + 10, Position.y + 10 }, IM_COL32_WHITE, PoseNames[static_cast<int>(Node.Pose)]);
 		Draw->AddText({ Position.x + 10, Position.y + 37 }, IM_COL32(180, 190, 180, 255), Node.AssetPath.c_str());
+		if (OnOpenBlendSpace && Node.Pose != EAnimGraphPose::Sequence && !Node.AssetPath.empty() &&
+			ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+			Inside(ImGui::GetMousePos(), Position, Max))
+			OnOpenBlendSpace(BlendSpaceFilePath(Node.AssetPath));
 		Draw->AddCircleFilled(PosePin, 6 * Scale, IM_COL32(215, 215, 215, 255));
 		if (State->OutputPlayerId == Node.Id) ActivePosePin = PosePin;
 		if (PendingPosePlayerId == Node.Id) DraggingPosePin = PosePin;
@@ -937,17 +953,33 @@ void FAnimGraphEditorPanel::OnRender()
 	if (ImGui::Button("Validate")) Graph.Validate(Status); ImGui::SameLine();
 	if (bDirty) ImGui::TextUnformatted("*");
 	if (!Status.empty()) ImGui::TextWrapped("%s", Status.c_str());
-	const float Width = ImGui::GetContentRegionAvail().x;
-	const float Left = std::min(EditorUIScale::Px(240), Width * 0.25f);
-	const float Right = std::min(EditorUIScale::Px(300), Width * 0.28f);
-	ImGui::BeginChild("Graph Tree", { Left, 0 }, ImGuiChildFlags_Borders);
-	DrawPreview();
-	DrawTree(); ImGui::EndChild(); ImGui::SameLine();
-	ImGui::BeginChild("Graph", { std::max(1.0f, Width - Left - Right - EditorUIScale::Px(16)), 0 }, ImGuiChildFlags_Borders);
-	DrawCanvas(); ImGui::EndChild(); ImGui::SameLine();
-	ImGui::BeginChild("Right", { 0, 0 });
-	ImGui::BeginChild("Details", { 0, -EditorUIScale::Px(230) }, ImGuiChildFlags_Borders);
+	const ImVec2 Available = ImGui::GetContentRegionAvail();
+	const float Split = EditorUIScale::Px(6);
+	const float Left = Available.x * LeftRatio;
+	const float Right = Available.x * RightRatio;
+	ImGui::BeginChild("Graph Tree", { Left, Available.y }, ImGuiChildFlags_Borders);
+	const float TreeHeight = ImGui::GetContentRegionAvail().y;
+	ImGui::BeginChild("Preview", { 0, TreeHeight * PreviewRatio }, ImGuiChildFlags_Borders);
+	DrawPreview(); ImGui::EndChild();
+	PreviewRatio = std::clamp(PreviewRatio + AnimationEditorSplitter::Draw("##PreviewTreeSplit", false,
+		ImGui::GetContentRegionAvail().x) / std::max(1.0f, TreeHeight), 0.20f, 0.80f);
+	ImGui::BeginChild("Tree", { 0, 0 });
+	DrawTree(); ImGui::EndChild();
+	ImGui::EndChild(); ImGui::SameLine(0, 0);
+	LeftRatio = std::clamp(LeftRatio + AnimationEditorSplitter::Draw("##GraphLeftSplit", true, Available.y) /
+		std::max(1.0f, Available.x), 0.10f, 0.40f);
+	ImGui::SameLine(0, 0);
+	ImGui::BeginChild("Graph", { std::max(1.0f, Available.x - Left - Right - Split * 2), Available.y }, ImGuiChildFlags_Borders);
+	DrawCanvas(); ImGui::EndChild(); ImGui::SameLine(0, 0);
+	RightRatio = std::clamp(RightRatio - AnimationEditorSplitter::Draw("##GraphRightSplit", true, Available.y) /
+		std::max(1.0f, Available.x), 0.10f, 0.40f);
+	ImGui::SameLine(0, 0);
+	ImGui::BeginChild("Right", { 0, Available.y });
+	const float RightHeight = ImGui::GetContentRegionAvail().y;
+	ImGui::BeginChild("Details", { 0, RightHeight * DetailsRatio }, ImGuiChildFlags_Borders);
 	DrawDetails(); ImGui::EndChild();
+	DetailsRatio = std::clamp(DetailsRatio + AnimationEditorSplitter::Draw("##GraphDetailsSplit", false,
+		ImGui::GetContentRegionAvail().x) / std::max(1.0f, RightHeight), 0.20f, 0.80f);
 	ImGui::BeginChild("Asset Browser", { 0, 0 }, ImGuiChildFlags_Borders);
 	DrawAssetBrowser(); ImGui::EndChild();
 	ImGui::EndChild();

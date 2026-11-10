@@ -3,6 +3,7 @@
 #include "Editor/EditorUI/EditorPanel.h"
 #include "Editor/Viewports/EditorViewportClient.h"
 #include <vector>
+#include <functional>
 
 class UBlendSpace;
 class USkeleton;
@@ -18,6 +19,7 @@ public:
 	const char* GetPanelName() const override { return "BlendSpace Editor"; }
 	bool IsRootPanel() const override { return true; }
 	void OpenAsset(const FString& InPath);
+	void SetOpenSequenceCallback(std::function<void(const FString&)> Callback) { OnOpenSequence = std::move(Callback); }
 	void NewAsset(const FString& InPath, bool bIn2D);
 	void Tick(float DeltaTime) override;
 	void OnRender() override;
@@ -52,6 +54,11 @@ private:
 	float Snap(float Value, const FAxis& Axis) const;
 
 	FString Path;
+	std::function<void(const FString&)> OnOpenSequence;
+	float LeftRatio = 0.20f;
+	float RightRatio = 0.22f;
+	float ViewportRatio = 0.67f;
+	float DetailsRatio = 0.70f;
 	FString Status;
 	FString SkeletonPath;
 	FAxis XAxis;
@@ -62,6 +69,7 @@ private:
 	bool bDirty = false;
 	bool bPlaying = true;
 	bool bVisible = false;
+	bool bFocusRequested = false;
 	float PreviewX = 0.0f;
 	float PreviewY = 0.0f;
 	float PreviewTime = 0.0f;

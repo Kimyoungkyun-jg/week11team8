@@ -154,10 +154,14 @@ void FContentDrawerPanel::OnRender()
 		if (ImGui::BeginPopupModal("Create BlendSpace", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
 			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const FString Name = NewAssetName;
 			const fs::path Target = CurrentPath / (FString(NewAssetName) + ".blendspace");
 			const bool bExists = fs::exists(Target);
+			const bool bInvalid = Name.empty() || Name == "." || Name == ".." ||
+				Name.find_first_of("\\/:*?\"<>|") != FString::npos;
 			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
-			ImGui::BeginDisabled(bExists || NewAssetName[0] == '\0');
+			if (bInvalid) ImGui::TextUnformatted("Enter a valid asset name.");
+			ImGui::BeginDisabled(bExists || bInvalid);
 			if (ImGui::Button("Create") && OnCreateBlendSpace)
 			{
 				OnCreateBlendSpace(FbxPath::ToString(Target), bNewBlendSpace2D);

@@ -1,7 +1,7 @@
 #include "EnginePCH.h"
 #include "Animation/TestAnimInstance.h"
 #include "Asset/AssetManager.h"
-#include "Asset/SimpleBlendSpace2D.h"
+#include "Asset/BlendSpace2D.h"
 #include "Asset/AnimSequence.h"
 #include "Components/CharacterMovementComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -10,7 +10,6 @@
 #include "Render/SkeletalMesh.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace
@@ -21,11 +20,6 @@ namespace
 		const float TriggerTime = std::min(BlendTime, Player->Sequence->GetDataModel()->PlayLength * 0.5f);
 		return Player->IsFinished() || Player->GetRemainingTime() <= TriggerTime;
 	}
-}
-
-UTestAnimInstance::~UTestAnimInstance()
-{
-	delete SimpleBlendSpace;
 }
 
 void UTestAnimInstance::BuildGraph()
@@ -39,35 +33,15 @@ void UTestAnimInstance::BuildGraph()
 	JumpPlayer = FallLoopPlayer = LandPlayer = AttackPlayer = nullptr;
 	StateMachine = nullptr;
 	bJumpEventThisTick = bAttackEventThisTick = bAttackRequested = false;
-	delete SimpleBlendSpace;
-	SimpleBlendSpace = nullptr;
 
 	USkeletalMeshComponent* Component = GetOwningComponent();
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
 	if (!Mesh || !Mesh->Skeleton) return;
 
 	const FString BasePath = "Models/UnrealModel/";
-	UAnimSequence* Idle = UAssetManager::LoadAnimSequence(BasePath + "Idle.animseq");
-	if (!Idle || Idle->Skeleton != Mesh->Skeleton) return;
-	constexpr std::array<const char*, 8> Directions{ "Bwd", "Bwd_Left", "Left", "Fwd_Left",
-		"Fwd", "Fwd_Right", "Right", "Bwd_Right" };
-	std::array<UAnimSequence*, 8> Walk{}, Jog{};
-	for (std::size_t Index = 0; Index < Directions.size(); ++Index)
-	{
-		Walk[Index] = UAssetManager::LoadOrImportFbxAnimSequence(
-			BasePath + "MF_Unarmed_Walk_" + Directions[Index] + ".animseq", *Mesh->Skeleton);
-		Jog[Index] = UAssetManager::LoadOrImportFbxAnimSequence(
-			BasePath + "MF_Unarmed_Jog_" + Directions[Index] + ".animseq", *Mesh->Skeleton);
-		if (!Walk[Index] || !Jog[Index]) return;
-	}
-
-	SimpleBlendSpace = NewObject<USimpleBlendSpace2D>(this);
-	if (!SimpleBlendSpace || !SimpleBlendSpace->Configure(Idle, Walk, Jog))
-	{
-		delete SimpleBlendSpace;
-		SimpleBlendSpace = nullptr;
-		return;
-	}
+	UBlendSpace2D* SimpleBlendSpace = Cast<UBlendSpace2D>(
+		UAssetManager::LoadBlendSpace("Animations/simple.blendspace"));
+	if (!SimpleBlendSpace || SimpleBlendSpace->Skeleton != Mesh->Skeleton) return;
 
 	LocomotionPlayer = CreateNode<FAnimNode_BlendSpacePlayer>();
 	LocomotionPlayer->BlendSpace = SimpleBlendSpace;

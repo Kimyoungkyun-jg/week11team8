@@ -3,6 +3,7 @@
 #include "Editor/EditorUI/EditorPanel.h"
 #include "Editor/Viewports/EditorViewportClient.h"
 #include "Asset/AnimGraphAsset.h"
+#include <functional>
 
 class UWorld;
 class ACharacter;
@@ -17,6 +18,7 @@ public:
 	const char* GetPanelName() const override { return "AnimGraph Editor"; }
 	bool IsRootPanel() const override { return true; }
 	void OpenAsset(const FString& InPath);
+	void SetOpenBlendSpaceCallback(std::function<void(const FString&)> Callback) { OnOpenBlendSpace = std::move(Callback); }
 	void NewAsset(const FString& InPath);
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();
@@ -44,6 +46,11 @@ private:
 	void DrawPreview();
 
 	FString Path;
+	std::function<void(const FString&)> OnOpenBlendSpace;
+	float LeftRatio = 0.20f;
+	float RightRatio = 0.24f;
+	float PreviewRatio = 0.48f;
+	float DetailsRatio = 0.68f;
 	char AssetName[128]{};
 	FString Status;
 	FAnimGraphAsset Graph;

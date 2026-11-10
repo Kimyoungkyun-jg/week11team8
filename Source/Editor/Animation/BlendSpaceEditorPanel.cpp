@@ -2,11 +2,13 @@
 #include "Editor/Animation/BlendSpaceEditorPanel.h"
 #include "Editor/HitoriEd/EditorEngine.h"
 #include "Editor/EditorUI/EditorUIScale.h"
+#include "Editor/Animation/AnimationEditorSplitter.h"
 #include "Asset/AssetManager.h"
 #include "Asset/AnimSequence.h"
 #include "Asset/BlendSpace1D.h"
 #include "Asset/BlendSpace2D.h"
 #include "Asset/FbxImporter/FbxPath.h"
+#include "Core/ResourcePaths.h"
 #include "Animation/Skeleton.h"
 #include "Animation/BoneTransform.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -23,6 +25,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <set>
 
 namespace
 {
@@ -49,15 +52,17 @@ void FBlendSpaceEditorPanel::NewAsset(const FString& InPath, bool bIn2D)
 
 void FBlendSpaceEditorPanel::OpenAsset(const FString& InPath)
 {
+	if (IsOpen() && Path == InPath) { bFocusRequested = true; return; }
+	bFocusRequested = true;
 	std::ifstream In(FbxPath::FromString(InPath));
 	const json Data = In ? json::parse(In, nullptr, false) : json{};
 	if (!Data.is_object() || !Data.contains("Type") || !Data["Type"].is_string() ||
 		!Data.contains("Skeleton") || !Data["Skeleton"].is_string() ||
 		!Data.contains("Samples") || !Data["Samples"].is_array())
-	{ Status = "Invalid BlendSpace file."; SetOpen(true); return; }
+	{ Release(); Status = "Invalid BlendSpace file."; SetOpen(true); return; }
 	const FString Type = Data["Type"].get<FString>();
 	if (Type != "BlendSpace1D" && Type != "BlendSpace2D")
-	{ Status = "Unknown BlendSpace type."; SetOpen(true); return; }
+	{ Release(); Status = "Unknown BlendSpace type."; SetOpen(true); return; }
 	NewAsset(InPath, Type == "BlendSpace2D");
 	SkeletonPath = Data["Skeleton"].get<FString>();
 	for (const auto& Item : Data["Samples"])
@@ -89,6 +94,9 @@ void FBlendSpaceEditorPanel::OpenAsset(const FString& InPath)
 	{
 		for (const FSample& Sample : Samples) { YAxis.Min = std::min(YAxis.Min, Sample.Y); YAxis.Max = std::max(YAxis.Max, Sample.Y); }
 	}
+	if (!std::isfinite(XAxis.Min) || !std::isfinite(XAxis.Max) || XAxis.Min >= XAxis.Max ||
+		(b2D && (!std::isfinite(YAxis.Min) || !std::isfinite(YAxis.Max) || YAxis.Min >= YAxis.Max)))
+	{ Status = "Invalid BlendSpace axis range."; return; }
 	PreviewX = std::clamp(0.0f, XAxis.Min, XAxis.Max);
 	PreviewY = std::clamp(0.0f, YAxis.Min, YAxis.Max);
 	bDirty = false; Status.clear();
@@ -255,6 +263,10 @@ bool FBlendSpaceEditorPanel::Validate(FString& Error) const
 void FBlendSpaceEditorPanel::Save()
 {
 	if (!Validate(Status)) return;
+	if (!PreviewSpace && !RebuildBlendSpace()) return;
+	FString Key;
+	if (!FbxPath::GetAssetKey(Path, Key, Status, false) || !Key.ends_with(".blendspace"))
+	{ Status = "BlendSpace path must be inside Assets."; return; }
 	json Data = { { "Type", b2D ? "BlendSpace2D" : "BlendSpace1D" }, { "Skeleton", SkeletonPath },
 		{ "XAxis", { { "Name", XAxis.Name }, { "Min", XAxis.Min }, { "Max", XAxis.Max },
 			{ "Divisions", XAxis.Divisions }, { "Snap", XAxis.bSnap } } }, { "Samples", json::array() } };
@@ -266,7 +278,7 @@ void FBlendSpaceEditorPanel::Save()
 		if (b2D) Item["Y"] = Sample.Y;
 		Data["Samples"].push_back(std::move(Item));
 	}
-	const fs::path File = FbxPath::FromString(Path);
+	const fs::path File = fs::path(ContentPaths::AssetRoot) / FbxPath::FromString(Key);
 	const fs::path Temp = File.string() + ".editing";
 	std::ofstream Out(Temp, std::ios::trunc);
 	if (!Out) { Status = "Cannot write BlendSpace."; return; }
@@ -274,14 +286,16 @@ void FBlendSpaceEditorPanel::Save()
 	if (!Out) { Status = "Cannot finish writing BlendSpace."; return; }
 	if (!MoveFileExW(Temp.c_str(), File.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 	{ Status = "Cannot replace BlendSpace."; std::error_code Ec; fs::remove(Temp, Ec); return; }
+	bool Updated = false;
 	if (UBlendSpace* Cached = UAssetManager::GetAssetByPath<UBlendSpace>(Path))
 	{
 		if (b2D && Cached->IsA<UBlendSpace2D>())
-			static_cast<UBlendSpace2D*>(Cached)->ReplaceSamples(static_cast<UBlendSpace2D*>(PreviewSpace)->GetSamples());
+			Updated = static_cast<UBlendSpace2D*>(Cached)->ReplaceSamples(static_cast<UBlendSpace2D*>(PreviewSpace)->GetSamples());
 		else if (!b2D && Cached->IsA<UBlendSpace1D>())
-			static_cast<UBlendSpace1D*>(Cached)->ReplaceSamples(static_cast<UBlendSpace1D*>(PreviewSpace)->GetSamples());
+			Updated = static_cast<UBlendSpace1D*>(Cached)->ReplaceSamples(static_cast<UBlendSpace1D*>(PreviewSpace)->GetSamples());
 	}
-	else UAssetManager::LoadBlendSpace(Path);
+	else Updated = UAssetManager::LoadBlendSpace(Path) != nullptr;
+	if (!Updated) { Status = "Saved file, but the loaded BlendSpace could not refresh."; return; }
 	bDirty = false; Status = "Saved";
 }
 
@@ -406,7 +420,10 @@ void FBlendSpaceEditorPanel::DrawGraph()
 	for (int I = 0; I < static_cast<int>(Samples.size()); ++I)
 	{
 		const ImVec2 Point = ToScreen(Samples[I].X, Samples[I].Y);
+		const bool Outside = Samples[I].X < XAxis.Min || Samples[I].X > XAxis.Max ||
+			(b2D && (Samples[I].Y < YAxis.Min || Samples[I].Y > YAxis.Max));
 		Draw->AddCircleFilled(Point, I == SelectedSample ? 7.0f : 5.0f,
+			Outside ? IM_COL32(255, 90, 90, 255) :
 			I == SelectedSample ? IM_COL32(255, 190, 90, 255) : IM_COL32(225, 225, 230, 255));
 	}
 	if (Hovered && ImGui::GetIO().KeyCtrl && InRect(Mouse, Min, Max))
@@ -470,6 +487,7 @@ void FBlendSpaceEditorPanel::DrawSampleDetails()
 void FBlendSpaceEditorPanel::DrawAssetBrowser()
 {
 	ImGui::TextUnformatted("Animation Assets");
+	ImGui::TextDisabled("Drag to graph to add; double-click to open sequence.");
 	ImGui::InputText("Search", Search, sizeof(Search));
 	if (SkeletonPath.empty()) { ImGui::TextWrapped("Select a skeleton first."); return; }
 	USkeleton* Skeleton = UAssetManager::LoadSkeleton(SkeletonPath);
@@ -481,7 +499,9 @@ void FBlendSpaceEditorPanel::DrawAssetBrowser()
 		const FString& Name = Sequence->GetPath();
 		if (Search[0] && Name.find(Search) == FString::npos) continue;
 		ImGui::PushID(Name.c_str());
-		if (ImGui::Selectable(Name.c_str())) AddSample(Name, PreviewX, PreviewY);
+		ImGui::Selectable(Name.c_str());
+		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+			if (OnOpenSequence) OnOpenSequence(Name);
 		if (ImGui::BeginDragDropSource())
 		{
 			ImGui::SetDragDropPayload(SequencePayload, Name.c_str(), Name.size() + 1);
@@ -496,19 +516,28 @@ void FBlendSpaceEditorPanel::OnRender()
 {
 	if (!IsOpen()) return;
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1400), EditorUIScale::Px(850)), ImGuiCond_FirstUseEver);
+	if (bFocusRequested) { ImGui::SetNextWindowFocus(); bFocusRequested = false; }
 	bVisible = BeginPanel();
 	if (!bVisible) { ImGui::End(); return; }
 	ImGui::TextUnformatted(Path.c_str()); ImGui::SameLine();
 	if (ImGui::Button("Save")) Save(); ImGui::SameLine();
 	if (bDirty) ImGui::TextUnformatted("*");
 	if (!Status.empty()) ImGui::TextWrapped("%s", Status.c_str());
-	const float Width = ImGui::GetContentRegionAvail().x;
-	const float Left = std::min(EditorUIScale::Px(285), Width * 0.25f);
-	const float Right = std::min(EditorUIScale::Px(300), Width * 0.28f);
-	ImGui::BeginChild("Asset Details", { Left, 0 }, ImGuiChildFlags_Borders);
-	DrawAssetDetails(); ImGui::EndChild(); ImGui::SameLine();
-	ImGui::BeginChild("Center", { std::max(1.0f, Width - Left - Right - EditorUIScale::Px(16)), 0 });
-	ImGui::BeginChild("Viewport", { 0, -EditorUIScale::Px(320) }, ImGuiChildFlags_Borders);
+	const ImVec2 Available = ImGui::GetContentRegionAvail();
+	const float Split = EditorUIScale::Px(6);
+	const float Left = Available.x * LeftRatio;
+	const float Right = Available.x * RightRatio;
+	ImGui::BeginChild("Asset Details", { Left, Available.y }, ImGuiChildFlags_Borders);
+	DrawAssetDetails(); ImGui::EndChild(); ImGui::SameLine(0, 0);
+	LeftRatio = std::clamp(LeftRatio + AnimationEditorSplitter::Draw("##BlendLeftSplit", true, Available.y) /
+		std::max(1.0f, Available.x), 0.10f, 0.40f);
+	ImGui::SameLine(0, 0);
+	ImGui::BeginChild("Center", { std::max(1.0f, Available.x - Left - Right - Split * 2), Available.y });
+	const float CenterHeight = ImGui::GetContentRegionAvail().y;
+	const float TimelineHeight = EditorUIScale::Px(34);
+	const float ContentHeight = std::max(1.0f, CenterHeight - TimelineHeight - Split - ImGui::GetStyle().ItemSpacing.y * 2);
+	const float ViewportHeight = ContentHeight * ViewportRatio;
+	ImGui::BeginChild("Viewport", { 0, ViewportHeight }, ImGuiChildFlags_Borders);
 	if (PreviewWorld && Client.GetColorTarget())
 	{
 		const ImVec2 Size = ImGui::GetContentRegionAvail();
@@ -519,7 +548,9 @@ void FBlendSpaceEditorPanel::OnRender()
 	}
 	else ImGui::TextWrapped("Select a skeleton with a compatible skeletal mesh.");
 	ImGui::EndChild();
-	ImGui::BeginChild("Blend Graph", { 0, -EditorUIScale::Px(42) }, ImGuiChildFlags_Borders);
+	ViewportRatio = std::clamp(ViewportRatio + AnimationEditorSplitter::Draw("##BlendViewSplit", false,
+		ImGui::GetContentRegionAvail().x) / ContentHeight, 0.20f, 0.80f);
+	ImGui::BeginChild("Blend Graph", { 0, ContentHeight - ViewportHeight }, ImGuiChildFlags_Borders);
 	DrawGraph(); ImGui::EndChild();
 	const float Length = PreviewSpace ? PreviewSpace->GetEffectiveLength(PreviewX, PreviewY) : 0.0f;
 	if (ImGui::Button(bPlaying ? "Pause" : "Play")) bPlaying = !bPlaying;
@@ -529,12 +560,25 @@ void FBlendSpaceEditorPanel::OnRender()
 	float Position = Length > 0.0f ? std::fmod(PreviewTime, Length) : 0.0f;
 	ImGui::SetNextItemWidth(-EditorUIScale::Px(75));
 	if (ImGui::SliderFloat("Time", &Position, 0.0f, std::max(Length, 0.01f))) PreviewTime = Position;
-	ImGui::EndChild(); ImGui::SameLine();
-	ImGui::BeginChild("Right", { 0, 0 });
-	ImGui::BeginChild("Sample Details", { 0, -EditorUIScale::Px(270) }, ImGuiChildFlags_Borders);
+	ImGui::EndChild(); ImGui::SameLine(0, 0);
+	RightRatio = std::clamp(RightRatio - AnimationEditorSplitter::Draw("##BlendRightSplit", true, Available.y) /
+		std::max(1.0f, Available.x), 0.10f, 0.40f);
+	ImGui::SameLine(0, 0);
+	ImGui::BeginChild("Right", { 0, Available.y });
+	const float RightHeight = ImGui::GetContentRegionAvail().y;
+	ImGui::BeginChild("Sample Details", { 0, RightHeight * DetailsRatio }, ImGuiChildFlags_Borders);
 	DrawSampleDetails(); ImGui::EndChild();
+	DetailsRatio = std::clamp(DetailsRatio + AnimationEditorSplitter::Draw("##BlendDetailsSplit", false,
+		ImGui::GetContentRegionAvail().x) / std::max(1.0f, RightHeight), 0.20f, 0.80f);
 	ImGui::BeginChild("Asset Browser", { 0, 0 }, ImGuiChildFlags_Borders);
 	DrawAssetBrowser(); ImGui::EndChild();
 	ImGui::EndChild();
+	if (SelectedSample >= 0 && SelectedSample < static_cast<int>(Samples.size()) &&
+		ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+		ImGui::IsKeyPressed(ImGuiKey_Delete))
+	{
+		Samples.erase(Samples.begin() + SelectedSample);
+		SelectedSample = -1; bDirty = true; RebuildBlendSpace();
+	}
 	ImGui::End();
 }
