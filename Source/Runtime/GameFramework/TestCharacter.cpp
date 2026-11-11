@@ -13,7 +13,6 @@
 #include "UI/UserWidget.h"
 #include "Asset/AssetManager.h"
 #include "Render/SkeletalMesh.h"
-#include "Render/Material.h"
 #include "Engine/World.h"
 
 namespace
@@ -57,29 +56,6 @@ ATestCharacter::ATestCharacter()
 	if (Mesh)
 	{
 		SkeletalMeshComponent->SetSkeletalMesh(Mesh);
-		for (int32 Slot = 0; Slot < SkeletalMeshComponent->GetNumMaterials(); ++Slot)
-		{
-			const FString SlotName = SkeletalMeshComponent->GetMaterialSlotName(Slot);
-			if (SlotName != "MI_Quinn_01" && SlotName != "MI_Quinn_02") continue;
-			const FString MaterialPath = "Models/UnrealModel/M_SKM_Quinn_Simple_" + SlotName + ".fbxbin";
-			if (UMaterial* Material = UAssetManager::GetAssetByPath<UMaterial>(MaterialPath))
-			{
-				const FString TextureDirectory = "Assets/Models/UnrealModel/";
-				UTexture2D* BaseColor = UAssetManager::Get().LoadTexture(
-					TextureDirectory + SlotName + "_EditorSphere_BaseColor.png");
-				UTexture2D* Normal = UAssetManager::Get().LoadTexture(
-					TextureDirectory + "T_Quinn_" + (SlotName == "MI_Quinn_01" ? "01" : "02") + "_N.png");
-				if (BaseColor)
-				{
-					UMaterial* Instance = UMaterial::CreateInstance(Material);
-					Instance->Textures[0] = BaseColor;
-					if (Normal) Instance->Textures[1] = Normal;
-					SkeletalMeshComponent->SetMaterial(Slot, Instance);
-				}
-				else HTR_LOG(Warning, "Failed to load Quinn base color texture: {}", SlotName);
-			}
-			else HTR_LOG(Warning, "Failed to load Quinn material: {}", MaterialPath);
-		}
 		if (!SkeletalMeshComponent->SetAnimGraphPath("Assets/Animations/rifleanimgraph.animgraph"))
 			HTR_LOG(Error, "Failed to assign rifleanimgraph.animgraph to ATestCharacter");
 	}

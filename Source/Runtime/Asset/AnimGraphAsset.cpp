@@ -165,18 +165,22 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 	}
 	if (!StateIds.contains(EntryState)) { Error = "Entry state is missing."; return false; }
 	bool bHasAnyHitTransition = false;
+	bool bHasAnyDeathTransition = false;
 	for (const auto& Transition : Transitions)
 	{
 		if (Transition.Id <= 0 || !TransitionIds.insert(Transition.Id).second ||
 			(Transition.From != -1 && !StateIds.contains(Transition.From)) || !StateIds.contains(Transition.To) || Transition.From == Transition.To ||
-			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > 13 ||
-			(Transition.From == -1 && (Transition.Input != EAnimGraphInput::HitRequested ||
-				Transition.Compare != EAnimGraphCompare::Greater || Transition.Threshold != 0.0f || bHasAnyHitTransition)) ||
+			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > static_cast<int>(EAnimGraphInput::DeathRequested) ||
+			(Transition.From == -1 && ((Transition.Input != EAnimGraphInput::HitRequested && Transition.Input != EAnimGraphInput::DeathRequested) ||
+				Transition.Compare != EAnimGraphCompare::Greater || Transition.Threshold != 0.0f ||
+				(Transition.Input == EAnimGraphInput::HitRequested && bHasAnyHitTransition) ||
+				(Transition.Input == EAnimGraphInput::DeathRequested && bHasAnyDeathTransition))) ||
 			(Transition.Compare != EAnimGraphCompare::Always && Transition.Input == EAnimGraphInput::Constant) ||
 			static_cast<int>(Transition.Compare) < 0 || static_cast<int>(Transition.Compare) > 4 ||
 			!std::isfinite(Transition.Threshold) || !std::isfinite(Transition.BlendTime) || Transition.BlendTime < 0)
 		{ Error = "Invalid transition."; return false; }
-		if (Transition.From == -1) bHasAnyHitTransition = true;
+		if (Transition.From == -1 && Transition.Input == EAnimGraphInput::HitRequested) bHasAnyHitTransition = true;
+		if (Transition.From == -1 && Transition.Input == EAnimGraphInput::DeathRequested) bHasAnyDeathTransition = true;
 		if (Transition.Input == EAnimGraphInput::SequenceEnding ||
 			Transition.Input == EAnimGraphInput::SequenceEndingGrounded ||
 			Transition.Input == EAnimGraphInput::SequenceEndingAirborne)

@@ -4,7 +4,7 @@
 #include "Core/Types.h"
 #include <vector>
 
-enum class EAnimGraphInput { Constant, Speed, Direction, JumpRequested, Falling, Grounded, MovingOnGround, SequenceEnding, HitRequested, SequenceEndingGrounded, SequenceEndingAirborne, AttackRequested, AimPitch, IsAiming };
+enum class EAnimGraphInput { Constant, Speed, Direction, JumpRequested, Falling, Grounded, MovingOnGround, SequenceEnding, HitRequested, SequenceEndingGrounded, SequenceEndingAirborne, AttackRequested, AimPitch, IsAiming, DeathRequested };
 enum class EAnimGraphPose { Sequence, BlendSpace1D, BlendSpace2D };
 enum class EAnimGraphCompare { Always, Greater, GreaterEqual, Less, LessEqual };
 enum class ERootAnimNodeType { StateMachine, Slot, LayeredBlendPerBone, AimOffset, OutputPose, SequencePlayer };

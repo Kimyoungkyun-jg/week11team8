@@ -14,6 +14,7 @@ public:
 	int32 GetActiveStateId() const;
 	int32 GetTargetStateId() const;
 	bool IsStateActiveOrPending(const FString& Name) const;
+	bool IsStateSequenceFinished(const FString& Name) const;
 	float GetSpeed() const { return Speed; }
 	float GetDirection() const { return Direction; }
 	float GetAimPitch() const { return AimPitch; }
@@ -22,6 +23,7 @@ public:
 	void RequestJump() { bManualJumpRequested = true; }
 	void RequestHit();
 	void RequestAttack();
+	void RequestDeath();
 	bool SetPreviewGraph(const FAnimGraphAsset& InGraph);
 	void SetPreviewFalling(bool bInFalling) { bPreviewMovementOverride = true; bPreviewFalling = bInFalling; }
 	void SetPreviewAimPitch(float InPitch) { bPreviewAimPitchOverride = true; PreviewAimPitch = InPitch; AimPitch = InPitch; }
@@ -98,6 +100,7 @@ private:
 	bool bManualJumpRequested = false;
 	bool bHitRequested = false;
 	bool bAttackRequested = false;
+	bool bDeathRequested = false;
 	bool bFalling = false;
 	bool bGrounded = false;
 	bool bMovingOnGround = false;

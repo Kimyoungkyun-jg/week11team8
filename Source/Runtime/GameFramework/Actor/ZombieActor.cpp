@@ -50,8 +50,15 @@ void AZombieActor::Tick(float DeltaTime)
 	UWorld* World = GetWorld();
 	if (!World || !World->IsGameWorld()) return;
 	USkeletalMeshComponent* MeshComponent = GetSkeletalMeshComponent();
-	const TArray<FMatrix>& Bones = MeshComponent->GetGlobalBoneTransforms();
 	UAnimGraphInstance* Anim = Cast<UAnimGraphInstance>(MeshComponent->GetAnimInstance());
+	if (IsDead())
+	{
+		GetCharacterMovement()->StopMovementImmediately();
+		RightHandHitCapsule->bGenerateOverlapEvents = false;
+		if (Anim && Anim->IsStateSequenceFinished("Death")) Destroy();
+		return;
+	}
+	const TArray<FMatrix>& Bones = MeshComponent->GetGlobalBoneTransforms();
 	RightHandHitCapsule->bGenerateOverlapEvents = Anim && Anim->IsStateActiveOrPending("Attack") &&
 		Bones.IsValidIndex(RightHandBoneIndex);
 	if (Bones.IsValidIndex(RightHandBoneIndex))
@@ -109,8 +116,25 @@ void AZombieActor::OnRightHandOverlap(UPrimitiveComponent* Self, AActor* OtherAc
 
 void AZombieActor::ReactToHit()
 {
+	if (IsDead()) return;
+	--Health;
 	if (UAnimGraphInstance* Anim = Cast<UAnimGraphInstance>(GetSkeletalMeshComponent()->GetAnimInstance()))
-		Anim->RequestHit();
+	{
+		if (IsDead()) Anim->RequestDeath();
+		else Anim->RequestHit();
+	}
+	if (IsDead())
+	{
+		RightHandHitCapsule->bGenerateOverlapEvents = false;
+		GetCharacterMovement()->StopMovementImmediately();
+	}
+}
+
+bool AZombieActor::SetHealth(int32 InHealth)
+{
+	if (InHealth <= 0 || IsDead()) return false;
+	Health = InHealth;
+	return true;
 }
 
 bool AZombieActor::SetCombatTuning(float InDetectionRadius, float InAttackRadius,

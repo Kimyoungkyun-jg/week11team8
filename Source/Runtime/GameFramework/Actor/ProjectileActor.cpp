@@ -22,6 +22,18 @@ AProjectileActor::AProjectileActor()
     // 이동용 루트는 표시 상태와 분리한다. 숨겨진 메쉬를 부모로 두면 FireBall 자식도 함께 숨겨진다.
     StaticMeshComponent->SetupAttachment(GetRootComponent());
     StaticMeshComponent->SetStaticMesh(UAssetManager::GetAssetByPath<UStaticMesh>("Sphere"));
+    static UMaterial* VisibleBulletMaterial = nullptr;
+    if (!VisibleBulletMaterial)
+    {
+        VisibleBulletMaterial = UMaterial::CreateInstance(UAssetManager::GetAssetByPath<UMaterial>("DefaultMaterial"));
+        if (VisibleBulletMaterial)
+        {
+            VisibleBulletMaterial->BaseColor = FVector4(1.0f, 0.35f, 0.02f, 1.0f);
+            VisibleBulletMaterial->EmissiveColor = FVector(1.0f, 0.35f, 0.02f);
+            VisibleBulletMaterial->EmissiveFactor = 4.0f;
+        }
+    }
+    if (VisibleBulletMaterial) StaticMeshComponent->SetMaterial(0, VisibleBulletMaterial);
     StaticMeshComponent->SetRelativeScale3D(FVector(0.5f));
     StaticMeshComponent->SetVisible(false);
     StaticMeshComponent->SetHiddenInGame(true);
@@ -143,8 +155,11 @@ void AProjectileActor::HandleProjectileImpact(AActor* OtherActor, const FHitResu
     if (!bInFlight) return;
     if (AZombieActor* Zombie = Cast<AZombieActor>(OtherActor))
     {
-        Zombie->ReactToHit();
-        Zombie->LaunchCharacter(-Hit.ImpactNormal, 10.0f);
+        if (!Zombie->IsDead())
+        {
+            Zombie->ReactToHit();
+            if (!Zombie->IsDead()) Zombie->LaunchCharacter(-Hit.ImpactNormal, 10.0f);
+        }
         ReturnToPool();
     }
     else if (AStaticMeshActor* StaticMesh = Cast<AStaticMeshActor>(OtherActor))

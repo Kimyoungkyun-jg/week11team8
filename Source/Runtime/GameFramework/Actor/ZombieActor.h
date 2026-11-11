@@ -15,6 +15,8 @@ public:
 	void BeginPlay() override;
 	void Tick(float DeltaTime) override;
 	void ReactToHit();
+	bool SetHealth(int32 InHealth);
+	bool IsDead() const { return Health <= 0; }
 	bool SetCombatTuning(float InDetectionRadius, float InAttackRadius,
 		float InAttackCooldown, float InWalkSpeed);
 	ACharacter* GetTarget() const { return Target; }
@@ -25,6 +27,8 @@ private:
 	int32 RightHandBoneIndex = -1;
 	ACharacter* Target = nullptr;
 	float AttackTimer = 0.0f;
+	UPROPERTY(EditAnywhere)
+	int32 Health = 10;
 
 	UPROPERTY(EditAnywhere)
 	float DetectionRadius = 12.0f;

@@ -7,7 +7,6 @@
 #include "Collision/HitResult.h"
 #include "Collision/Ray.h"
 #include "Asset/AssetManager.h"
-#include "Render/Material.h"
 #include "Engine/World.h"
 
 ARifleActor::ARifleActor()
@@ -16,27 +15,9 @@ ARifleActor::ARifleActor()
 	SkeletalMeshComponent = CreateDefaultSubobject<USkeletalMeshComponent>("RifleMeshComponent");
 	SetRootComponent(SkeletalMeshComponent);
 	USkeletalMesh* RifleMesh = UAssetManager::LoadFbxSkeletalMesh(
-		"Assets/Models/UnrealModel/SK_Rifle.FBX");
-	if (RifleMesh)
-	{
-		SkeletalMeshComponent->SetSkeletalMesh(RifleMesh);
-		if (UMaterial* BaseMaterial = SkeletalMeshComponent->GetMaterial(0))
-		{
-			UTexture2D* BaseColor = UAssetManager::Get().LoadTexture(
-				"Assets/Models/UnrealModel/MI_Weapon_Rifle_BaseColor.png");
-			UTexture2D* Normal = UAssetManager::Get().LoadTexture(
-				"Assets/Models/UnrealModel/T_Rifle_Combined_N.png");
-			if (BaseColor)
-			{
-				UMaterial* RifleMaterial = UMaterial::CreateInstance(BaseMaterial);
-				RifleMaterial->Textures[0] = BaseColor;
-				if (Normal) RifleMaterial->Textures[1] = Normal;
-				SkeletalMeshComponent->SetMaterial(0, RifleMaterial);
-			}
-			else HTR_LOG(Error, "Failed to load rifle base color texture");
-		}
-	}
-	else HTR_LOG(Error, "Failed to load SK_Rifle.FBX for ARifleActor");
+		"Assets/Models/UnrealModel/SK_SK_Rifle_Root.fbxbin");
+	if (RifleMesh) SkeletalMeshComponent->SetSkeletalMesh(RifleMesh);
+	else HTR_LOG(Error, "Failed to load SK_SK_Rifle_Root.fbxbin for ARifleActor");
 }
 
 AProjectileActor* ARifleActor::Fire(const FVector& CameraOrigin, const FVector& CameraDirection)
@@ -76,7 +57,7 @@ AProjectileActor* ARifleActor::Fire(const FVector& CameraOrigin, const FVector& 
 		Projectile = Cast<AProjectileActor>(World->SpawnActor(AProjectileActor::StaticClass()));
 		if (!Projectile) return nullptr;
 		Projectile->GetRootComponent()->SetCollisionRadiusOverride(0.035f);
-		Projectile->GetStaticMeshComponent()->SetRelativeScale3D(FVector(0.07f, 0.02f, 0.02f));
+		Projectile->GetStaticMeshComponent()->SetRelativeScale3D(FVector(0.14f, 0.045f, 0.045f));
 		Projectiles.Add(Projectile);
 	}
 	if (!Projectile) return nullptr;

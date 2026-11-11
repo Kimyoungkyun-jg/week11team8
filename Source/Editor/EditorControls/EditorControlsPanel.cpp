@@ -30,6 +30,7 @@
 #include "GameFramework/Actor/DecalActor.h"
 #include "GameFramework/Actor/FakeSpotLightActor.h"
 #include "GameFramework/Actor/PlayerStart.h"
+#include "GameFramework/Character.h"
 
 namespace
 {
@@ -43,6 +44,7 @@ namespace
 
 	const FSpawnEntry SpawnEntries[] = {
 		{ "Basic",    "Empty Actor",       &AActor::StaticClass },
+		{ "Basic",    "Empty Character",   &ACharacter::StaticClass },
 		{ "Basic",    "Static Mesh",       &AStaticMeshActor::StaticClass },
 		{ "Basic",    "Skeletal Mesh",     &ASkeletalMeshActor::StaticClass },
 		{ "Basic",    "Text",              &ATextRenderActor::StaticClass },

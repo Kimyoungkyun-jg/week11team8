@@ -33,7 +33,7 @@ namespace
 	constexpr const char* InputNames[] = {
 		"Constant", "Speed", "Direction", "Jump Requested", "Falling", "Grounded",
 		"Moving On Ground", "Sequence Ending", "Hit Requested",
-		"Sequence Ending + Grounded", "Sequence Ending + Airborne", "Attack Requested", "AimPitch", "IsAiming"
+		"Sequence Ending + Grounded", "Sequence Ending + Airborne", "Attack Requested", "AimPitch", "IsAiming", "Death Requested"
 	};
 	constexpr const char* CompareNames[] = { "Always", ">", ">=", "<", "<=" };
 
@@ -1328,12 +1328,16 @@ void FAnimGraphEditorPanel::DrawDetails()
 		if (!Transition) return;
 		ImGui::Text("Transition %s -> %s", StateName(Transition->From).c_str(), StateName(Transition->To).c_str());
 		if (Transition->From == -1)
-			ImGui::TextUnformatted("Condition: Hit Requested");
+		{
+			int Input = Transition->Input == EAnimGraphInput::DeathRequested ? 1 : 0;
+			if (ImGui::Combo("Condition Source", &Input, "Hit Requested\0Death Requested\0"))
+			{ Transition->Input = Input == 0 ? EAnimGraphInput::HitRequested : EAnimGraphInput::DeathRequested; bDirty = bPreviewRefreshRequested = true; }
+		}
 		else
 		{
 			int Input = std::max(1, static_cast<int>(Transition->Input)) - 1;
 			if (ImGui::Combo("Condition Source", &Input,
-				"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0Hit Requested\0Sequence Ending + Grounded\0Sequence Ending + Airborne\0Attack Requested\0AimPitch\0IsAiming\0"))
+				"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0Hit Requested\0Sequence Ending + Grounded\0Sequence Ending + Airborne\0Attack Requested\0AimPitch\0IsAiming\0Death Requested\0"))
 			{ Transition->Input = static_cast<EAnimGraphInput>(Input + 1); bDirty = bPreviewRefreshRequested = true; }
 		}
 		const bool bSequenceEnding = Transition->Input == EAnimGraphInput::SequenceEnding ||

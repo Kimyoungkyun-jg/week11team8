@@ -15,7 +15,7 @@ ACharacter::ACharacter()
 	CapsuleComponent->bBlockComponent = true;
 	SkeletalMeshComponent = CreateDefaultSubobject<USkeletalMeshComponent>("SkeletalMeshComponent");
 	SkeletalMeshComponent->SetupAttachment(CapsuleComponent);
-	SkeletalMeshComponent->SetRelativeLocation(FVector(0.0f, 0.0f, -0.9f));
+	SkeletalMeshComponent->SetRelativeLocation(FVector(0.0f, 0.0f, -1.0f));
 	SkeletalMeshComponent->PrimaryComponentTick.TickGroup = ETickingGroup::PrePhysics;
 	SpringArmComponent = CreateDefaultSubobject<USpringArmComponent>("SpringArmComponent");
 	SpringArmComponent->SetupAttachment(CapsuleComponent);

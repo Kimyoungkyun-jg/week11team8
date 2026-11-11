@@ -63,8 +63,19 @@ bool UAnimGraphInstance::IsStateActiveOrPending(const FString& Name) const
 	return false;
 }
 
+bool UAnimGraphInstance::IsStateSequenceFinished(const FString& Name) const
+{
+	const int32 ActiveId = GetActiveStateId();
+	for (const FAnimGraphState& State : Graph.States)
+		if (State.Id == ActiveId && State.Name == Name)
+			for (const auto& Entry : SequencePlayers)
+				if (Entry.first == ActiveId) return Entry.second && Entry.second->IsFinished();
+	return false;
+}
+
 void UAnimGraphInstance::RequestHit()
 {
+	if (bDeathRequested || IsStateActiveOrPending("Death")) return;
 	if (GraphMachine && HitStateIndex >= 0 &&
 		(GraphMachine->CurrentState == HitStateIndex || GraphMachine->NextState == HitStateIndex)) return;
 	bAttackRequested = false;
@@ -73,9 +84,17 @@ void UAnimGraphInstance::RequestHit()
 
 void UAnimGraphInstance::RequestAttack()
 {
+	if (bDeathRequested || IsStateActiveOrPending("Death")) return;
 	if (GraphMachine && AttackStateIndex >= 0 &&
 		(GraphMachine->CurrentState == AttackStateIndex || GraphMachine->NextState == AttackStateIndex)) return;
 	bAttackRequested = true;
+}
+
+void UAnimGraphInstance::RequestDeath()
+{
+	bHitRequested = false;
+	bAttackRequested = false;
+	bDeathRequested = true;
 }
 
 float UAnimGraphInstance::PlayMontage(const FString& MontagePath, float InPlayRate, const FString& StartSection)
@@ -362,6 +381,7 @@ float UAnimGraphInstance::InputValue(EAnimGraphInput Input, float Constant) cons
 	case EAnimGraphInput::MovingOnGround: return bMovingOnGround ? 1.0f : 0.0f;
 	case EAnimGraphInput::HitRequested: return bHitRequested ? 1.0f : 0.0f;
 	case EAnimGraphInput::AttackRequested: return bAttackRequested ? 1.0f : 0.0f;
+	case EAnimGraphInput::DeathRequested: return bDeathRequested ? 1.0f : 0.0f;
 	case EAnimGraphInput::AimPitch: return AimPitch;
 	case EAnimGraphInput::IsAiming: return bIsAiming ? 1.0f : 0.0f;
 	default: return Constant;
@@ -443,7 +463,7 @@ void UAnimGraphInstance::BuildGraph()
 	GraphMachine = nullptr;
 	HitStateIndex = AttackStateIndex = -1;
 	bJumpRequested = bManualJumpRequested = false;
-	bHitRequested = bAttackRequested = false;
+	bHitRequested = bAttackRequested = bDeathRequested = false;
 	USkeletalMeshComponent* Component = GetOwningComponent();
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
 	if (!Component || !Mesh || !Mesh->Skeleton || (!bUsePreviewGraph && Component->GetAnimGraphPath().empty())) return;
@@ -561,7 +581,9 @@ void UAnimGraphInstance::BuildGraph()
 				Transition.Input == EAnimGraphInput::HitRequested
 				? std::function<void()>([this] { bHitRequested = false; }) :
 				Transition.Input == EAnimGraphInput::AttackRequested
-				? std::function<void()>([this] { bAttackRequested = false; }) : std::function<void()>{});
+				? std::function<void()>([this] { bAttackRequested = false; }) :
+				Transition.Input == EAnimGraphInput::DeathRequested
+				? std::function<void()>([this] { bDeathRequested = false; }) : std::function<void()>{});
 	}
 
 	// 루트 포즈 그래프 노드를 생성하고 핀 연결을 구성한다

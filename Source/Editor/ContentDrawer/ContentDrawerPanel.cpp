@@ -27,6 +27,7 @@
 #include "Launch/LaunchEngineLoop.h"
 #include "Render/Swapchain.h"
 #include "Render/SkyboxRenderer.h"
+#include <cctype>
 
 FContentDrawerPanel::FContentDrawerPanel() = default;
 
@@ -121,7 +122,12 @@ void FContentDrawerPanel::OnRender()
 		ImGui::SetItemTooltip("Import FBX files into this folder");
 		ImGui::SameLine();
 		ImGui::TextUnformatted(FbxPath::ToString(CurrentPath).c_str());
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+		ImGui::InputTextWithHint("##AssetSearch", "Search files in this folder...", SearchText, sizeof(SearchText));
 		ImGui::Separator();
+		FString SearchQuery = SearchText;
+		std::transform(SearchQuery.begin(), SearchQuery.end(), SearchQuery.begin(),
+			[](unsigned char C) { return static_cast<char>(std::tolower(C)); });
 
 		// 빈 곳 우클릭 (항목 위 우클릭은 제외)
 		if (ImGui::BeginPopupContextWindow("##DrawerContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
@@ -264,6 +270,13 @@ void FContentDrawerPanel::OnRender()
 				const FString EntryName = FbxPath::ToString(Path.filename());
 				// .bin은 OBJ 캐시와 예전 .animseq.bin이다. 애셋은 .fbxbin 하나로 통일했으므로 보이지 않는다.
 				if (Path.extension() == ".bin" || EntryName.starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
+				if (!SearchQuery.empty())
+				{
+					FString LowerName = EntryName;
+					std::transform(LowerName.begin(), LowerName.end(), LowerName.begin(),
+						[](unsigned char C) { return static_cast<char>(std::tolower(C)); });
+					if (LowerName.find(SearchQuery) == FString::npos) continue;
+				}
 
 				std::error_code TypeError;
 				const bool bIsDirectory = fs::is_directory(Path, TypeError);

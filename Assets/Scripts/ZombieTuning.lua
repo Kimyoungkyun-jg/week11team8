@@ -1,10 +1,12 @@
-local detectionRadius = 12.0
+local detectionRadius = 100.0
 local attackRadius = 1.2
 local attackCooldown = 1.8
 local walkSpeed = 6.0
+local health = 10
 
 local function ApplyTuning()
-    assert(obj:SetZombieCombatTuning(detectionRadius, attackRadius, attackCooldown, walkSpeed))
+    assert(zombie:SetCombatTuning(detectionRadius, attackRadius, attackCooldown, walkSpeed))
+    assert(zombie:SetHealth(health))
 end
 
 function BeginPlay()

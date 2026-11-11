@@ -42,6 +42,7 @@
 namespace
 {
 	struct FLuaClickBinding { AActor* Owner; FLuaWidgetRef Button; };
+	struct FLuaZombieRef { FLuaActorRef Actor; };
 	TArray<FLuaClickBinding> ClickBindings;
 
 	TArray<FLuaActorRef> PendingDestroies;
@@ -297,12 +298,6 @@ namespace
 			{
 				if (ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get()))
 					Character->ClearAimBlendAlphaOverride();
-			},
-			"SetZombieCombatTuning", [](const FLuaActorRef& Ref, float DetectionRadius,
-				float AttackRadius, float AttackCooldown, float WalkSpeed)
-			{
-				AZombieActor* Zombie = Cast<AZombieActor>(Ref.Get());
-				return Zombie && Zombie->SetCombatTuning(DetectionRadius, AttackRadius, AttackCooldown, WalkSpeed);
 			},
 			"HasComponent", [](const FLuaActorRef& Ref, const FString& ClassName)
 			{
@@ -602,6 +597,22 @@ namespace
 				throw sol::error(
 					"SetCameraRelativeTransform: Actor has no camera component."
 				);
+			});
+	}
+
+	void RegisterZombie(sol::state& Lua)
+	{
+		Lua.new_usertype<FLuaZombieRef>("Zombie", sol::no_constructor,
+			"SetCombatTuning", [](const FLuaZombieRef& Ref, float DetectionRadius,
+				float AttackRadius, float AttackCooldown, float WalkSpeed)
+			{
+				AZombieActor* Zombie = Cast<AZombieActor>(Ref.Actor.Get());
+				return Zombie && Zombie->SetCombatTuning(DetectionRadius, AttackRadius, AttackCooldown, WalkSpeed);
+			},
+			"SetHealth", [](const FLuaZombieRef& Ref, int32 Health)
+			{
+				AZombieActor* Zombie = Cast<AZombieActor>(Ref.Actor.Get());
+				return Zombie && Zombie->SetHealth(Health);
 			});
 	}
 
@@ -987,6 +998,7 @@ namespace FLuaBindings
 		// TODO(B): wait, wait_until, wait_until_move_done, StartCoroutine
 		RegisterMath(Lua);
 		RegisterActor(Lua);
+		RegisterZombie(Lua);
 		RegisterComponent(Lua);
 		RegisterInput(Lua);
 		RegisterCoroutine(Lua);
@@ -994,6 +1006,12 @@ namespace FLuaBindings
 		RegisterGameplay(Lua);
 		RegisterAudio(Lua);
 		RegisterCameraAction(Lua);
+	}
+
+	void BindActorEnvironment(sol::environment& Env, AActor* Owner)
+	{
+		if (Cast<AZombieActor>(Owner))
+			Env["zombie"] = FLuaZombieRef{ FLuaActorRef::Make(Owner) };
 	}
 
 	void FlushPendingDestroy(UWorld* World)

@@ -123,9 +123,43 @@
       "SpeedOffsetY": 0.0,
       "X": 470.0,
       "Y": 420.0
+    },
+    {
+      "Asset": "Models/Zombie/AS_Zombie Dying.fbxbin",
+      "ConstantX": 0.0,
+      "ConstantY": 0.0,
+      "DirectionOffsetX": 0.0,
+      "DirectionOffsetY": 0.0,
+      "Id": 4,
+      "InputX": 0,
+      "InputY": 0,
+      "Loop": false,
+      "Name": "Death",
+      "OutputOffsetX": 0.0,
+      "OutputOffsetY": 0.0,
+      "OutputPlayerId": 0,
+      "PlayRate": 1.0,
+      "PlayerOffsetX": 0.0,
+      "PlayerOffsetY": 0.0,
+      "Players": [],
+      "Pose": 0,
+      "PoseConnected": true,
+      "SpeedOffsetX": 0.0,
+      "SpeedOffsetY": 0.0,
+      "X": 780.0,
+      "Y": 420.0
     }
   ],
   "Transitions": [
+    {
+      "BlendTime": 0.08,
+      "Compare": 1,
+      "From": -1,
+      "Id": 5,
+      "Input": 14,
+      "Threshold": 0.0,
+      "To": 4
+    },
     {
       "BlendTime": 0.10000000149011612,
       "Compare": 1,

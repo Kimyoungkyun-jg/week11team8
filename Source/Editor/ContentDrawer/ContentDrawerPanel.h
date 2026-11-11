@@ -66,6 +66,7 @@ private:
 	std::function<void(const FString&)> OnOpenBlendSpace;
 	std::function<void(const FString&)> OnOpenSkeletalMesh;
 	char NewAssetName[64] = "NewWidget";
+	char SearchText[256] = "";
 	bool bOpenCreateWidget = false;
 	bool bOpenCreateAnimGraph = false;
 	bool bOpenCreateBlendSpace = false;
