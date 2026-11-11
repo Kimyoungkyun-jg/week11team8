@@ -17,6 +17,17 @@ struct FAnimNotifyEvent
 	UAnimNotify* Notify = nullptr;
 };
 
+// .fbxbin에 저장되는 Notify 한 건. UObject 없이 클래스 이름과 속성(JSON 문자열)만 들고 있다.
+// 시퀀스를 로드할 때 클래스 이름으로 Notify 객체를 만들고 속성을 채운다.
+struct FAnimNotifyRecord
+{
+	FString Name;
+	float TriggerTime = 0.0f;
+	float TriggerWeightThreshold = 0.00001f;
+	FString ClassName;
+	FString Properties;
+};
+
 // 노드 트리를 거쳐 UAnimInstance까지 올라온 Notify 한 건
 struct FAnimNotifyQueueItem
 {

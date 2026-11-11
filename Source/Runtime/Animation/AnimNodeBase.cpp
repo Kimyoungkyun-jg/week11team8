@@ -249,10 +249,15 @@ void FAnimNode_BlendSpacePlayer::Reset()
 	NormalizedTime = 0.0f;
 	bPlaying = BlendSpace != nullptr;
 	bHasPendingRootMotion = false;
+	PendingNotifies.Reset();
+	bNotifyIncludeStart = true;
 }
 
 void FAnimNode_BlendSpacePlayer::Update(float DeltaSeconds)
 {
+	// 이전 프레임에 모은 Notify는 소비되었다고 보고 매 Update 시작에 비운다.
+	PendingNotifies.Reset();
+
 	if (!bPlaying || !BlendSpace || !std::isfinite(DeltaSeconds) || DeltaSeconds <= 0.0f ||
 		!std::isfinite(PlayRate) || PlayRate < 0.0f)
 	{
@@ -290,6 +295,18 @@ void FAnimNode_BlendSpacePlayer::Update(float DeltaSeconds)
 	}
 	bHasPendingRootMotion = BlendSpace->ExtractRootMotion(InputX, InputY, PreviousTime,
 		NormalizedTime, LoopCount, PendingRootMotion);
+	BlendSpace->GetNotifies(InputX, InputY, PreviousTime, NormalizedTime, LoopCount, bNotifyIncludeStart, PendingNotifies);
+	bNotifyIncludeStart = false;
+}
+
+void FAnimNode_BlendSpacePlayer::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	for (const FAnimNotifyQueueItem& Item : PendingNotifies)
+	{
+		FAnimNotifyQueueItem Gathered = Item;
+		Gathered.Weight *= ParentWeight;
+		OutQueue.Add(std::move(Gathered));
+	}
 }
 
 bool FAnimNode_BlendSpacePlayer::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)

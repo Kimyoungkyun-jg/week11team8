@@ -43,3 +43,34 @@ public:
 	void Notify(const FAnimNotifyContext& Context) override;
 	bool CanTriggerInEditorWorld() const override { return true; }
 };
+
+// 사운드 파일을 재생하는 Notify. BoneName이 있으면 그 본의 월드 위치에서, 없으면 컴포넌트 위치에서 재생한다.
+// USoundWave*는 UPROPERTY로 저장할 수 없어서 경로 문자열로 들고 있다가 호출할 때 로드한다.
+UCLASS()
+class UAnimNotify_PlaySound : public UAnimNotify
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY(EditAnywhere)
+	FString SoundPath;
+
+	UPROPERTY(EditAnywhere)
+	FString BoneName;
+
+	UPROPERTY(EditAnywhere)
+	float Volume = 1.0f;
+
+	UPROPERTY(EditAnywhere)
+	float Pitch = 1.0f;
+
+	void Notify(const FAnimNotifyContext& Context) override;
+private:
+	// 불러오기에 실패한 경로. 같은 경로로는 호출될 때마다 다시 시도하지 않는다 (루프마다 로그와 객체가 쌓이는 것을 막는다).
+	// 경로를 고치면 값이 달라져 다시 시도한다.
+	FString FailedSoundPath;
+	// 이미 경고한 본 이름. 없는 본 이름을 매번 경고하지 않는다.
+	FString WarnedBoneName;
+public:
+	// 뷰어에서 소리를 들으며 Notify 위치를 맞출 수 있게 한다. 레벨 에디터 월드는 애니메이션을 틱하지 않으므로 프리뷰에서만 들린다.
+	bool CanTriggerInEditorWorld() const override { return true; }
+};

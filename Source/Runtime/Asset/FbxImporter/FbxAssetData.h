@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Animation/ReferenceSkeleton.h"
+#include "Asset/AnimNotifyEvent.h"
 #include "Asset/AnimDataModel.h"
 #include "Render/SkeletalMesh.h"
 #include "Render/StaticMeshData.h"
@@ -50,6 +51,8 @@ struct FFbxImportOptions
 	float MinTargetBoneMatch = 0.f;
 	bool bForceFrontX = true;
 	float UniformScale = 1.f; // 정점과 본 이동에 곱한다.
+	// 재임포트할 때 기존 AnimSequence의 Notify를 유지한다. 끄면 지운다. 임포트 요청에만 쓰이며 .fbxbin에는 저장하지 않는다.
+	bool bKeepNotifies = true;
 };
 
 struct FFbxMaterialData
@@ -90,6 +93,8 @@ struct FFbxAnimationData
 	bool bUseNormalizedRootMotionScale = false;
 	uint8 RootMotionRootLock = 0; // ERootMotionRootLock
 	float RateScale = 1.f;
+	// 에디터에서 추가한 Notify. 재임포트할 때 기존 파일의 값을 유지한다(FFbxImportOptions::bKeepNotifies).
+	TArray<FAnimNotifyRecord> Notifies;
 };
 
 struct FFbxMeshLODData

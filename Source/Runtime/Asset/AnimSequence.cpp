@@ -68,6 +68,73 @@ UAnimNotify* UAnimSequence::AddNotify(const FString& EventName, const FString& N
 	return Notify;
 }
 
+void UAnimSequence::ExportNotifies(TArray<FAnimNotifyRecord>& OutRecords) const
+{
+	OutRecords.Reset();
+	for (const FAnimNotifyEvent& Event : Notifies)
+	{
+		if (!Event.Notify)
+		{
+			continue;
+		}
+		FAnimNotifyRecord Record;
+		Record.Name = Event.Name;
+		Record.TriggerTime = Event.TriggerTime;
+		Record.TriggerWeightThreshold = Event.TriggerWeightThreshold;
+		Record.ClassName = Event.Notify->GetClass()->Name;
+
+		json Properties = json::object();
+		Event.Notify->Serialize(Properties, false);
+		// 속성 문자열에 잘못된 UTF-8이 있어도 저장이 예외로 끝나지 않게 대체 문자로 바꾼다.
+		Record.Properties = Properties.dump(-1, ' ', false, json::error_handler_t::replace);
+		OutRecords.Add(std::move(Record));
+	}
+}
+
+void UAnimSequence::ImportNotifies(const TArray<FAnimNotifyRecord>& Records)
+{
+	Notifies.Reset();
+	for (const FAnimNotifyRecord& Record : Records)
+	{
+		UAnimNotify* Notify = AddNotify(Record.Name, Record.ClassName, Record.TriggerTime);
+		if (!Notify)
+		{
+			continue;
+		}
+		Notifies.Last().TriggerWeightThreshold = Record.TriggerWeightThreshold;
+
+		if (Record.Properties.empty())
+		{
+			continue;
+		}
+		// 속성 하나가 형식이 맞지 않으면 json이 예외를 던진다. 그 Notify는 기본값으로 둔다.
+		try
+		{
+			json Properties = json::parse(Record.Properties);
+			Notify->Serialize(Properties, true);
+		}
+		catch (const std::exception& Exception)
+		{
+			HTR_LOG(Warning, "[AnimNotify] Cannot read properties of '{}' ({}): {}", Record.Name, Record.ClassName, Exception.what());
+		}
+	}
+	if (!Records.IsEmpty())
+	{
+		HTR_LOG(Info, "[AnimNotify] loaded {} of {} notifies from file", Notifies.Num(), Records.Num());
+	}
+}
+
+void UAnimSequence::GetNotifyQueueItems(float PreviousTime, float CurrentTime, int32 LoopCount, bool bIncludeStart,
+	float Weight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	TArray<FAnimNotifyEvent> Events;
+	GetNotifies(PreviousTime, CurrentTime, LoopCount, bIncludeStart, Events);
+	for (const FAnimNotifyEvent& Event : Events)
+	{
+		OutQueue.Add({ Event, Weight, this });
+	}
+}
+
 void UAnimSequence::GetNotifies(float PreviousTime, float CurrentTime, int32 LoopCount, bool bIncludeStart, TArray<FAnimNotifyEvent>& OutNotifies) const
 {
 	if (!DataModel || Notifies.IsEmpty() || LoopCount < 0 || !std::isfinite(PreviousTime) || !std::isfinite(CurrentTime))

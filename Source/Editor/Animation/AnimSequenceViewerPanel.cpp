@@ -1,6 +1,9 @@
 #include "EnginePCH.h"
 #include "Editor/Animation/AnimSequenceViewerPanel.h"
 #include "Editor/Animation/AnimSequenceDisplayName.h"
+#include "Editor/Details/PropertyEditor.h"
+#include "Animation/AnimNotify.h"
+#include "UObject/UObjectHash.h"
 #include "Editor/HitoriEd/EditorEngine.h"
 #include "Editor/HitoriEd/EditorResourcePaths.h"
 #include "Editor/EditorUI/EditorUIScale.h"
@@ -36,6 +39,29 @@ namespace
 		ImGui::Text("Rotation  %.1f  %.1f  %.1f", Rotation.Roll, Rotation.Pitch, Rotation.Yaw);
 		ImGui::Text("Scale     %.3f  %.3f  %.3f", Transform.Scale.X, Transform.Scale.Y, Transform.Scale.Z);
 	}
+
+	// 만들 수 있는(추상이 아닌) UAnimNotify 파생 클래스를 이름순으로 모은다.
+	void GetNotifyClasses(TArray<UClass*>& OutClasses)
+	{
+		OutClasses.Reset();
+		TArray<UClass*> Derived;
+		GetDerivedClasses(UAnimNotify::StaticClass(), Derived);
+		for (UClass* Class : Derived)
+		{
+			if (Class && Class->Constructor)
+			{
+				OutClasses.Add(Class);
+			}
+		}
+		std::sort(OutClasses.begin(), OutClasses.end(), [](const UClass* A, const UClass* B) { return A->Name < B->Name; });
+	}
+
+	// "UAnimNotify_PlaySound" -> "PlaySound"
+	FString GetNotifyDisplayName(const UClass* Class)
+	{
+		const FString Prefix = "UAnimNotify_";
+		return Class->Name.starts_with(Prefix) ? Class->Name.substr(Prefix.size()) : Class->Name;
+	}
 }
 
 FAnimSequenceViewerPanel::FAnimSequenceViewerPanel() = default;
@@ -58,6 +84,10 @@ void FAnimSequenceViewerPanel::Release()
 	Sequence = nullptr;
 	BoneChildren.Reset();
 	SelectedBone = -1;
+	SelectedNotify = -1;
+	DraggingNotify = -1;
+	NotifyPopupTarget = -1;
+	bDirty = false;
 }
 
 void FAnimSequenceViewerPanel::OpenSequence(const FString& InPath)
@@ -143,10 +173,28 @@ void FAnimSequenceViewerPanel::SetPreviewMesh(USkeletalMesh* Mesh)
 	Client.SetViewLocation(Center - Client.GetViewForward() * (Radius * 2.5f));
 }
 
+void FAnimSequenceViewerPanel::Save()
+{
+	if (!Sequence)
+	{
+		return;
+	}
+	if (UAssetManager::SaveAnimSequence(*Sequence))
+	{
+		bDirty = false;
+		Status = "Saved";
+	}
+	else
+	{
+		Status = "Save failed";
+	}
+}
+
 void FAnimSequenceViewerPanel::Tick(float DeltaTime)
 {
 	if (!IsOpen())
 	{
+		bFocused = false;
 		// 창을 완전히 닫으면 프리뷰 월드와 메시를 해제한다. 다시 열면 OnRender에서 복원한다.
 		if (PreviewWorld)
 		{
@@ -234,19 +282,22 @@ void FAnimSequenceViewerPanel::DrawAssetDetails()
 	ImGui::Text("Length: %.3f s", Model->PlayLength);
 	ImGui::Text("Frames: %d  /  %.2f fps", Model->NumberOfFrames, Model->FrameRate.AsDecimal());
 	ImGui::Separator();
-	ImGui::DragFloat("Rate Scale", &Sequence->RateScale, 0.01f, 0.01f, 8.0f, "%.2f");
+	if (ImGui::DragFloat("Rate Scale", &Sequence->RateScale, 0.01f, 0.01f, 8.0f, "%.2f")) MarkDirty();
 	Sequence->RateScale = std::clamp(Sequence->RateScale, 0.01f, 8.0f);
 	if (ImGui::CollapsingHeader("Root Motion", ImGuiTreeNodeFlags_DefaultOpen))
 	{
-		ImGui::Checkbox("Enable Root Motion", &Sequence->bEnableRootMotion);
-		ImGui::Checkbox("Force Root Lock", &Sequence->bForceRootLock);
-		ImGui::Checkbox("Normalized Root Motion Scale", &Sequence->bUseNormalizedRootMotionScale);
+		if (ImGui::Checkbox("Enable Root Motion", &Sequence->bEnableRootMotion)) MarkDirty();
+		if (ImGui::Checkbox("Force Root Lock", &Sequence->bForceRootLock)) MarkDirty();
+		if (ImGui::Checkbox("Normalized Root Motion Scale", &Sequence->bUseNormalizedRootMotionScale)) MarkDirty();
 		int RootLock = static_cast<int>(Sequence->RootMotionRootLock);
 		if (ImGui::Combo("Root Lock", &RootLock, "Ref Pose\0Anim First Frame\0Zero\0"))
+		{
 			Sequence->RootMotionRootLock = static_cast<ERootMotionRootLock>(RootLock);
+			MarkDirty();
+		}
 	}
 	if (ImGui::Button("Save Sequence"))
-		Status = UAssetManager::SaveAnimSequence(*Sequence) ? "Saved" : "Save failed";
+		Save();
 	ImGui::SameLine();
 	ImGui::TextUnformatted(Status.c_str());
 }
@@ -307,6 +358,7 @@ void FAnimSequenceViewerPanel::DrawTimeline()
 		Player->SetPosition(Frame / FramesPerSecond);
 		MeshComponent->TickComponent(0.0f);
 	}
+	DrawNotifyTrack(RulerWidth);
 	ImGui::SetNextItemWidth(-1);
 	if (ImGui::SliderInt("##Frame", &Frame, 0, Model->NumberOfFrames) && Player)
 	{
@@ -335,6 +387,201 @@ void FAnimSequenceViewerPanel::DrawTimeline()
 	{
 		PreviewRate = std::clamp(PreviewRate, 0.05f, 4.0f);
 		Player->SetPlayRate(PreviewRate);
+	}
+}
+
+// 눈금자 아래의 Notify 줄. 마커를 눌러 고르고 끌어서 옮기고, 우클릭으로 추가·삭제한다.
+void FAnimSequenceViewerPanel::DrawNotifyTrack(float TrackWidth)
+{
+	if (!Sequence || !Sequence->GetDataModel() || Sequence->GetDataModel()->PlayLength <= 0.0f)
+	{
+		return;
+	}
+	const UAnimDataModel* Model = Sequence->GetDataModel();
+	const float Length = Model->PlayLength;
+	TArray<FAnimNotifyEvent>& Notifies = Sequence->Notifies;
+	ImDrawList* DrawList = ImGui::GetWindowDrawList();
+
+	const ImVec2 Start = ImGui::GetCursorScreenPos();
+	const float Height = EditorUIScale::Px(22.0f);
+	const ImVec2 End(Start.x + TrackWidth, Start.y + Height);
+	ImGui::InvisibleButton("##NotifyTrack", ImVec2(TrackWidth, Height));
+	const bool bHovered = ImGui::IsItemHovered();
+	DrawList->AddRectFilled(Start, End, ImGui::GetColorU32(ImGuiCol_FrameBg));
+
+	auto TimeToX = [&](float Time) { return Start.x + TrackWidth * Time / Length; };
+	auto XToTime = [&](float X) { return std::clamp((X - Start.x) / TrackWidth * Length, 0.0f, Length); };
+
+	// 마우스에 가장 가까운 마커. 같은 위치면 위에 그려진(뒤에 있는) 쪽이 잡힌다.
+	const ImVec2 Mouse = ImGui::GetMousePos();
+	int32 Hit = -1;
+	if (bHovered)
+	{
+		float Best = EditorUIScale::Px(7.0f);
+		for (int32 Index = 0; Index < Notifies.Num(); ++Index)
+		{
+			const float Distance = std::abs(TimeToX(Notifies[Index].TriggerTime) - Mouse.x);
+			if (Distance <= Best)
+			{
+				Best = Distance;
+				Hit = Index;
+			}
+		}
+	}
+
+	if (bHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		SelectedNotify = Hit;
+		DraggingNotify = Hit;
+		bFocusNotifyTab = Hit >= 0;
+	}
+	if (bHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+	{
+		NotifyPopupTime = XToTime(Mouse.x);
+		NotifyPopupTarget = Hit;
+		if (Hit >= 0)
+		{
+			SelectedNotify = Hit;
+		}
+		ImGui::OpenPopup("NotifyContext");
+	}
+
+	// 끄는 동안은 마우스가 줄 밖으로 나가도 이어간다. 기본은 프레임에 맞추고 Alt를 누르면 자유롭게 옮긴다.
+	if (DraggingNotify >= 0)
+	{
+		if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && Notifies.IsValidIndex(DraggingNotify))
+		{
+			float Time = XToTime(Mouse.x);
+			const float FramesPerSecond = Model->FrameRate.AsDecimal();
+			if (!ImGui::GetIO().KeyAlt && FramesPerSecond > 0.0f)
+			{
+				Time = std::clamp(std::round(Time * FramesPerSecond) / FramesPerSecond, 0.0f, Length);
+			}
+			if (Notifies[DraggingNotify].TriggerTime != Time)
+			{
+				Notifies[DraggingNotify].TriggerTime = Time;
+				MarkDirty();
+			}
+		}
+		else
+		{
+			DraggingNotify = -1;
+		}
+	}
+
+	DrawList->PushClipRect(Start, End, true);
+	const float Size = EditorUIScale::Px(6.0f);
+	const float Middle = Start.y + Height * 0.5f;
+	for (int32 Index = 0; Index < Notifies.Num(); ++Index)
+	{
+		const FAnimNotifyEvent& Event = Notifies[Index];
+		const float X = TimeToX(Event.TriggerTime);
+		const bool bSelected = Index == SelectedNotify;
+		const ImU32 Color = bSelected ? IM_COL32(255, 170, 0, 255)
+			: (Index == Hit ? IM_COL32(255, 220, 120, 255) : ImGui::GetColorU32(ImGuiCol_PlotHistogram));
+		DrawList->AddLine(ImVec2(X, Start.y), ImVec2(X, End.y), Color);
+		DrawList->AddTriangleFilled(ImVec2(X - Size, Middle - Size), ImVec2(X + Size, Middle - Size), ImVec2(X, Middle + Size), Color);
+		DrawList->AddText(ImVec2(X + Size + 2.0f, Start.y + 2.0f), ImGui::GetColorU32(ImGuiCol_Text), Event.Name.c_str());
+	}
+	DrawList->PopClipRect();
+
+	if (bHovered && Hit >= 0)
+	{
+		ImGui::SetTooltip("%s  %.3f s\n%s", Notifies[Hit].Name.c_str(), Notifies[Hit].TriggerTime,
+			Notifies[Hit].Notify ? Notifies[Hit].Notify->GetClass()->Name.c_str() : "None");
+	}
+
+	if (ImGui::BeginPopup("NotifyContext"))
+	{
+		if (Notifies.IsValidIndex(NotifyPopupTarget))
+		{
+			if (ImGui::MenuItem("Delete Notify"))
+			{
+				Notifies.RemoveAt(NotifyPopupTarget);
+				SelectedNotify = -1;
+				DraggingNotify = -1;
+				MarkDirty();
+			}
+		}
+		else
+		{
+			ImGui::Text("%.3f s", NotifyPopupTime);
+			ImGui::Separator();
+			if (ImGui::BeginMenu("Add Notify"))
+			{
+				TArray<UClass*> Classes;
+				GetNotifyClasses(Classes);
+				for (UClass* Class : Classes)
+				{
+					if (ImGui::MenuItem(GetNotifyDisplayName(Class).c_str()) &&
+						Sequence->AddNotify(GetNotifyDisplayName(Class), Class->Name, NotifyPopupTime))
+					{
+						SelectedNotify = Notifies.Num() - 1;
+						bFocusNotifyTab = true;
+						MarkDirty();
+					}
+				}
+				ImGui::EndMenu();
+			}
+		}
+		ImGui::EndPopup();
+	}
+}
+
+void FAnimSequenceViewerPanel::DrawNotifyDetails()
+{
+	if (!Sequence || !Sequence->GetDataModel())
+	{
+		return;
+	}
+	TArray<FAnimNotifyEvent>& Notifies = Sequence->Notifies;
+	ImGui::Text("Notifies: %d", Notifies.Num());
+	ImGui::BeginChild("NotifyList", ImVec2(0, EditorUIScale::Px(90.0f)), ImGuiChildFlags_Borders);
+	for (int32 Index = 0; Index < Notifies.Num(); ++Index)
+	{
+		ImGui::PushID(Index);
+		const FString Label = Notifies[Index].Name + "  (" + std::format("{:.3f}", Notifies[Index].TriggerTime) + " s)";
+		if (ImGui::Selectable(Label.c_str(), Index == SelectedNotify))
+		{
+			SelectedNotify = Index;
+		}
+		ImGui::PopID();
+	}
+	ImGui::EndChild();
+
+	if (!Notifies.IsValidIndex(SelectedNotify))
+	{
+		ImGui::TextWrapped("Right-click the notify track under the ruler to add a notify.");
+		return;
+	}
+	FAnimNotifyEvent& Event = Notifies[SelectedNotify];
+	ImGui::Separator();
+	ImGui::TextDisabled("%s", Event.Notify ? Event.Notify->GetClass()->Name.c_str() : "None");
+
+	char NameBuffer[128]{};
+	std::snprintf(NameBuffer, sizeof(NameBuffer), "%s", Event.Name.c_str());
+	if (ImGui::InputText("Name", NameBuffer, sizeof(NameBuffer)))
+	{
+		Event.Name = NameBuffer;
+		MarkDirty();
+	}
+	if (ImGui::DragFloat("Time", &Event.TriggerTime, 0.001f, 0.0f, Sequence->GetDataModel()->PlayLength, "%.3f s"))
+	{
+		Event.TriggerTime = std::clamp(Event.TriggerTime, 0.0f, Sequence->GetDataModel()->PlayLength);
+		MarkDirty();
+	}
+	if (ImGui::DragFloat("Threshold", &Event.TriggerWeightThreshold, 0.01f, 0.0f, 1.0f, "%.3f"))
+	{
+		MarkDirty();
+	}
+	ImGui::SetItemTooltip("Weight Threshold\nThe notify is skipped when its blend weight is below this value.\nWeight is 1 for a sequence played alone and drops while blending (transitions, BlendSpace).\nRaise it (e.g. 0.5) so only the dominant animation triggers the notify.");
+	if (Event.Notify)
+	{
+		FPropertyEditor::DrawObjectProperties(Event.Notify);
+		if (ImGui::IsAnyItemActive())
+		{
+			MarkDirty();
+		}
 	}
 }
 
@@ -371,6 +618,14 @@ void FAnimSequenceViewerPanel::OnRender()
 	const FString Title = (Sequence ? GetAnimSequenceDisplayName(Path, Sequence->Skeleton->GetPath()) : FString("Animation Sequence")) + "###AnimationSequenceViewer";
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1250.0f), EditorUIScale::Px(750.0f)), ImGuiCond_FirstUseEver);
 	bVisible = BeginPanel(Title.c_str());
+	bFocused = bVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+	// Ctrl+S: 이 창에 포커스가 있을 때만 시퀀스를 저장한다. 이때는 레벨 에디터의 Ctrl+S가 동작하지 않는다 (EditorEngine::BeginFrame).
+	// Ctrl+Shift+S는 전체 저장이라 여기서 받지 않는다.
+	const ImGuiIO& Io = ImGui::GetIO();
+	if (bFocused && Sequence && Io.KeyCtrl && !Io.KeyShift && !Io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_S, false))
+	{
+		Save();
+	}
 	if (bVisible && !Sequence)
 	{
 		ImGui::TextUnformatted(Path.c_str());
@@ -397,7 +652,7 @@ void FAnimSequenceViewerPanel::OnRender()
 		ImGui::EndChild();
 		ImGui::SameLine();
 		ImGui::BeginChild("Center", ImVec2(std::max(1.0f, Width - LeftWidth - RightWidth - EditorUIScale::Px(20.0f)), 0));
-		ImGui::BeginChild("Preview", ImVec2(0, -EditorUIScale::Px(115.0f)), ImGuiChildFlags_Borders);
+		ImGui::BeginChild("Preview", ImVec2(0, -EditorUIScale::Px(150.0f)), ImGuiChildFlags_Borders);
 		DrawViewport();
 		ImGui::EndChild();
 		ImGui::BeginChild("Timeline", ImVec2(0, 0), ImGuiChildFlags_Borders);
@@ -410,6 +665,10 @@ void FAnimSequenceViewerPanel::OnRender()
 		if (ImGui::BeginTabBar("RightTabs"))
 		{
 			if (ImGui::BeginTabItem("Details")) { DrawBoneDetails(); ImGui::EndTabItem(); }
+			// 마커를 새로 골랐을 때 한 번만 이 탭으로 전환한다.
+			const ImGuiTabItemFlags NotifyTabFlags = bFocusNotifyTab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+			bFocusNotifyTab = false;
+			if (ImGui::BeginTabItem("Notify", nullptr, NotifyTabFlags)) { DrawNotifyDetails(); ImGui::EndTabItem(); }
 			if (ImGui::BeginTabItem("Preview Scene Settings"))
 			{
 				TArray<USkeletalMesh*> Meshes;

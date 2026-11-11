@@ -84,11 +84,16 @@ struct FAnimNode_BlendSpacePlayer : FAnimNode_Base
 	bool bPlaying = true;
 	FMatrix PendingRootMotion = FMatrix::Identity;
 	bool bHasPendingRootMotion = false;
+	// 가장 최근 Update에서 진행한 구간에 든 Notify. Weight는 샘플의 블렌드 가중치이고 매 Update 시작에 비운다.
+	TArray<FAnimNotifyQueueItem> PendingNotifies;
+	// Reset 직후 첫 Update는 구간 시작(0)을 포함해 0초 Notify를 놓치지 않는다.
+	bool bNotifyIncludeStart = true;
 
 	void Reset() override;
 	void Update(float DeltaSeconds) override;
 	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
 	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+	void GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const override;
 	float GetCycleSeconds() const override;
 	bool GetNormalizedTime(float& OutTime) const override { OutTime = NormalizedTime; return BlendSpace != nullptr; }
 	void SetNormalizedTime(float Time) override { NormalizedTime = std::clamp(Time, 0.0f, 1.0f); }

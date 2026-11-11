@@ -567,6 +567,13 @@ void FEditorUI::DrawFbxImportBody()
 
 	ImGui::EndDisabled();
 
+	// Target Skeleton으로 애니메이션만 받는 재임포트에서도 쓰도록 위의 비활성 범위 밖에 둔다.
+	if (Request.bReimport)
+	{
+		ImGui::Checkbox("Keep Animation Notifies", &FbxOptions.bKeepNotifies);
+		ImGui::SetItemTooltip("On: copy the Notifies of the existing AnimSequence files into the reimported ones.\nOff: reimported AnimSequences start with no Notifies.");
+	}
+
 	if (!FFbxAssetImporter::IsAvailable())
 	{
 		ImGui::TextWrapped("Run Setup/SlnGenerator.bat and rebuild the editor to enable FBX import.");

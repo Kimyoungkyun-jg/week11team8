@@ -236,6 +236,8 @@ private:
 	FGamePackager Packager;
 
 	FEditorCommand Save;
+	// 씬과 열려 있는 애니메이션 에디터의 저장하지 않은 변경을 모두 저장한다 (Ctrl+Shift+S)
+	FEditorCommand SaveAll;
 
 	FEditorCommand Play;
 	FEditorCommand Pause;
@@ -261,6 +263,7 @@ private:
 	void CreateNewScene();
 	void OpenScene();
 	void SaveCurrentScene();
+	void SaveAllAssets();
 	void SaveSceneAs();
 
 	void CreatePIESession();

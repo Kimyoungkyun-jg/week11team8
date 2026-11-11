@@ -107,3 +107,27 @@ bool UBlendSpace1D::ExtractRootMotion(float X, float Y, float PreviousTime, floa
 	OutDelta = FBoneTransform::Blend(TransformA, TransformB, Alpha).ToMatrix();
 	return true;
 }
+
+void UBlendSpace1D::GetNotifies(float X, float Y, float PreviousTime, float CurrentTime, int32 LoopCount,
+	bool bIncludeStart, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	const FSample* A;
+	const FSample* B;
+	float Alpha;
+	if (!GetBlendSamples(X, A, B, Alpha)) return;
+	const float LengthA = A->Sequence->GetDataModel()->PlayLength;
+	// Evaluate와 같은 기준: 양 끝이거나 한쪽 가중치가 0이면 한 샘플만 쓴다.
+	if (A == B || Alpha <= 0.0f)
+	{
+		A->Sequence->GetNotifyQueueItems(PreviousTime * LengthA, CurrentTime * LengthA, LoopCount, bIncludeStart, 1.0f, OutQueue);
+		return;
+	}
+	const float LengthB = B->Sequence->GetDataModel()->PlayLength;
+	if (Alpha >= 1.0f)
+	{
+		B->Sequence->GetNotifyQueueItems(PreviousTime * LengthB, CurrentTime * LengthB, LoopCount, bIncludeStart, 1.0f, OutQueue);
+		return;
+	}
+	A->Sequence->GetNotifyQueueItems(PreviousTime * LengthA, CurrentTime * LengthA, LoopCount, bIncludeStart, 1.0f - Alpha, OutQueue);
+	B->Sequence->GetNotifyQueueItems(PreviousTime * LengthB, CurrentTime * LengthB, LoopCount, bIncludeStart, Alpha, OutQueue);
+}

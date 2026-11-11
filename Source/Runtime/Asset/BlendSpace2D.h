@@ -28,6 +28,8 @@ public:
 		TArray<FAnimBoneTransform>& OutPose) const override;
 	bool ExtractRootMotion(float X, float Y, float PreviousTime, float CurrentTime,
 		int32 LoopCount, FMatrix& OutDelta) const override;
+	void GetNotifies(float X, float Y, float PreviousTime, float CurrentTime, int32 LoopCount,
+		bool bIncludeStart, TArray<FAnimNotifyQueueItem>& OutQueue) const override;
 
 private:
 	struct FWeightedSample { const FSample* Sample = nullptr; float Weight = 0.0f; };

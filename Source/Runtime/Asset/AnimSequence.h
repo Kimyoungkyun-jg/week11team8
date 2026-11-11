@@ -28,10 +28,20 @@ public:
 	// 속성은 돌려받은 객체에 설정한다. 저장·로드와 에디터 편집도 이 함수로 Notify를 만든다.
 	UAnimNotify* AddNotify(const FString& EventName, const FString& NotifyClassName, float TriggerTime);
 
+	// 저장 형식(클래스 이름 + 속성 JSON)과 Notify 객체 사이를 변환한다.
+	// ImportNotifies는 기존 Notifies를 비우고 레코드로 다시 만든다. 알 수 없는 클래스의 레코드는 경고를 남기고 건너뛴다.
+	// 시간은 DataModel이 있으면 [0, PlayLength]로 맞춘다. DataModel을 먼저 설정한 뒤 호출한다.
+	void ExportNotifies(TArray<FAnimNotifyRecord>& OutRecords) const;
+	void ImportNotifies(const TArray<FAnimNotifyRecord>& Records);
+
 	// 이번 프레임에 플레이어가 진행한 구간에 든 Notify를 OutNotifies 뒤에 추가한다 (비우지 않는다).
 	// 구간 규칙: 기본은 (PreviousTime, CurrentTime]. 루프를 넘으면 (PreviousTime, Length], 전체 주기 [0, Length] x (LoopCount - 1), [0, CurrentTime].
 	// bIncludeStart가 true면 첫 구간의 시작도 포함한다 (재생을 막 시작한 첫 Update에서 0초 Notify를 놓치지 않기 위해).
 	void GetNotifies(float PreviousTime, float CurrentTime, int32 LoopCount, bool bIncludeStart, TArray<FAnimNotifyEvent>& OutNotifies) const;
+
+	// GetNotifies로 모은 Notify를 가중치와 이 시퀀스를 붙여 OutQueue 뒤에 추가한다. BlendSpace가 샘플마다 쓴다.
+	void GetNotifyQueueItems(float PreviousTime, float CurrentTime, int32 LoopCount, bool bIncludeStart,
+		float Weight, TArray<FAnimNotifyQueueItem>& OutQueue) const;
 
 	int32 GetFrameIndex(float TimeSeconds) const;
 	int32 GetRootBoneIndex() const;
