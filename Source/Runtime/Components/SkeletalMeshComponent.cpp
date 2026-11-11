@@ -1,6 +1,7 @@
 #include "EnginePCH.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Render/RenderCommand.h"
+#include "Render/RenderResourceManager.h"
 #include "Render/RenderPacket.h"
 #include "Collision/Ray.h"
 #include "Engine/PrimitiveSceneProxy.h"
@@ -83,6 +84,11 @@ void USkeletalMeshComponent::BeginPlay()
 void USkeletalMeshComponent::TickComponent(float DeltaTime)
 {
 	Super::TickComponent(DeltaTime);
+	// Any main view that gathered this component since the previous tick can keep it active.
+	const bool bTickPose = !bOnlyTickPoseWhenRendered || bVisibleSinceLastTick;
+	bVisibleSinceLastTick = false;
+	if (!bTickPose) return;
+
 	EnsureBoneState();
 	if (AnimScriptInstance && SkeletalMesh)
 	{
@@ -219,6 +225,7 @@ void USkeletalMeshComponent::InitBoneTransforms()
 	BoneStateMesh = SkeletalMesh;
 	SkinnedVertexBuffer.reset();
 	SkinnedLODs.Reset();
+	ComputeSkinnedLODs.Reset();
 	++PoseRevision;
 	SkinningMatricesBuffer.reset();
 	LocalBoneTransforms.Reset();
@@ -344,13 +351,16 @@ void USkeletalMeshComponent::UpdateSkinning()
 {
 	if (!SkeletalMesh || SkinningMatrices.IsEmpty()) return;
 	++PoseRevision;
-	if (bSkinningMatricesDirty) UpdateBoneMatrices();
-	if (GetDesiredSkinningMode() == ESkinningMode::GPU)
+	const bool bPoseChanged = bSkinningMatricesDirty;
+	if (bPoseChanged) UpdateBoneMatrices();
+	const ESkinningMode DesiredMode = GetDesiredSkinningMode();
+	if (DesiredMode != ESkinningMode::CPU)
 	{
 		if (!SkinningMatricesBuffer)
 			SkinningMatricesBuffer = RenderCommand::CreateDynamicStructuredBuffer(
 				static_cast<uint32>(SkinningMatrices.Num()), sizeof(FMatrix));
-		if (SkinningMatricesBuffer && SkinningMatricesBuffer->GetBuffer() && SkinningMatricesBuffer->GetSRV())
+		if (SkinningMatricesBuffer && SkinningMatricesBuffer->GetBuffer() && SkinningMatricesBuffer->GetSRV()
+			&& (DesiredMode != ESkinningMode::Compute || FRenderResourceManager::GetComputeSkinningShader()))
 		{
 			const uint32 MatrixBytes = static_cast<uint32>(SkinningMatrices.Num() * sizeof(FMatrix));
 			FSkinningFrameStats& Stats = FSkinningStats::Pending();
@@ -360,17 +370,83 @@ void USkeletalMeshComponent::UpdateSkinning()
 			}
 			++Stats.GpuSkinnedComponents;
 			Stats.MatrixUploadBytes += MatrixBytes;
-			if (AppliedMode != ESkinningMode::GPU)
+			const bool bUpdateBounds = bPoseChanged || AppliedMode == ESkinningMode::CPU;
+			bVertexColorsDirty = false;
+			AppliedMode = DesiredMode;
+			if (bUpdateBounds)
 			{
-				SkinnedBounds = SkeletalMesh->MeshData.AABB;
+				SkinnedBounds = SkeletalMesh->CalcSkinnedBounds(SkinningMatrices);
 				MarkTransformDirty();
 			}
-			AppliedMode = ESkinningMode::GPU;
 			return;
 		}
 	}
 	PerformCPUSkinning();
 	AppliedMode = ESkinningMode::CPU;
+}
+
+FVertexBuffer* USkeletalMeshComponent::DispatchComputeSkinning(uint32 LOD)
+{
+	static_assert(sizeof(FVertex) == 64 && offsetof(FVertex, Normal) == 12
+		&& offsetof(FVertex, Tangent) == 24 && offsetof(FVertex, UV) == 40 && offsetof(FVertex, Color) == 48);
+
+	if (ComputeMeshRevision != SkeletalMesh->GetRenderDataRevision())
+	{
+		ComputeSkinnedLODs.Reset();
+		ComputeMeshRevision = SkeletalMesh->GetRenderDataRevision();
+	}
+	ComputeSkinnedLODs.SetNum(SkeletalMesh->GetLODCount());
+	auto& Cached = ComputeSkinnedLODs[LOD];
+	if (Cached.Output && Cached.Revision == PoseRevision) return Cached.Output.get();
+
+	FRenderDevice* RenderDevice = FRenderDevice::Get();
+	if (!RenderDevice) return nullptr;
+	ID3D11Device* Device = RenderDevice->GetDevice();
+	const FStructuredBuffer* Source = SkeletalMesh->GetOrCreateComputeSkinningSource(LOD, Device);
+	if (!Source) return nullptr;
+
+	if (!Cached.Output)
+	{
+		D3D11_BUFFER_DESC Desc{};
+		Desc.ByteWidth = Source->GetCapacity() * sizeof(FVertex);
+		Desc.Usage = D3D11_USAGE_DEFAULT;
+		Desc.BindFlags = D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS;
+		Desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		auto Buffer = std::make_unique<FVertexBuffer>(Device, Desc, sizeof(FVertex));
+		if (!Buffer->GetBuffer()) return nullptr;
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC View{};
+		View.Format = DXGI_FORMAT_R32_TYPELESS;
+		View.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		View.Buffer.NumElements = Desc.ByteWidth / sizeof(uint32);
+		View.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		if (FAILED(Device->CreateUnorderedAccessView(Buffer->GetBuffer(), &View, Cached.OutputUAV.ReleaseAndGetAddressOf())))
+			return nullptr;
+		Cached.Output = std::move(Buffer);
+	}
+	ID3D11DeviceContext* Context = RenderDevice->GetContext();
+
+	// The preceding draw may still have this output bound at IA slot 0.
+	RenderCommand::BindVertexBuffer(nullptr);
+	ID3D11UnorderedAccessView* Output = Cached.OutputUAV.Get();
+	Context->CSSetUnorderedAccessViews(0, 1, &Output, nullptr);
+	RenderCommand::BindComputeShader(FRenderResourceManager::GetComputeSkinningShader());
+	RenderCommand::BindShaderResource(0, Source, EShaderBindFlagBits::Compute);
+	RenderCommand::BindShaderResource(16, SkinningMatricesBuffer.get(), EShaderBindFlagBits::Compute);
+	const uint32 Groups = (Source->GetCapacity() + 63) / 64;
+	constexpr uint32 GroupsPerRow = 32768; // Must match ComputeSkinningCS.hlsli.
+	FGpuProfiler& Profiler = FGpuProfiler::Get();
+	const int32 TimingHandle = FSkinningStats::IsCollecting() ? Profiler.BeginSkinningDispatch() : -1;
+	RenderCommand::Dispatch(std::min(Groups, GroupsPerRow), (Groups + GroupsPerRow - 1) / GroupsPerRow, 1);
+	Profiler.EndScope(TimingHandle);
+
+	ID3D11UnorderedAccessView* NullUAV = nullptr;
+	Context->CSSetUnorderedAccessViews(0, 1, &NullUAV, nullptr);
+	RenderCommand::UnbindShaderResources(0, 1, EShaderBindFlagBits::Compute);
+	RenderCommand::UnbindShaderResources(16, 1, EShaderBindFlagBits::Compute);
+	RenderCommand::BindComputeShader(nullptr);
+	Cached.Revision = PoseRevision;
+	return Cached.Output.get();
 }
 
 void USkeletalMeshComponent::PerformCPUSkinning()
@@ -483,7 +559,7 @@ void USkeletalMeshComponent::EndSkinningStatsFrame()
 			Component->bSkinningMatricesDirty = true;
 		if (!bCollecting) continue;
 		++Counts.TotalComponents;
-		if (Component->AppliedMode == ESkinningMode::GPU) ++Counts.GpuModeComponents;
+		if (Component->AppliedMode != ESkinningMode::CPU) ++Counts.GpuModeComponents;
 		else ++Counts.CpuModeComponents;
 		Counts.TotalVertices += static_cast<uint64>(Component->SkeletalMesh->MeshData.SkinnedVertices.Num());
 		Counts.TotalBones += static_cast<uint64>(Component->SkeletalMesh->MeshData.Bones.Num());
@@ -506,7 +582,16 @@ FPrimitiveSceneProxy* USkeletalMeshComponent::CreateSceneProxy()
 
 FVertexBuffer* USkeletalMeshComponent::GetSkinnedVertexBuffer(uint32 LOD)
 {
+	EnsureBoneState();
 	if (!SkeletalMesh || LOD >= SkeletalMesh->GetLODCount()) return nullptr;
+	if (NeedsSkinningUpdate()) UpdateSkinning();
+	if (AppliedMode == ESkinningMode::Compute)
+	{
+		if (SkeletalMesh->GetMeshData(LOD).SkinnedVertices.IsEmpty()) return nullptr;
+		if (FVertexBuffer* Output = DispatchComputeSkinning(LOD)) return Output;
+		PerformCPUSkinning();
+	}
+	if (AppliedMode == ESkinningMode::GPU) return nullptr;
 	if (LOD == 0) return SkinnedVertexBuffer.get();
 	FSkinnedLOD& Cached = SkinnedLODs[LOD - 1];
 	if (Cached.Buffer && Cached.Revision == PoseRevision) return Cached.Buffer.get();
@@ -558,6 +643,8 @@ void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, cons
 	const FLODSelectionInput Input{ SkeletalMesh->GetLocalLODSphere().Transform(GetWorldMatrix()), &State };
 	const uint32 LOD = ViewContext.bOrthographic ? SelectSphereLOD<true>(Input, ViewContext) : SelectSphereLOD<false>(Input, ViewContext);
 	const FSkeletalMeshData& MeshData = SkeletalMesh->GetMeshData(LOD);
+	FVertexBuffer* VertexBuffer = AppliedMode != ESkinningMode::GPU ? GetSkinnedVertexBuffer(LOD) : nullptr;
+	if (AppliedMode != ESkinningMode::GPU && !VertexBuffer) return;
 	// 히트맵은 텍스처 없는 흰 머티리얼로 모든 섹션을 덮는다. 그래야 UberLit이 정점 색(히트 색)을 표면 색으로 쓴다.
 	UMaterial* HeatmapMaterial = bBoneWeightHeatmap ? UAssetManager::GetAssetByPath<UMaterial>("BoneWeightHeatmapMaterial") : nullptr;
 
@@ -568,9 +655,10 @@ void USkeletalMeshComponent::SubmitToRenderQueue(FRenderQueue& RenderQueue, cons
 
 		FRenderPacket Packet;
 		Packet.SkeletalMesh = SkeletalMesh;
-		Packet.SkeletalVertexBuffer = AppliedMode == ESkinningMode::CPU ? GetSkinnedVertexBuffer(LOD) : nullptr;
+		Packet.SkeletalVertexBuffer = VertexBuffer;
 		Packet.LODIndex = static_cast<uint8>(LOD);
 		Packet.SkinningMatricesBuffer = AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr;
+		Packet.bComputeSkinned = AppliedMode == ESkinningMode::Compute;
 		Packet.Model = RenderQueue.StoreWorldMatrix(GetWorldMatrix());
 		Packet.StartIndex = Section.StartIndex;
 		Packet.IndexCount = Section.IndexCount;

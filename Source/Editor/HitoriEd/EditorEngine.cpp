@@ -243,6 +243,14 @@ bool UEditorEngine::Init()
 		{
 			FLuaScriptManager::Get().OpenScriptInEditor(Path);
 		}
+		else if (Extension == ".animmontage" && AnimMontageEditorPanel)
+		{
+			AnimMontageEditorPanel->OpenAsset(Path);
+		}
+		else if (Extension == ".aimoffset" && AimOffsetEditorPanel)
+		{
+			AimOffsetEditorPanel->OpenAsset(Path);
+		}
 		else AssetEditorPanel->OpenAsset(Path);
 	});
 
@@ -273,8 +281,16 @@ bool UEditorEngine::Init()
 	ContentDrawerPanel->SetCreateAnimGraphCallback([this](const FString& Path, const FString& SkeletonKey) { AnimGraphEditorPanel->NewAsset(Path, SkeletonKey); });
 	ContentDrawerPanel->SetOpenAnimGraphCallback([this](const FString& Path) { AnimGraphEditorPanel->OpenAsset(Path); });
 	BlendSpaceEditorPanel = EditorUI->AddEditorPanel<FBlendSpaceEditorPanel>();
+	AnimMontageEditorPanel = EditorUI->AddEditorPanel<FAnimMontageEditorPanel>();
+	AimOffsetEditorPanel = EditorUI->AddEditorPanel<FAimOffsetEditorPanel>();
 	AnimGraphEditorPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
+	AnimGraphEditorPanel->SetOpenMontageCallback([this](const FString& Path) { AnimMontageEditorPanel->OpenAsset(Path); });
+	AnimGraphEditorPanel->SetOpenAimOffsetCallback([this](const FString& Path) { AimOffsetEditorPanel->OpenAsset(Path); });
 	BlendSpaceEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimMontageEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AimOffsetEditorPanel->SetOpenSequenceCallback([this](const FString& Path) { AnimSequenceViewerPanel->OpenSequence(Path); });
+	AnimMontageEditorPanel->SetSavedCallback([this]() { AnimGraphEditorPanel->NotifyAnimationAssetSaved(); });
+	AimOffsetEditorPanel->SetSavedCallback([this]() { AnimGraphEditorPanel->NotifyAnimationAssetSaved(); });
 	ContentDrawerPanel->SetCreateBlendSpaceCallback([this](const FString& Path, bool b2D) { BlendSpaceEditorPanel->NewAsset(Path, b2D); });
 	ContentDrawerPanel->SetOpenBlendSpaceCallback([this](const FString& Path) { BlendSpaceEditorPanel->OpenAsset(Path); });
 
@@ -863,8 +879,9 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 void UEditorEngine::TickWorldAndEditor(const float DeltaTime)
 {
 	const FEditorSettings& RenderSettings = SettingsPanel->GetSettings();
-	USkeletalMeshComponent::SetSkinningMode(RenderSettings.RenderingPath == ERenderingPath::Forward
-		? RenderSettings.SkinningMode : ESkinningMode::CPU);
+	const bool bVSSkinningUnavailable = RenderSettings.SkinningMode == ESkinningMode::GPU
+		&& RenderSettings.RenderingPath != ERenderingPath::Forward;
+	USkeletalMeshComponent::SetSkinningMode(bVSSkinningUnavailable ? ESkinningMode::CPU : RenderSettings.SkinningMode);
 
 	// 게임 입력 처리
 	if (PlayWorld)
@@ -1057,6 +1074,8 @@ void UEditorEngine::RenderViewports()
 	AnimSequenceViewerPanel->RenderPreview(this);
 	AnimGraphEditorPanel->RenderPreview(this);
 	BlendSpaceEditorPanel->RenderPreview(this);
+	AnimMontageEditorPanel->RenderPreview(this);
+	AimOffsetEditorPanel->RenderPreview(this);
 }
 
 void UEditorEngine::UpdatePIEViewCamera()
@@ -1719,7 +1738,8 @@ void UEditorEngine::RenderFrame(FEditorViewportClient* ViewClient,
 	if (!bRendered) return;
 }
 
-void UEditorEngine::RenderPreviewViewport(FEditorViewportClient* PreviewClient, UWorld* PreviewWorld, const FGizmo* PreviewGizmo, FSkyboxRenderer* SkyboxOverride, bool bDrawGrid)
+void UEditorEngine::RenderPreviewViewport(FEditorViewportClient* PreviewClient, UWorld* PreviewWorld, const FGizmo* PreviewGizmo,
+	FSkyboxRenderer* SkyboxOverride, bool bDrawGrid, const UPrimitiveComponent* BoundsComponent)
 {
 	if (!PreviewClient || !PreviewWorld || PreviewClient->GetWidth() == 0 || PreviewClient->GetHeight() == 0)
 		return;
@@ -1735,13 +1755,17 @@ void UEditorEngine::RenderPreviewViewport(FEditorViewportClient* PreviewClient, 
 	SceneRenderer.InitViews(Renderer, Options);
 
 	FSceneViewTargets& Targets = PreviewClient->GetViewTargets();
-	RenderScene(Targets, SceneView, SceneRenderer, PreviewWorld, Options, [this, &SceneView, &Targets, PreviewGizmo, bDrawGrid, PreviewWorld](FSceneOverlayCallbacks& Overlays)
+	RenderScene(Targets, SceneView, SceneRenderer, PreviewWorld, Options, [this, &SceneView, &Targets, PreviewGizmo, bDrawGrid, PreviewWorld, BoundsComponent](FSceneOverlayCallbacks& Overlays)
 		{
-			Overlays.EditorLines = [this, &SceneView, PreviewWorld]
+			Overlays.EditorLines = [this, &SceneView, PreviewWorld, BoundsComponent]
 			{
 				LineBatcher->BeginFrame();
 				for (TObjectIterator<USkeletalMeshDebugComponent> It; It; ++It)
 					if (It->GetWorld() == PreviewWorld && It->ShouldDrawDebug()) It->DrawDebug(LineBatcher.get());
+				if (BoundsComponent)
+				{
+					LineBatcher->AddBox(BoundsComponent->CalcBounds(), FVector4(1.0f, 0.85f, 0.15f, 1.0f));
+				}
 				LineBatcher->OnRender(SceneView.ViewProjectionMatrix);
 			};
 			if (bDrawGrid)
@@ -1813,6 +1837,8 @@ void UEditorEngine::PreExit()
 	if (AnimSequenceViewerPanel) AnimSequenceViewerPanel->Release();
 	if (AnimGraphEditorPanel) AnimGraphEditorPanel->Release();
 	if (BlendSpaceEditorPanel) BlendSpaceEditorPanel->Release();
+	if (AnimMontageEditorPanel) AnimMontageEditorPanel->Release();
+	if (AimOffsetEditorPanel) AimOffsetEditorPanel->Release();
 	if (ContentDrawerPanel) ContentDrawerPanel->Release();
 	if (AssetEditorPanel) AssetEditorPanel->Release();
 	EditorWorld->ClearWorld();

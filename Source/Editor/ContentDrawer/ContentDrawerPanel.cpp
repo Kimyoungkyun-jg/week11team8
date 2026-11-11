@@ -33,6 +33,7 @@ FString SkeletonKeyFromPath(const std::filesystem::path& Path);
 #include "Launch/LaunchEngineLoop.h"
 #include "Render/Swapchain.h"
 #include "Render/SkyboxRenderer.h"
+#include <cctype>
 
 FContentDrawerPanel::FContentDrawerPanel() = default;
 
@@ -134,7 +135,12 @@ void FContentDrawerPanel::OnRender()
 		ImGui::SetItemTooltip("Import FBX files into this folder");
 		ImGui::SameLine();
 		ImGui::TextUnformatted(FbxPath::ToString(CurrentPath).c_str());
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+		ImGui::InputTextWithHint("##AssetSearch", "Search files in this folder...", SearchText, sizeof(SearchText));
 		ImGui::Separator();
+		FString SearchQuery = SearchText;
+		std::transform(SearchQuery.begin(), SearchQuery.end(), SearchQuery.begin(),
+			[](unsigned char C) { return static_cast<char>(std::tolower(C)); });
 
 		// 빈 곳 우클릭 (항목 위 우클릭은 제외)
 		if (ImGui::BeginPopupContextWindow("##DrawerContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
@@ -163,22 +169,42 @@ void FContentDrawerPanel::OnRender()
 				bNewBlendSpace2D = true;
 				bOpenCreateBlendSpace = true;
 			}
+			if (ImGui::MenuItem("Create AnimMontage") && OnOpenAsset)
+			{
+				strcpy_s(NewAssetName, "NewMontage");
+				bNewAnimationAssetMontage = true; bOpenCreateAnimationAsset = true;
+			}
+			if (ImGui::MenuItem("Create AimOffset") && OnOpenAsset)
+			{
+				strcpy_s(NewAssetName, "NewAimOffset");
+				bNewAnimationAssetMontage = false; bOpenCreateAnimationAsset = true;
+			}
 			ImGui::EndPopup();
 		}
-		if (bOpenCreateWidget)
+		if (bOpenCreateWidget) { ImGui::OpenPopup("Create Widget"); bOpenCreateWidget = false; }
+		if (bOpenCreateAnimGraph) { ImGui::OpenPopup("Create AnimGraph"); bOpenCreateAnimGraph = false; }
+		if (bOpenCreateBlendSpace) { ImGui::OpenPopup("Create BlendSpace"); bOpenCreateBlendSpace = false; }
+		if (bOpenCreateAnimationAsset) { ImGui::OpenPopup("Create Animation Asset"); bOpenCreateAnimationAsset = false; }
+		if (ImGui::BeginPopupModal("Create Animation Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
-			ImGui::OpenPopup("Create Widget");
-			bOpenCreateWidget = false;
-		}
-		if (bOpenCreateAnimGraph)
-		{
-			ImGui::OpenPopup("Create AnimGraph");
-			bOpenCreateAnimGraph = false;
-		}
-		if (bOpenCreateBlendSpace)
-		{
-			ImGui::OpenPopup("Create BlendSpace");
-			bOpenCreateBlendSpace = false;
+			ImGui::InputText("Name", NewAssetName, sizeof(NewAssetName));
+			const FString Name = NewAssetName;
+			const fs::path Target = CurrentPath / (Name + (bNewAnimationAssetMontage ? ".animmontage" : ".aimoffset"));
+			const bool bExists = fs::exists(Target);
+			const bool bInvalid = Name.empty() || Name == "." || Name == ".." ||
+				Name.find_first_of("\\/:*?\"<>|") != FString::npos;
+			if (bExists) ImGui::TextUnformatted("An asset with this name already exists.");
+			if (bInvalid) ImGui::TextUnformatted("Enter a valid asset name.");
+			ImGui::BeginDisabled(bExists || bInvalid);
+			if (ImGui::Button("Create") && OnOpenAsset)
+			{
+				OnOpenAsset(FbxPath::ToString(Target));
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
 		}
 		if (ImGui::BeginPopupModal("Create BlendSpace", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
@@ -300,9 +326,13 @@ void FContentDrawerPanel::OnRender()
 				const fs::path Path = It->path();
 				const FString EntryName = FbxPath::ToString(Path.filename());
 				// .bin은 OBJ 캐시와 예전 .animseq.bin이다. 애셋은 .fbxbin 하나로 통일했으므로 보이지 않는다.
-				if (Path.extension() == ".bin" || EntryName.starts_with('.') || HiddenFbxFiles.contains(Path.filename()))
+				if (Path.extension() == ".bin" || EntryName.starts_with('.') || HiddenFbxFiles.contains(Path.filename())) continue;
+				if (!SearchQuery.empty())
 				{
-					continue;
+					FString LowerName = EntryName;
+					std::transform(LowerName.begin(), LowerName.end(), LowerName.begin(),
+						[](unsigned char C) { return static_cast<char>(std::tolower(C)); });
+					if (LowerName.find(SearchQuery) == FString::npos) continue;
 				}
 
 				std::error_code TypeError;

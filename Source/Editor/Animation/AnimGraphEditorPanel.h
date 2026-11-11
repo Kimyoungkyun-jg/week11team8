@@ -18,7 +18,14 @@ public:
 	const char* GetPanelName() const override { return "AnimGraph Editor"; }
 	bool IsRootPanel() const override { return true; }
 	void OpenAsset(const FString& InPath);
+	void OpenMontageAsset(const FString& InPath);
+	void NewMontageAsset(const FString& InPath);
+	void OpenAimOffsetAsset(const FString& InPath);
+	void NewAimOffsetAsset(const FString& InPath);
 	void SetOpenBlendSpaceCallback(std::function<void(const FString&)> Callback) { OnOpenBlendSpace = std::move(Callback); }
+	void SetOpenMontageCallback(std::function<void(const FString&)> Callback) { OnOpenMontage = std::move(Callback); }
+	void SetOpenAimOffsetCallback(std::function<void(const FString&)> Callback) { OnOpenAimOffset = std::move(Callback); }
+	void NotifyAnimationAssetSaved() { bPreviewRefreshRequested = true; }
 	void NewAsset(const FString& InPath, const FString& InSkeletonKey);
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();
@@ -40,7 +47,12 @@ private:
 	void DrawTransition(ImDrawList* Draw, ImVec2 Origin, ImVec2 Size);
 	void DrawDetails();
 	void DrawAssetBrowser();
+	void DrawMontageEditorWindow();
+	void DrawAimOffsetEditorWindow();
 	void AddState();
+	int32 NextRootNodeId() const;
+	FRootAnimGraphNode* SelectedRootNode();
+	FRootAnimGraphNode* FindRootNode(int32 Id);
 	FAnimGraphState* SelectedState();
 	FAnimGraphTransition* SelectedTransition();
 	FString StateName(int32 Id) const;
@@ -52,15 +64,20 @@ private:
 
 	FString Path;
 	std::function<void(const FString&)> OnOpenBlendSpace;
+	std::function<void(const FString&)> OnOpenMontage;
+	std::function<void(const FString&)> OnOpenAimOffset;
 	float LeftRatio = 0.20f;
 	float RightRatio = 0.24f;
-	float PreviewRatio = 0.48f;
+	float PreviewRatio = 0.54f;
 	float DetailsRatio = 0.68f;
 	char AssetName[128]{};
 	FString Status;
 	FAnimGraphAsset Graph;
 	EView View = EView::Root;
 	int32 SelectedId = 0;
+	int32 SelectedRootNodeId = 1;
+	int32 DraggingRootNodeId = 0;
+	int32 PendingRootFromNodeId = 0;
 	int32 PendingFrom = 0;
 	bool bLinkDragging = false;
 	int32 DraggingState = 0;
@@ -81,9 +98,24 @@ private:
 	float CameraSpeed = 1.0f;
 	float PreviewSpeed = 0.0f;
 	float PreviewDirection = 0.0f;
+	float PreviewAimPitch = 0.0f;
+	bool bPreviewAiming = false;
 	bool bPreviewFalling = false;
 	bool bPreviewPlaying = true;
 	bool bVisible = false;
 	// 창을 완전히 닫아 프리뷰를 해제했으면 true. 다시 열릴 때 프리뷰를 복원한다.
 	bool bRestorePreviewOnOpen = false;
+	int32 PreviewFireCount = 0;
+	FString LastPreviewNotify;
+
+	bool bMontageEditorOpen = false;
+	FString MontageEditPath = "Assets/Animations/RifleFire.animmontage";
+	FAnimMontageAsset EditingMontage;
+	FString MontageStatus;
+	float MontageScrubTime = 0.0f;
+
+	bool bAimOffsetEditorOpen = false;
+	FString AimOffsetEditPath = "Assets/Animations/RifleAimOffset.aimoffset";
+	FAimOffsetAsset EditingAimOffset;
+	FString AimOffsetStatus;
 };

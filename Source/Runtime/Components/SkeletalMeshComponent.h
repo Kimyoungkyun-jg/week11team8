@@ -5,6 +5,7 @@
 #include "Asset/AnimSequence.h"
 #include "Render/RenderEnums.h"
 #include "Serialization/StructuredArchive.h"
+#include "Serialization/StructuredArchiveSlots.h"
 #include "SkeletalMeshComponent.generated.h"
 
 UCLASS()
@@ -18,6 +19,8 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime) override;
+	void MarkVisibleForAnimationTick() { bVisibleSinceLastTick = true; }
+	using Super::Serialize;
 	virtual void Serialize(FStructuredArchive::FRecord Record) override;
 
 	virtual void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh) override;
@@ -39,6 +42,8 @@ public:
 	static void SetSkinningMode(ESkinningMode Mode) { SkinningMode = Mode; }
 	static ESkinningMode GetSkinningMode() { return SkinningMode; }
 	ESkinningMode GetAppliedSkinningMode() const { return AppliedMode; }
+	FStructuredBuffer* GetSkinningMatricesBuffer() const
+	{ return AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr; }
 	// stat skinning: 등록된 컴포넌트를 세어 프레임 스탯을 마감한다. 프레임 끝에 한 번 부른다.
 	static void EndSkinningStatsFrame();
 	// r.Skinning.ForceUpdate: 포즈가 바뀌지 않아도 매 프레임 스키닝을 다시 한다 (애니메이션 재생과 같은 부하로 CPU/GPU 비교).
@@ -57,7 +62,6 @@ public:
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	FVertexBuffer* GetSkinnedVertexBuffer() const { return SkinnedVertexBuffer.get(); }
 	FVertexBuffer* GetSkinnedVertexBuffer(uint32 LOD);
-	FStructuredBuffer* GetSkinningMatricesBuffer() const { return AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr; }
 	const TArray<FVertex>& GetSkinnedVertices() const { return SkinnedVertices; }
 
 	virtual bool LineTraceComponent(const FRay& WorldRay, FHitResult& OutHit) override;
@@ -70,6 +74,15 @@ private:
 		uint64 Revision = 0;
 	};
 	TArray<FSkinnedLOD> SkinnedLODs;
+	struct FComputeSkinnedLOD
+	{
+		TUniquePtr<FVertexBuffer> Output;
+		ComPtr<ID3D11UnorderedAccessView> OutputUAV;
+		uint64 Revision = 0;
+	};
+	TArray<FComputeSkinnedLOD> ComputeSkinnedLODs;
+	uint64 ComputeMeshRevision = 0;
+	FVertexBuffer* DispatchComputeSkinning(uint32 LOD);
 	uint64 PoseRevision = 1;
 	void UpdateBoneMatrices();
 	// 이 컴포넌트가 실제로 써야 하는 모드. 히트맵은 CPU 경로에만 있으므로 CPU로 고정한다.
@@ -90,6 +103,9 @@ private:
 	TArray<FVector> PickPositions;
 	FBox PickBounds;
 	uint64 PickRevision = 0;
+	UPROPERTY(EditAnywhere)
+	bool bOnlyTickPoseWhenRendered = false;
+	bool bVisibleSinceLastTick = true;
 	UPROPERTY(EditAnywhere, Transient)
 	UClass* AnimClass = nullptr;
 	UPROPERTY(EditAnywhere, Transient)

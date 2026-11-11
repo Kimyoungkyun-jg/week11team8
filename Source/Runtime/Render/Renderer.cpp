@@ -1,6 +1,7 @@
 #include "EnginePCH.h"
 #include "Render/Renderer.h"
 #include "Render/RenderCommand.h"
+#include "Render/GpuProfiler.h"
 #include <algorithm>
 #include <chrono>
 #include <unordered_map>
@@ -78,11 +79,31 @@ void FRenderer::BindObject(const FMeshDrawBatch& Batch, const FMeshDrawBatch::FI
 	}
 }
 
-void FRenderer::DrawMeshes(std::span<const FMeshDrawBatch> Batches)
+void FRenderer::DrawMeshes(std::span<const FMeshDrawBatch> Batches,
+	const std::shared_ptr<FGpuTimingHistory>& SkeletalTiming, ESkinningMode MeasuredMode)
 {
 	uint32 PreviousTextureCount = 0;
+	using EScopeKind = FGpuProfiler::EScopeKind;
+	FGpuProfiler* Profiler = SkeletalTiming ? &FGpuProfiler::Get() : nullptr;
+	EScopeKind ActiveKind = EScopeKind::Pass;
+	int32 TimingHandle = -1;
 	for (const FMeshDrawBatch& Batch : Batches)
 	{
+		if (Profiler && !Batch.Items.IsEmpty())
+		{
+			EScopeKind Kind = EScopeKind::Pass;
+			const bool bGpuSkinned = Batch.SkinningMatricesBuffer != nullptr || Batch.bComputeSkinned;
+			if (Batch.bSkeletalMesh && bGpuSkinned == (MeasuredMode != ESkinningMode::CPU))
+				Kind = bGpuSkinned ? EScopeKind::GpuSkinnedDraw : EScopeKind::SkeletalDraw;
+
+			// Group adjacent draws without changing their order or including static meshes.
+			if (Kind != ActiveKind)
+			{
+				Profiler->EndScope(TimingHandle);
+				TimingHandle = Kind == EScopeKind::Pass ? -1 : Profiler->BeginScope(SkeletalTiming, Kind);
+				ActiveKind = Kind;
+			}
+		}
 		BindBatch(Batch);
 		if (PreviousTextureCount > Batch.Textures.Num())
 			RenderCommand::UnbindShaderResources(static_cast<uint32>(Batch.Textures.Num()),
@@ -111,6 +132,8 @@ void FRenderer::DrawMeshes(std::span<const FMeshDrawBatch> Batches)
 			RenderCommand::DrawIndexed(Item.IndexCount, Item.StartIndex);
 		}
 	}
+	if (Profiler)
+		Profiler->EndScope(TimingHandle);
 }
 
 void FRenderer::EnsurePerObjectSlotCapacity(uint32 SlotCount)

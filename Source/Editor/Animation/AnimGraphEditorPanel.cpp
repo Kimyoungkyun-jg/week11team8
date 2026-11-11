@@ -3,10 +3,12 @@
 #include "Editor/HitoriEd/EditorEngine.h"
 #include "Editor/EditorUI/EditorUIScale.h"
 #include "Editor/Animation/AnimationEditorSplitter.h"
+#include "Asset/AnimSequence.h"
 #include "Asset/AssetManager.h"
 #include "Asset/BlendSpace1D.h"
 #include "Asset/BlendSpace2D.h"
 #include "Asset/FbxImporter/FbxPath.h"
+#include "Animation/Skeleton.h"
 #include "Render/SkeletalMesh.h"
 #include "Render/Texture2D.h"
 #include "Engine/World.h"
@@ -21,23 +23,77 @@
 #include "Animation/AnimGraphInstance.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <set>
 
 namespace
 {
 	constexpr const char* PoseNames[] = { "Sequence Player", "BlendSpace 1D Player", "BlendSpace 2D Player" };
-	constexpr const char* InputNames[] = { "Constant", "Speed", "Direction", "Jump Requested", "Falling", "Grounded", "Moving On Ground", "Sequence Ending" };
+	constexpr const char* InputNames[] = {
+		"Constant", "Speed", "Direction", "Jump Requested", "Falling", "Grounded",
+		"Moving On Ground", "Sequence Ending", "Hit Requested",
+		"Sequence Ending + Grounded", "Sequence Ending + Airborne", "Attack Requested", "AimPitch", "IsAiming", "Death Requested"
+	};
 	constexpr const char* CompareNames[] = { "Always", ">", ">=", "<", "<=" };
+
 	bool Inside(ImVec2 P, ImVec2 Min, ImVec2 Max)
 	{
 		return P.x >= Min.x && P.y >= Min.y && P.x <= Max.x && P.y <= Max.y;
 	}
+
 	FString BlendSpaceFilePath(const FString& AssetPath)
 	{
 		const fs::path File = FbxPath::FromString(AssetPath);
 		return FbxPath::ToString(File.is_absolute() || AssetPath.starts_with("Assets/")
 			? File : fs::path("Assets") / File);
+	}
+
+	ImVec2 RootNodeSize(ERootAnimNodeType Type)
+	{
+		switch (Type)
+		{
+		case ERootAnimNodeType::StateMachine: return ImVec2(185.0f, 70.0f);
+		case ERootAnimNodeType::Slot: return ImVec2(185.0f, 76.0f);
+		case ERootAnimNodeType::LayeredBlendPerBone: return ImVec2(215.0f, 94.0f);
+		case ERootAnimNodeType::AimOffset: return ImVec2(205.0f, 84.0f);
+		case ERootAnimNodeType::OutputPose: return ImVec2(160.0f, 70.0f);
+		case ERootAnimNodeType::SequencePlayer: return ImVec2(215.0f, 84.0f);
+		}
+		return ImVec2(180.0f, 70.0f);
+	}
+
+	int32 RootNodeInputPinCount(ERootAnimNodeType Type)
+	{
+		switch (Type)
+		{
+		case ERootAnimNodeType::StateMachine: return 0;
+		case ERootAnimNodeType::Slot: return 1;
+		case ERootAnimNodeType::LayeredBlendPerBone: return 2;
+		case ERootAnimNodeType::AimOffset: return 1;
+		case ERootAnimNodeType::OutputPose: return 1;
+		case ERootAnimNodeType::SequencePlayer: return 0;
+		}
+		return 0;
+	}
+
+	bool RootNodeHasOutputPin(ERootAnimNodeType Type)
+	{
+		return Type != ERootAnimNodeType::OutputPose;
+	}
+
+	ImVec2 RootNodeInputPinPos(ImVec2 NodeMin, ERootAnimNodeType Type, int32 PinIdx, float Scale)
+	{
+		if (Type == ERootAnimNodeType::LayeredBlendPerBone)
+		{
+			return ImVec2(NodeMin.x, NodeMin.y + (PinIdx == 0 ? 44.0f : 72.0f) * Scale);
+		}
+		return ImVec2(NodeMin.x, NodeMin.y + 42.0f * Scale);
+	}
+
+	ImVec2 RootNodeOutputPinPos(ImVec2 NodeMin, ImVec2 NodeSize, float Scale)
+	{
+		return ImVec2(NodeMin.x + NodeSize.x * Scale, NodeMin.y + 42.0f * Scale);
 	}
 }
 
@@ -46,11 +102,122 @@ void FAnimGraphEditorPanel::OpenAsset(const FString& InPath)
 	FAnimGraphAsset Loaded;
 	FString Error;
 	if (!FAnimGraphAsset::Load(InPath, Loaded, Error)) { Status = Error; SetOpen(true); return; }
-	Path = InPath; Graph = std::move(Loaded); Status.clear(); bDirty = bPreviewRefreshRequested = false;
+	Path = InPath; Graph = std::move(Loaded); Graph.EnsureDefaultRootGraph();
+	Status.clear(); bDirty = bPreviewRefreshRequested = false;
 	strncpy_s(AssetName, FbxPath::FromString(Path).stem().string().c_str(), _TRUNCATE);
-	SelectedId = Graph.EntryState; SelectedPoseNode = 1; View = EView::Root; Pan = { 0, 0 }; Zoom = 1.0f;
+	SelectedId = Graph.EntryState;
+	SelectedRootNodeId = Graph.RootNodes.empty() ? 1 : Graph.RootNodes.front().Id;
+	SelectedPoseNode = 1; View = EView::Root; Pan = { 0, 0 }; Zoom = 1.0f;
 	SetOpen(true);
 	StartPreview();
+}
+
+void FAnimGraphEditorPanel::OpenMontageAsset(const FString& InPath)
+{
+	MontageEditPath = InPath;
+	if (OnOpenMontage) { OnOpenMontage(InPath); return; }
+	if (!IsOpen() && Path.empty())
+	{
+		std::error_code Ec;
+		if (fs::exists("Assets/Animations/rifleanimgraph.animgraph", Ec))
+			OpenAsset("Assets/Animations/rifleanimgraph.animgraph");
+		else
+			SetOpen(true);
+	}
+	else
+	{
+		SetOpen(true);
+	}
+	FAnimMontageAsset Loaded;
+	FString Error;
+	if (FAnimMontageAsset::Load(InPath, Loaded, Error))
+	{
+		MontageEditPath = InPath;
+		EditingMontage = std::move(Loaded);
+		MontageStatus = "Loaded " + InPath;
+	}
+	else
+	{
+		MontageEditPath = InPath;
+		MontageStatus = Error;
+	}
+	bMontageEditorOpen = true;
+}
+
+void FAnimGraphEditorPanel::NewMontageAsset(const FString& InPath)
+{
+	FAnimMontageAsset NewMontage;
+	NewMontage.SkeletonPath = !Graph.SkeletonPath.empty()
+		? Graph.SkeletonPath : "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin";
+	NewMontage.SequencePath = "Models/UnrealModel/AS_MF_Rifle_Fire.fbxbin";
+	NewMontage.SlotName = "UpperBody";
+	NewMontage.PlayRate = 1.0f;
+	NewMontage.BlendInTime = 0.05f;
+	NewMontage.BlendOutTime = 0.12f;
+	NewMontage.bLoop = false;
+	FAnimMontageSection DefaultSec;
+	DefaultSec.Name = "Default";
+	DefaultSec.StartTime = 0.0f;
+	DefaultSec.EndTime = 0.4667f;
+	NewMontage.Sections.push_back(DefaultSec);
+	FAnimMontageNotify FireNotify;
+	FireNotify.Name = "Fire";
+	FireNotify.Time = 0.05f;
+	NewMontage.Notifies.push_back(FireNotify);
+
+	FString Error;
+	NewMontage.Save(InPath, Error);
+	OpenMontageAsset(InPath);
+}
+
+void FAnimGraphEditorPanel::OpenAimOffsetAsset(const FString& InPath)
+{
+	AimOffsetEditPath = InPath;
+	if (OnOpenAimOffset) { OnOpenAimOffset(InPath); return; }
+	if (!IsOpen() && Path.empty())
+	{
+		std::error_code Ec;
+		if (fs::exists("Assets/Animations/rifleanimgraph.animgraph", Ec))
+			OpenAsset("Assets/Animations/rifleanimgraph.animgraph");
+		else
+			SetOpen(true);
+	}
+	else
+	{
+		SetOpen(true);
+	}
+	FAimOffsetAsset Loaded;
+	FString Error;
+	if (FAimOffsetAsset::Load(InPath, Loaded, Error))
+	{
+		AimOffsetEditPath = InPath;
+		EditingAimOffset = std::move(Loaded);
+		AimOffsetStatus = "Loaded " + InPath;
+	}
+	else
+	{
+		AimOffsetEditPath = InPath;
+		AimOffsetStatus = Error;
+	}
+	bAimOffsetEditorOpen = true;
+}
+
+void FAnimGraphEditorPanel::NewAimOffsetAsset(const FString& InPath)
+{
+	FAimOffsetAsset NewAim;
+	NewAim.SkeletonPath = !Graph.SkeletonPath.empty()
+		? Graph.SkeletonPath : "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin";
+	NewAim.BaseSequencePath = "Models/UnrealModel/AS_MF_Rifle_Idle_ADS.fbxbin";
+	NewAim.BaseFrameIndex = 0;
+	NewAim.MinPitch = -90.0f;
+	NewAim.MaxPitch = 90.0f;
+	NewAim.Samples.push_back({ -90.0f, "Models/UnrealModel/AS_MF_Rifle_Aim_Down.fbxbin", 0 });
+	NewAim.Samples.push_back({ 0.0f, "Models/UnrealModel/AS_MF_Rifle_Idle_ADS.fbxbin", 0 });
+	NewAim.Samples.push_back({ 90.0f, "Models/UnrealModel/AS_MF_Rifle_Aim_Up.fbxbin", 0 });
+
+	FString Error;
+	NewAim.Save(InPath, Error);
+	OpenAimOffsetAsset(InPath);
 }
 
 void FAnimGraphEditorPanel::NewAsset(const FString& InPath, const FString& InSkeletonKey)
@@ -70,7 +237,8 @@ void FAnimGraphEditorPanel::NewAsset(const FString& InPath, const FString& InSke
 	if (!Sequences.IsEmpty()) Initial.AssetPath = Sequences[0]->GetPath();
 	NewGraph.EntryState = Initial.Id;
 	NewGraph.States.push_back(Initial);
-	Path = InPath; Graph = std::move(NewGraph); SelectedId = 1; SelectedPoseNode = 1; View = EView::Root;
+	NewGraph.EnsureDefaultRootGraph();
+	Path = InPath; Graph = std::move(NewGraph); SelectedId = 1; SelectedRootNodeId = 1; SelectedPoseNode = 1; View = EView::Root;
 	strncpy_s(AssetName, FbxPath::FromString(Path).stem().string().c_str(), _TRUNCATE);
 	bDirty = true; bPreviewRefreshRequested = false; Status = "Choose a sequence, then save."; Pan = { 0, 0 }; Zoom = 1.0f;
 	SetOpen(true);
@@ -88,6 +256,7 @@ void FAnimGraphEditorPanel::Save()
 	const FString TargetPath = FbxPath::ToString(Target);
 	if (TargetPath != Path && fs::exists(Target))
 	{ Status = "An asset with this name already exists."; return; }
+	Graph.SyncRootLinksFromNodes();
 	if (Graph.Save(TargetPath, Status)) { Path = TargetPath; bDirty = false; Status = "Saved"; StartPreview(); }
 }
 
@@ -164,10 +333,18 @@ void FAnimGraphEditorPanel::StartPreview()
 void FAnimGraphEditorPanel::RefreshPreviewGraph()
 {
 	if (!PreviewCharacter) { if (!Graph.SkeletonPath.empty()) StartPreview(); return; }
+	Graph.SyncRootLinksFromNodes();
 	FString Error;
 	if (!Graph.Validate(Error)) { Status = "Preview: " + Error; return; }
 	if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
 	{
+		Instance->SetOnMontageNotify([this](const FString& NotifyName)
+		{
+			LastPreviewNotify = NotifyName;
+			if (NotifyName == "Fire") ++PreviewFireCount;
+		});
+		Instance->SetPreviewAimPitch(PreviewAimPitch);
+		Instance->SetIsAiming(bPreviewAiming);
 		if (!Instance->SetPreviewGraph(Graph)) Status = "Preview: animation asset or skeleton is incompatible.";
 		else if (Status.starts_with("Preview:")) Status.clear();
 	}
@@ -201,7 +378,11 @@ void FAnimGraphEditorPanel::Tick(float DeltaTime)
 			Facing.GetRightVector() * std::sin(Radians)) * (PreviewSpeed / 100.0f);
 	}
 	if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+	{
 		Instance->SetPreviewFalling(bPreviewFalling);
+		Instance->SetPreviewAimPitch(PreviewAimPitch);
+		Instance->SetIsAiming(bPreviewAiming);
+	}
 	PreviewWorld->Tick(DeltaTime);
 	PreviewCharacter->GetSkeletalMeshComponent()->TickComponent(DeltaTime);
 }
@@ -212,7 +393,7 @@ void FAnimGraphEditorPanel::DrawPreview()
 	if (PreviewWorld && Client.GetColorTarget())
 	{
 		const ImVec2 Size(ImGui::GetContentRegionAvail().x,
-			std::max(EditorUIScale::Px(80), ImGui::GetContentRegionAvail().y - EditorUIScale::Px(145)));
+			std::max(EditorUIScale::Px(80), ImGui::GetContentRegionAvail().y - EditorUIScale::Px(215)));
 		Client.Resize(static_cast<uint32>(std::max(1.0f, Size.x)), static_cast<uint32>(Size.y));
 		ImGui::Image(Client.GetColorTarget()->GetSRV(), Size);
 		const bool bHovered = ImGui::IsItemHovered();
@@ -229,9 +410,42 @@ void FAnimGraphEditorPanel::DrawPreview()
 	}
 	else if (Graph.SkeletonPath.empty()) ImGui::TextWrapped("Select a skeleton to start the preview.");
 	else ImGui::TextWrapped("No skeletal mesh found for the selected skeleton.");
+
 	ImGui::Checkbox("Play", &bPreviewPlaying);
-	ImGui::DragFloat("Speed", &PreviewSpeed, 1.0f, 0.0f, 600.0f);
-	ImGui::DragFloat("Direction", &PreviewDirection, 1.0f, -180.0f, 180.0f);
+	ImGui::SameLine();
+	if (ImGui::Button("Fire") && PreviewCharacter)
+	{
+		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			Instance->PlayMontage(MontageEditPath);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Stop Montage") && PreviewCharacter)
+	{
+		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			Instance->StopMontage();
+	}
+	if (ImGui::BeginCombo("Preview Montage", MontageEditPath.c_str()))
+	{
+		std::error_code Ec;
+		for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+		{
+			if (It->path().extension() != ".animmontage") continue;
+			const FString Candidate = FbxPath::ToString(It->path());
+			if (ImGui::Selectable(Candidate.c_str(), MontageEditPath == Candidate)) MontageEditPath = Candidate;
+		}
+		ImGui::EndCombo();
+	}
+
+	ImGui::SliderFloat("Speed", &PreviewSpeed, 0.0f, 600.0f, "%.0f");
+	ImGui::SliderFloat("Direction", &PreviewDirection, -180.0f, 180.0f, "%.0f");
+	ImGui::Checkbox("IsAiming", &bPreviewAiming);
+	if (ImGui::SliderFloat("AimPitch", &PreviewAimPitch, -90.0f, 90.0f, "%.1f deg"))
+	{
+		if (PreviewCharacter)
+			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+				Instance->SetPreviewAimPitch(PreviewAimPitch);
+	}
+
 	if (ImGui::Button("Jump") && PreviewCharacter)
 	{
 		bPreviewFalling = true;
@@ -239,10 +453,54 @@ void FAnimGraphEditorPanel::DrawPreview()
 			Instance->RequestJump();
 	}
 	ImGui::SameLine();
-	ImGui::Checkbox("Falling", &bPreviewFalling);
-	if (PreviewCharacter)
+	if (ImGui::Button("Hit") && PreviewCharacter)
 		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
-			ImGui::Text("Active State: %d", Instance->GetActiveStateId());
+			Instance->RequestHit();
+	ImGui::SameLine();
+	ImGui::Checkbox("Falling", &bPreviewFalling);
+
+	// 이동 중 발사·조준 중 발사·점프 중 발사 원클릭 검증 버튼
+	if (ImGui::SmallButton("Move+Fire"))
+	{
+		PreviewSpeed = 300.0f; bPreviewFalling = false;
+		if (PreviewCharacter)
+			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+				Instance->PlayMontage(MontageEditPath);
+	}
+	ImGui::SameLine();
+	if (ImGui::SmallButton("AimUp+Fire"))
+	{
+		PreviewAimPitch = 45.0f;
+		if (PreviewCharacter)
+			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			{
+				Instance->SetPreviewAimPitch(PreviewAimPitch);
+				Instance->PlayMontage(MontageEditPath);
+			}
+	}
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Jump+Fire"))
+	{
+		bPreviewFalling = true;
+		if (PreviewCharacter)
+			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			{
+				Instance->RequestJump();
+				Instance->PlayMontage(MontageEditPath);
+			}
+	}
+
+	if (PreviewCharacter)
+	{
+		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+		{
+			ImGui::Text("State: %d | Montage W: %.2f (%.2fs) | Fire Notify: %d",
+				Instance->GetActiveStateId(),
+				Instance->GetMontageWeight("UpperBody"),
+				Instance->GetMontagePosition("UpperBody"),
+				PreviewFireCount);
+		}
+	}
 	if (PreviewCharacter && !PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance())
 		ImGui::TextUnformatted("Preview animation instance is missing.");
 	ImGui::Separator();
@@ -252,6 +510,25 @@ void FAnimGraphEditorPanel::RenderPreview(UEditorEngine* Engine)
 {
 	if (Engine && IsOpen() && bVisible && PreviewWorld)
 		Engine->RenderPreviewViewport(&Client, PreviewWorld, nullptr, nullptr, true);
+}
+
+int32 FAnimGraphEditorPanel::NextRootNodeId() const
+{
+	int32 Id = 1;
+	for (const auto& Node : Graph.RootNodes) Id = std::max(Id, Node.Id + 1);
+	return Id;
+}
+
+FRootAnimGraphNode* FAnimGraphEditorPanel::SelectedRootNode()
+{
+	return FindRootNode(SelectedRootNodeId);
+}
+
+FRootAnimGraphNode* FAnimGraphEditorPanel::FindRootNode(int32 Id)
+{
+	for (auto& Node : Graph.RootNodes)
+		if (Node.Id == Id) return &Node;
+	return nullptr;
 }
 
 int32 FAnimGraphEditorPanel::NextStateId() const
@@ -276,6 +553,7 @@ FAnimGraphState* FAnimGraphEditorPanel::SelectedState()
 
 FString FAnimGraphEditorPanel::StateName(int32 Id) const
 {
+	if (Id == -1) return "Any State";
 	for (const auto& State : Graph.States) if (State.Id == Id) return State.Name;
 	return "Unknown State";
 }
@@ -297,10 +575,27 @@ void FAnimGraphEditorPanel::AddState()
 
 void FAnimGraphEditorPanel::DrawTree()
 {
-	if (ImGui::Selectable("AnimGraph", View == EView::Root)) View = EView::Root;
+	if (ImGui::Selectable("AnimGraph (Root)", View == EView::Root)) View = EView::Root;
+	if (ImGui::TreeNodeEx("Root Pose Nodes", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		for (const auto& Node : Graph.RootNodes)
+		{
+			ImGui::PushID(Node.Id + 50000);
+			const FString Label = Node.Name.empty() ? ("Node " + std::to_string(Node.Id)) : Node.Name;
+			if (ImGui::Selectable(Label.c_str(), View == EView::Root && SelectedRootNodeId == Node.Id))
+			{
+				SelectedRootNodeId = Node.Id;
+				View = EView::Root;
+			}
+			ImGui::PopID();
+		}
+		ImGui::TreePop();
+	}
 	if (ImGui::TreeNodeEx("State Machine", ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		if (ImGui::Selectable("Main States", View == EView::Machine)) View = EView::Machine;
+		if (ImGui::Selectable("Any State", View == EView::Machine && SelectedId == -1))
+		{ SelectedId = -1; View = EView::Machine; }
 		for (const auto& State : Graph.States)
 		{
 			ImGui::PushID(State.Id);
@@ -320,45 +615,181 @@ void FAnimGraphEditorPanel::DrawTree()
 	}
 	ImGui::Separator();
 	ImGui::TextUnformatted("Parameters");
-	ImGui::BulletText("Speed");
-	ImGui::BulletText("Direction");
+	ImGui::BulletText("Speed (%.1f)", PreviewSpeed);
+	ImGui::BulletText("Direction (%.1f)", PreviewDirection);
+	ImGui::BulletText("AimPitch (%.1f)", PreviewAimPitch);
+	ImGui::BulletText("IsAiming (%s)", bPreviewAiming ? "true" : "false");
+	ImGui::Separator();
+	if (ImGui::Button("Montage Editor")) bMontageEditorOpen = true;
+	ImGui::SameLine();
+	if (ImGui::Button("AimOffset Editor")) bAimOffsetEditorOpen = true;
 }
 
 void FAnimGraphEditorPanel::DrawRoot(ImDrawList* Draw, ImVec2 Origin, ImVec2 Size)
 {
-	const float Scale = EditorUIScale::Px(1.0f);
-	const ImVec2 Machine(Origin.x + Size.x * 0.30f, Origin.y + Size.y * 0.45f);
-	const ImVec2 Output(Origin.x + Size.x * 0.68f, Origin.y + Size.y * 0.45f);
-	const ImVec2 MachinePin(Machine.x + 180 * Scale, Machine.y + 34 * Scale);
-	const ImVec2 OutputPin(Output.x, Output.y + 34 * Scale);
+	Graph.EnsureDefaultRootGraph();
+	const float Scale = EditorUIScale::Px(1.0f) * Zoom;
+	const auto ToScreen = [&](float X, float Y)
+	{
+		return ImVec2(Origin.x + Pan.x + X * Scale, Origin.y + Pan.y + Y * Scale);
+	};
 	const ImVec2 Mouse = ImGui::GetMousePos();
 	const bool Click = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+	const bool Double = ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 	const bool Release = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-	Draw->AddRectFilled(Machine, { Machine.x + 180 * Scale, Machine.y + 68 * Scale }, IM_COL32(49, 57, 75, 255), 6.0f);
-	Draw->AddText({ Machine.x + 12 * Scale, Machine.y + 24 * Scale }, IM_COL32_WHITE, "State Machine");
-	Draw->AddRectFilled(Output, { Output.x + 160 * Scale, Output.y + 68 * Scale }, IM_COL32(64, 55, 47, 255), 6.0f);
-	Draw->AddText({ Output.x + 12 * Scale, Output.y + 24 * Scale }, IM_COL32_WHITE, "Output Pose");
-	Draw->AddCircleFilled(MachinePin, 6 * Scale, IM_COL32(215, 215, 215, 255));
-	Draw->AddCircleFilled(OutputPin, 6 * Scale, IM_COL32(215, 215, 215, 255));
-	if (Graph.bRootPoseConnected)
-		Draw->AddBezierCubic(MachinePin, { MachinePin.x + 50 * Scale, MachinePin.y },
-			{ OutputPin.x - 50 * Scale, OutputPin.y }, OutputPin, IM_COL32(210, 210, 210, 255), 2.0f);
-	if (Click && Inside(Mouse, { MachinePin.x - 10 * Scale, MachinePin.y - 10 * Scale },
-		{ MachinePin.x + 10 * Scale, MachinePin.y + 10 * Scale })) bRootPoseLinkDragging = true;
-	else if (Click && Inside(Mouse, { OutputPin.x - 10 * Scale, OutputPin.y - 10 * Scale },
-		{ OutputPin.x + 10 * Scale, OutputPin.y + 10 * Scale }))
-	{ Graph.bRootPoseConnected = false; bDirty = bPreviewRefreshRequested = true; }
-	else if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
-		Inside(Mouse, Machine, { Machine.x + 180 * Scale, Machine.y + 68 * Scale })) View = EView::Machine;
-	if (bRootPoseLinkDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left))
-		Draw->AddLine(MachinePin, Mouse, IM_COL32(255, 220, 140, 255), 2.0f);
+	if (Release) DraggingRootNodeId = 0;
+
+	// 연결선 그리기
+	for (const auto& Node : Graph.RootNodes)
+	{
+		const ImVec2 TargetMin = ToScreen(Node.X, Node.Y);
+		const int32 PinCount = RootNodeInputPinCount(Node.Type);
+		for (int32 PinIdx = 0; PinIdx < PinCount; ++PinIdx)
+		{
+			const int32 SourceId = (PinIdx == 0) ? Node.SourceNodeId : Node.SecondarySourceNodeId;
+			if (SourceId <= 0) continue;
+			const FRootAnimGraphNode* SourceNode = FindRootNode(SourceId);
+			if (!SourceNode) continue;
+			const ImVec2 SourceMin = ToScreen(SourceNode->X, SourceNode->Y);
+			const ImVec2 SourceSize = RootNodeSize(SourceNode->Type);
+			const ImVec2 PinStart = RootNodeOutputPinPos(SourceMin, SourceSize, Scale);
+			const ImVec2 PinEnd = RootNodeInputPinPos(TargetMin, Node.Type, PinIdx, Scale);
+			const float Handle = std::max(45.0f * Scale, std::abs(PinEnd.x - PinStart.x) * 0.45f);
+			Draw->AddBezierCubic(PinStart, { PinStart.x + Handle, PinStart.y },
+				{ PinEnd.x - Handle, PinEnd.y }, PinEnd, IM_COL32(220, 220, 225, 255), 2.2f);
+		}
+	}
+
+	// 노드 그리기 및 입력 처리
+	for (auto& Node : Graph.RootNodes)
+	{
+		const ImVec2 Min = ToScreen(Node.X, Node.Y);
+		const ImVec2 NodeSz = RootNodeSize(Node.Type);
+		const ImVec2 Max(Min.x + NodeSz.x * Scale, Min.y + NodeSz.y * Scale);
+		const bool bSelected = (SelectedRootNodeId == Node.Id);
+
+		ImU32 FillColor = IM_COL32(49, 57, 75, 255);
+		const char* TypeHeader = "State Machine";
+		FString SubLabel = Node.Name;
+		if (Node.Type == ERootAnimNodeType::Slot)
+		{
+			FillColor = IM_COL32(62, 48, 72, 255);
+			TypeHeader = "Slot";
+			SubLabel = Node.SlotName;
+		}
+		else if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone)
+		{
+			FillColor = IM_COL32(42, 66, 58, 255);
+			TypeHeader = "Layered Blend per Bone";
+			SubLabel = "Bone: " + Node.StartBoneName;
+		}
+		else if (Node.Type == ERootAnimNodeType::AimOffset)
+		{
+			FillColor = IM_COL32(45, 62, 82, 255);
+			TypeHeader = "Aim Offset 1D";
+			SubLabel = Node.AimOffsetPath.empty()
+				? "Pitch: AimPitch"
+				: (FbxPath::FromString(Node.AimOffsetPath).stem().string() + " (AimPitch)");
+		}
+		else if (Node.Type == ERootAnimNodeType::OutputPose)
+		{
+			FillColor = IM_COL32(64, 55, 47, 255);
+			TypeHeader = "Output Pose";
+			SubLabel = "Result";
+		}
+		else if (Node.Type == ERootAnimNodeType::SequencePlayer)
+		{
+			FillColor = IM_COL32(42, 66, 58, 255);
+			TypeHeader = "Sequence Player";
+			SubLabel = FbxPath::FromString(Node.SequencePath).stem().string();
+		}
+
+		Draw->AddRectFilled(Min, Max, FillColor, 6.0f);
+		Draw->AddRect(Min, Max, bSelected ? IM_COL32(245, 180, 85, 255) : IM_COL32(125, 130, 142, 255), 6.0f, ImDrawFlags_None, 2.0f);
+		Draw->AddText({ Min.x + 10 * Scale, Min.y + 8 * Scale }, IM_COL32_WHITE, TypeHeader);
+		Draw->AddText({ Min.x + 10 * Scale, Min.y + 26 * Scale }, IM_COL32(190, 200, 210, 255), SubLabel.c_str());
+
+		const int32 InPins = RootNodeInputPinCount(Node.Type);
+		for (int32 PinIdx = 0; PinIdx < InPins; ++PinIdx)
+		{
+			const ImVec2 InPin = RootNodeInputPinPos(Min, Node.Type, PinIdx, Scale);
+			Draw->AddCircleFilled(InPin, 6.0f * Scale, IM_COL32(215, 215, 215, 255));
+			const char* PinLabel = (Node.Type == ERootAnimNodeType::LayeredBlendPerBone)
+				? (PinIdx == 0 ? "Base" : "Blend")
+				: (Node.Type == ERootAnimNodeType::OutputPose ? "Result" : "Source");
+			Draw->AddText({ InPin.x + 9 * Scale, InPin.y - 7 * Scale }, IM_COL32(210, 210, 210, 255), PinLabel);
+
+			if (Click && Inside(Mouse, { InPin.x - 10 * Scale, InPin.y - 10 * Scale }, { InPin.x + 10 * Scale, InPin.y + 10 * Scale }))
+			{
+				if (PinIdx == 0) Node.SourceNodeId = 0;
+				else Node.SecondarySourceNodeId = 0;
+				Graph.SyncRootLinksFromNodes();
+				bDirty = bPreviewRefreshRequested = true;
+				DraggingRootNodeId = 0;
+			}
+			if (Release && bRootPoseLinkDragging && PendingRootFromNodeId > 0 && PendingRootFromNodeId != Node.Id &&
+				Inside(Mouse, { InPin.x - 14 * Scale, InPin.y - 14 * Scale }, { InPin.x + 14 * Scale, InPin.y + 14 * Scale }))
+			{
+				if (PinIdx == 0) Node.SourceNodeId = PendingRootFromNodeId;
+				else Node.SecondarySourceNodeId = PendingRootFromNodeId;
+				Graph.SyncRootLinksFromNodes();
+				bDirty = bPreviewRefreshRequested = true;
+				bRootPoseLinkDragging = false;
+				PendingRootFromNodeId = 0;
+			}
+		}
+
+		if (RootNodeHasOutputPin(Node.Type))
+		{
+			const ImVec2 OutPin = RootNodeOutputPinPos(Min, NodeSz, Scale);
+			Draw->AddCircleFilled(OutPin, 6.0f * Scale, IM_COL32(235, 215, 155, 255));
+			if (Click && Inside(Mouse, { OutPin.x - 10 * Scale, OutPin.y - 10 * Scale }, { OutPin.x + 10 * Scale, OutPin.y + 10 * Scale }))
+			{
+				bRootPoseLinkDragging = true;
+				PendingRootFromNodeId = Node.Id;
+				SelectedRootNodeId = Node.Id;
+				DraggingRootNodeId = 0;
+			}
+		}
+
+		if (Click && !bRootPoseLinkDragging && Inside(Mouse, Min, Max))
+		{
+			SelectedRootNodeId = Node.Id;
+			DraggingRootNodeId = Node.Id;
+		}
+		if (Double && Inside(Mouse, Min, Max))
+		{
+			if (Node.Type == ERootAnimNodeType::StateMachine) View = EView::Machine;
+			else if (Node.Type == ERootAnimNodeType::AimOffset)
+			{
+				if (!Node.AimOffsetPath.empty()) OpenAimOffsetAsset(Node.AimOffsetPath);
+				else bAimOffsetEditorOpen = true;
+			}
+		}
+		if (DraggingRootNodeId == Node.Id && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+		{
+			Node.X += ImGui::GetIO().MouseDelta.x / Scale;
+			Node.Y += ImGui::GetIO().MouseDelta.y / Scale;
+			bDirty = true;
+		}
+	}
+
+	if (bRootPoseLinkDragging && PendingRootFromNodeId > 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+	{
+		if (const FRootAnimGraphNode* FromNode = FindRootNode(PendingRootFromNodeId))
+		{
+			const ImVec2 Start = RootNodeOutputPinPos(ToScreen(FromNode->X, FromNode->Y), RootNodeSize(FromNode->Type), Scale);
+			Draw->AddLine(Start, Mouse, IM_COL32(255, 220, 140, 255), 2.2f);
+		}
+	}
 	if (Release && bRootPoseLinkDragging)
 	{
-		if (Inside(Mouse, { OutputPin.x - 14 * Scale, OutputPin.y - 14 * Scale },
-			{ OutputPin.x + 14 * Scale, OutputPin.y + 14 * Scale }))
-		{ Graph.bRootPoseConnected = true; bDirty = bPreviewRefreshRequested = true; }
 		bRootPoseLinkDragging = false;
+		PendingRootFromNodeId = 0;
 	}
+
+	Draw->AddText({ Origin.x + 12, Origin.y + 12 }, IM_COL32(150, 155, 165, 255),
+		"Right-click: Add Slot / Layered Blend per Bone / Aim Offset / Output Pose  |  Drag pins to connect  |  Double-click node to open");
 }
 
 void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 Size)
@@ -373,19 +804,26 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 	const int32 ActiveState = PreviewInstance ? PreviewInstance->GetActiveStateId() : 0;
 	const int32 TargetState = PreviewInstance ? PreviewInstance->GetTargetStateId() : 0;
 	if (PendingFrom && bLinkDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left))
-		for (const auto& State : Graph.States) if (State.Id == PendingFrom)
+	{
+		if (PendingFrom == -1)
+			Draw->AddLine(ToScreen(Graph.AnyStateX + 120.0f, Graph.AnyStateY + 32.0f), Mouse,
+				IM_COL32(120, 210, 130, 255), 2.0f);
+		else for (const auto& State : Graph.States) if (State.Id == PendingFrom)
 		{
 			const ImVec2 Start = ToScreen(State.X + 160.0f, State.Y + 32.0f);
 			Draw->AddLine(Start, Mouse, IM_COL32(120, 210, 130, 255), 2.0f);
 			break;
 		}
+	}
 	if (PendingFrom && bLinkDragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
 	{
 		for (const auto& State : Graph.States)
 		{
 			const ImVec2 Min = ToScreen(State.X, State.Y);
 			if (State.Id == PendingFrom || !Inside(Mouse, Min, { Min.x + 160 * Zoom, Min.y + 64 * Zoom })) continue;
-			Graph.Transitions.push_back({ NextTransitionId(), PendingFrom, State.Id });
+			FAnimGraphTransition NewTransition{ NextTransitionId(), PendingFrom, State.Id };
+			if (PendingFrom == -1) NewTransition.Input = EAnimGraphInput::HitRequested;
+			Graph.Transitions.push_back(NewTransition);
 			SelectedId = Graph.Transitions.back().Id; View = EView::Transition; bDirty = bPreviewRefreshRequested = true;
 			break;
 		}
@@ -404,16 +842,19 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 			if (State.Id == Transition.From) From = &State;
 			if (State.Id == Transition.To) To = &State;
 		}
-		if (!From || !To) continue;
-		const float DX = To->X - From->X;
-		const float DY = To->Y - From->Y;
+		if ((!From && Transition.From != -1) || !To) continue;
+		const float FromX = From ? From->X : Graph.AnyStateX;
+		const float FromY = From ? From->Y : Graph.AnyStateY;
+		const float FromWidth = From ? 160.0f : 120.0f;
+		const float DX = To->X - FromX;
+		const float DY = To->Y - FromY;
 		const bool Horizontal = std::abs(DX) >= std::abs(DY);
 		const float Lane = (Transition.From < Transition.To ? -14.0f : 14.0f) * Zoom;
 		ImVec2 A, B, C1, C2;
 		if (Horizontal)
 		{
 			const bool Right = DX >= 0.0f;
-			A = ToScreen(From->X + (Right ? 160.0f : 0.0f), From->Y + 32.0f);
+			A = ToScreen(FromX + (Right ? FromWidth : 0.0f), FromY + 32.0f);
 			B = ToScreen(To->X + (Right ? 0.0f : 160.0f), To->Y + 32.0f);
 			A.y += Lane; B.y += Lane;
 			const float Handle = std::max(45.0f * Zoom, std::abs(B.x - A.x) * 0.4f);
@@ -423,14 +864,14 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		else
 		{
 			const bool Down = DY >= 0.0f;
-			A = ToScreen(From->X + 80.0f, From->Y + (Down ? 64.0f : 0.0f));
+			A = ToScreen(FromX + FromWidth * 0.5f, FromY + (Down ? 64.0f : 0.0f));
 			B = ToScreen(To->X + 80.0f, To->Y + (Down ? 0.0f : 64.0f));
 			A.x += Lane; B.x += Lane;
 			const float Handle = std::max(45.0f * Zoom, std::abs(B.y - A.y) * 0.4f);
 			C1 = { A.x, A.y + (Down ? Handle : -Handle) };
 			C2 = { B.x, B.y - (Down ? Handle : -Handle) };
 		}
-		const bool ActiveTransition = Transition.From == ActiveState && Transition.To == TargetState;
+		const bool ActiveTransition = (Transition.From == ActiveState || Transition.From == -1) && Transition.To == TargetState;
 		const bool SelectedTransition = View == EView::Transition &&
 			std::any_of(Rules.begin(), Rules.end(), [&](const auto* Rule) { return Rule->Id == SelectedId; });
 		const ImU32 Color = ActiveTransition ? IM_COL32(85, 220, 110, 255) :
@@ -457,7 +898,7 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		}
 		if (ImGui::IsItemHovered() && Inside(Mouse, { Mid.x - 13 * Zoom, Mid.y - 13 * Zoom },
 			{ Mid.x + 13 * Zoom, Mid.y + 13 * Zoom }))
-			ImGui::SetTooltip("%s -> %s (%d rule%s)", From->Name.c_str(), To->Name.c_str(),
+			ImGui::SetTooltip("%s -> %s (%d rule%s)", StateName(Transition.From).c_str(), To->Name.c_str(),
 				static_cast<int>(Rules.size()), Rules.size() == 1 ? "" : "s");
 		if (ImGui::BeginPopup("Transition Rules"))
 		{
@@ -473,6 +914,20 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		}
 		ImGui::PopID();
 	}
+	const ImVec2 AnyMin = ToScreen(Graph.AnyStateX, Graph.AnyStateY);
+	const ImVec2 AnyMax(AnyMin.x + 120.0f * Zoom, AnyMin.y + 64.0f * Zoom);
+	Draw->AddRectFilled(AnyMin, AnyMax, IM_COL32(58, 51, 67, 255), 6.0f);
+	Draw->AddRect(AnyMin, AnyMax, SelectedId == -1 && View == EView::Machine
+		? IM_COL32(240, 170, 80, 255) : IM_COL32(145, 125, 160, 255), 6.0f, ImDrawFlags_None, 2.0f);
+	Draw->AddText({ AnyMin.x + 12 * Zoom, AnyMin.y + 23 * Zoom }, IM_COL32_WHITE, "Any State");
+	const ImVec2 AnyPin(AnyMax.x, (AnyMin.y + AnyMax.y) * 0.5f);
+	Draw->AddCircleFilled(AnyPin, 6 * Zoom, IM_COL32(120, 200, 135, 255));
+	if (Click && Inside(Mouse, { AnyPin.x - 10, AnyPin.y - 10 }, { AnyPin.x + 10, AnyPin.y + 10 }))
+	{ PendingFrom = -1; bLinkDragging = true; SelectedId = -1; View = EView::Machine; }
+	else if (Click && Inside(Mouse, AnyMin, AnyMax))
+	{ SelectedId = -1; View = EView::Machine; DraggingState = -1; }
+	if (View == EView::Machine && DraggingState == -1 && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+	{ Graph.AnyStateX += ImGui::GetIO().MouseDelta.x / Zoom; Graph.AnyStateY += ImGui::GetIO().MouseDelta.y / Zoom; bDirty = true; }
 	for (const auto& State : Graph.States) if (State.Id == Graph.EntryState)
 	{
 		const ImVec2 Entry = ToScreen(State.X - 120.0f, State.Y + 16.0f);
@@ -503,7 +958,9 @@ void FAnimGraphEditorPanel::DrawMachine(ImDrawList* Draw, ImVec2 Origin, ImVec2 
 		{
 			if (PendingFrom && PendingFrom != State.Id)
 			{
-				Graph.Transitions.push_back({ NextTransitionId(), PendingFrom, State.Id });
+				FAnimGraphTransition NewTransition{ NextTransitionId(), PendingFrom, State.Id };
+				if (PendingFrom == -1) NewTransition.Input = EAnimGraphInput::HitRequested;
+				Graph.Transitions.push_back(NewTransition);
 				SelectedId = Graph.Transitions.back().Id; View = EView::Transition; PendingFrom = 0; bDirty = bPreviewRefreshRequested = true;
 			}
 			else { SelectedId = State.Id; View = EView::Machine; DraggingState = State.Id; }
@@ -712,7 +1169,7 @@ void FAnimGraphEditorPanel::DrawTransition(ImDrawList* Draw, ImVec2 Origin, ImVe
 
 void FAnimGraphEditorPanel::DrawCanvas()
 {
-	ImGui::TextUnformatted(View == EView::Root ? "AnimGraph" :
+	ImGui::TextUnformatted(View == EView::Root ? "AnimGraph (Root Pose Graph)" :
 		View == EView::Machine ? "AnimGraph > State Machine" :
 		View == EView::State ? "AnimGraph > State" : "AnimGraph > Transition Rule");
 	ImGui::SameLine();
@@ -742,9 +1199,101 @@ void FAnimGraphEditorPanel::DrawCanvas()
 		// 휠 클릭 드래그 또는 우클릭 드래그로 캔버스를 이동한다.
 		if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) || ImGui::IsMouseDragging(ImGuiMouseButton_Right))
 		{ Pan.x += ImGui::GetIO().MouseDelta.x; Pan.y += ImGui::GetIO().MouseDelta.y; }
-		if (ImGui::GetIO().MouseWheel != 0 && View == EView::Machine)
+		if (ImGui::GetIO().MouseWheel != 0 && (View == EView::Machine || View == EView::Root))
 			Zoom = std::clamp(Zoom + ImGui::GetIO().MouseWheel * 0.1f, 0.5f, 2.0f);
-		if (ImGui::IsKeyPressed(ImGuiKey_Escape)) PendingFrom = 0;
+		if (ImGui::IsKeyPressed(ImGuiKey_Escape)) { PendingFrom = 0; bRootPoseLinkDragging = false; PendingRootFromNodeId = 0; }
+	}
+	if (View == EView::Root && ImGui::BeginPopupContextItem("##RootGraphContext"))
+	{
+		const ImVec2 Spawn = ImGui::GetMousePosOnOpeningCurrentPopup();
+		const float Scale = EditorUIScale::Px(1.0f) * Zoom;
+		const float SpawnX = (Spawn.x - Origin.x - Pan.x) / Scale;
+		const float SpawnY = (Spawn.y - Origin.y - Pan.y) / Scale;
+		if (ImGui::MenuItem("Add Slot"))
+		{
+			FRootAnimGraphNode Node;
+			Node.Id = NextRootNodeId();
+			Node.Type = ERootAnimNodeType::Slot;
+			Node.Name = "Slot UpperBody";
+			Node.SlotName = "UpperBody";
+			Node.X = SpawnX; Node.Y = SpawnY;
+			Graph.RootNodes.push_back(std::move(Node));
+			SelectedRootNodeId = Graph.RootNodes.back().Id;
+			Graph.SyncRootLinksFromNodes();
+			bDirty = bPreviewRefreshRequested = true;
+		}
+		if (ImGui::MenuItem("Add Layered Blend per Bone"))
+		{
+			FRootAnimGraphNode Node;
+			Node.Id = NextRootNodeId();
+			Node.Type = ERootAnimNodeType::LayeredBlendPerBone;
+			Node.Name = "Layered Blend per Bone";
+			Node.StartBoneName = "spine_01";
+			Node.Alpha = 1.0f;
+			Node.X = SpawnX; Node.Y = SpawnY;
+			Graph.RootNodes.push_back(std::move(Node));
+			SelectedRootNodeId = Graph.RootNodes.back().Id;
+			Graph.SyncRootLinksFromNodes();
+			bDirty = bPreviewRefreshRequested = true;
+		}
+		if (ImGui::MenuItem("Add Sequence Player"))
+		{
+			FRootAnimGraphNode Node;
+			Node.Id = NextRootNodeId();
+			Node.Type = ERootAnimNodeType::SequencePlayer;
+			Node.Name = "Sequence Player";
+			Node.X = SpawnX; Node.Y = SpawnY;
+			Graph.RootNodes.push_back(std::move(Node));
+			SelectedRootNodeId = Graph.RootNodes.back().Id;
+			Graph.SyncRootLinksFromNodes();
+			bDirty = bPreviewRefreshRequested = true;
+		}
+		if (ImGui::MenuItem("Add Aim Offset 1D"))
+		{
+			FRootAnimGraphNode Node;
+			Node.Id = NextRootNodeId();
+			Node.Type = ERootAnimNodeType::AimOffset;
+			Node.Name = "Aim Offset 1D";
+			Node.AimOffsetPath = "Assets/Animations/RifleAimOffset.aimoffset";
+			Node.PitchInput = EAnimGraphInput::AimPitch;
+			Node.Alpha = 1.0f;
+			Node.X = SpawnX; Node.Y = SpawnY;
+			Graph.RootNodes.push_back(std::move(Node));
+			SelectedRootNodeId = Graph.RootNodes.back().Id;
+			Graph.SyncRootLinksFromNodes();
+			bDirty = bPreviewRefreshRequested = true;
+		}
+		const bool bHasOutput = std::any_of(Graph.RootNodes.begin(), Graph.RootNodes.end(),
+			[](const FRootAnimGraphNode& Item) { return Item.Type == ERootAnimNodeType::OutputPose; });
+		if (!bHasOutput && ImGui::MenuItem("Add Output Pose"))
+		{
+			FRootAnimGraphNode Node;
+			Node.Id = NextRootNodeId();
+			Node.Type = ERootAnimNodeType::OutputPose;
+			Node.Name = "Output Pose";
+			Node.X = SpawnX; Node.Y = SpawnY;
+			Graph.RootNodes.push_back(std::move(Node));
+			SelectedRootNodeId = Graph.RootNodes.back().Id;
+			Graph.SyncRootLinksFromNodes();
+			bDirty = bPreviewRefreshRequested = true;
+		}
+		ImGui::Separator();
+		if (ImGui::MenuItem("Build Rifle Root Graph Preset"))
+		{
+			Graph.RootNodes.clear();
+			FRootAnimGraphNode Sm; Sm.Id = 1; Sm.Type = ERootAnimNodeType::StateMachine; Sm.Name = "Locomotion"; Sm.X = 30.0f; Sm.Y = 120.0f;
+			FRootAnimGraphNode Slot; Slot.Id = 2; Slot.Type = ERootAnimNodeType::Slot; Slot.Name = "UpperBody Slot"; Slot.SlotName = "UpperBody"; Slot.SourceNodeId = 7; Slot.X = 520.0f; Slot.Y = 230.0f;
+			FRootAnimGraphNode Layer; Layer.Id = 3; Layer.Type = ERootAnimNodeType::LayeredBlendPerBone; Layer.Name = "UpperBody Result"; Layer.StartBoneName = "spine_01"; Layer.Alpha = 1.0f; Layer.SourceNodeId = 7; Layer.SecondarySourceNodeId = 4; Layer.X = 1030.0f; Layer.Y = 120.0f;
+			FRootAnimGraphNode Aim; Aim.Id = 4; Aim.Type = ERootAnimNodeType::AimOffset; Aim.Name = "Aim Offset 1D"; Aim.AimOffsetPath = "Assets/Animations/RifleAimOffset.aimoffset"; Aim.PitchInput = EAnimGraphInput::AimPitch; Aim.AlphaInput = EAnimGraphInput::IsAiming; Aim.SourceNodeId = 2; Aim.X = 780.0f; Aim.Y = 230.0f;
+			FRootAnimGraphNode Out; Out.Id = 5; Out.Type = ERootAnimNodeType::OutputPose; Out.Name = "Output Pose"; Out.SourceNodeId = 3; Out.X = 1280.0f; Out.Y = 140.0f;
+			FRootAnimGraphNode Ads; Ads.Id = 6; Ads.Type = ERootAnimNodeType::SequencePlayer; Ads.Name = "ADS Idle"; Ads.SequencePath = "Models/UnrealModel/AS_MF_Rifle_Idle_ADS.fbxbin"; Ads.X = 30.0f; Ads.Y = 320.0f;
+			FRootAnimGraphNode AimLayer; AimLayer.Id = 7; AimLayer.Type = ERootAnimNodeType::LayeredBlendPerBone; AimLayer.Name = "ADS UpperBody"; AimLayer.StartBoneName = "spine_01"; AimLayer.bMeshSpaceRotationBlend = true; AimLayer.AlphaInput = EAnimGraphInput::IsAiming; AimLayer.SourceNodeId = 1; AimLayer.SecondarySourceNodeId = 6; AimLayer.X = 280.0f; AimLayer.Y = 120.0f;
+			Graph.RootNodes = { Sm, Slot, Layer, Aim, Out, Ads, AimLayer };
+			Graph.SyncRootLinksFromNodes();
+			SelectedRootNodeId = 3;
+			bDirty = bPreviewRefreshRequested = true;
+		}
+		ImGui::EndPopup();
 	}
 	if (!bRightPanned && View == EView::Machine && ImGui::BeginPopupContextItem("##AnimGraphContext"))
 	{
@@ -810,16 +1359,28 @@ void FAnimGraphEditorPanel::DrawDetails()
 		FAnimGraphTransition* Transition = SelectedTransition();
 		if (!Transition) return;
 		ImGui::Text("Transition %s -> %s", StateName(Transition->From).c_str(), StateName(Transition->To).c_str());
-		int Input = std::max(1, static_cast<int>(Transition->Input)) - 1;
-		if (ImGui::Combo("Condition Source", &Input,
-			"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0"))
-		{ Transition->Input = static_cast<EAnimGraphInput>(Input + 1); bDirty = bPreviewRefreshRequested = true; }
-		if (Transition->Input != EAnimGraphInput::SequenceEnding)
+		if (Transition->From == -1)
+		{
+			int Input = Transition->Input == EAnimGraphInput::DeathRequested ? 1 : 0;
+			if (ImGui::Combo("Condition Source", &Input, "Hit Requested\0Death Requested\0"))
+			{ Transition->Input = Input == 0 ? EAnimGraphInput::HitRequested : EAnimGraphInput::DeathRequested; bDirty = bPreviewRefreshRequested = true; }
+		}
+		else
+		{
+			int Input = std::max(1, static_cast<int>(Transition->Input)) - 1;
+			if (ImGui::Combo("Condition Source", &Input,
+				"Speed\0Direction\0Jump Requested\0Falling\0Grounded\0Moving On Ground\0Sequence Ending\0Hit Requested\0Sequence Ending + Grounded\0Sequence Ending + Airborne\0Attack Requested\0AimPitch\0IsAiming\0Death Requested\0"))
+			{ Transition->Input = static_cast<EAnimGraphInput>(Input + 1); bDirty = bPreviewRefreshRequested = true; }
+		}
+		const bool bSequenceEnding = Transition->Input == EAnimGraphInput::SequenceEnding ||
+			Transition->Input == EAnimGraphInput::SequenceEndingGrounded ||
+			Transition->Input == EAnimGraphInput::SequenceEndingAirborne;
+		if (!bSequenceEnding && Transition->From != -1)
 		{
 			int Compare = static_cast<int>(Transition->Compare);
 			if (ImGui::Combo("Compare", &Compare, CompareNames, 5)) { Transition->Compare = static_cast<EAnimGraphCompare>(Compare); bDirty = bPreviewRefreshRequested = true; }
 		}
-		if (Transition->Compare != EAnimGraphCompare::Always || Transition->Input == EAnimGraphInput::SequenceEnding)
+		if (bSequenceEnding || (Transition->From != -1 && Transition->Compare != EAnimGraphCompare::Always))
 			if (ImGui::DragFloat("Threshold", &Transition->Threshold, 0.1f)) bDirty = bPreviewRefreshRequested = true;
 		if (ImGui::DragFloat("Blend Time", &Transition->BlendTime, 0.01f, 0.0f, 10.0f)) bDirty = bPreviewRefreshRequested = true;
 		const auto It = std::find_if(Graph.Transitions.begin(), Graph.Transitions.end(),
@@ -841,8 +1402,182 @@ void FAnimGraphEditorPanel::DrawDetails()
 	}
 	if (View == EView::Root)
 	{
-		if (ImGui::Checkbox("Output Pose Connected", &Graph.bRootPoseConnected)) bDirty = bPreviewRefreshRequested = true;
 		if (ImGui::Checkbox("Invert Direction", &Graph.bInvertDirection)) bDirty = bPreviewRefreshRequested = true;
+		ImGui::Separator();
+		FRootAnimGraphNode* RootNode = SelectedRootNode();
+		if (!RootNode)
+		{
+			ImGui::TextUnformatted("Select a node in the Root Pose Graph.");
+			return;
+		}
+		char NodeNameBuf[128]{};
+		strncpy_s(NodeNameBuf, RootNode->Name.c_str(), sizeof(NodeNameBuf) - 1);
+		if (ImGui::InputText("Node Name", NodeNameBuf, sizeof(NodeNameBuf)))
+		{
+			RootNode->Name = NodeNameBuf;
+			bDirty = true;
+		}
+
+		USkeleton* Skeleton = !Graph.SkeletonPath.empty() ? UAssetManager::LoadSkeleton(Graph.SkeletonPath) : nullptr;
+		auto DrawBoneSelector = [&](const char* Label, FString& BoneNameField)
+		{
+			if (Skeleton && Skeleton->RefSkeleton.GetNum() > 0)
+			{
+				if (ImGui::BeginCombo(Label, BoneNameField.empty() ? "Select Bone" : BoneNameField.c_str()))
+				{
+					const auto& Bones = Skeleton->RefSkeleton.RefBoneInfo;
+					for (int32 Idx = 0; Idx < Bones.Num(); ++Idx)
+					{
+						const FString& Candidate = Bones[Idx].Name;
+						if (ImGui::Selectable(Candidate.c_str(), BoneNameField == Candidate))
+						{
+							BoneNameField = Candidate;
+							bDirty = bPreviewRefreshRequested = true;
+						}
+					}
+					ImGui::EndCombo();
+				}
+			}
+			else
+			{
+				char BoneBuf[128]{};
+				strncpy_s(BoneBuf, BoneNameField.c_str(), sizeof(BoneBuf) - 1);
+				if (ImGui::InputText(Label, BoneBuf, sizeof(BoneBuf)))
+				{
+					BoneNameField = BoneBuf;
+					bDirty = bPreviewRefreshRequested = true;
+				}
+			}
+		};
+
+		if (RootNode->Type == ERootAnimNodeType::StateMachine)
+		{
+			ImGui::TextUnformatted("Type: Locomotion State Machine");
+			if (ImGui::Button("Open State Machine")) View = EView::Machine;
+		}
+		else if (RootNode->Type == ERootAnimNodeType::Slot)
+		{
+			ImGui::TextUnformatted("Type: Montage Slot");
+			char SlotBuf[128]{};
+			strncpy_s(SlotBuf, RootNode->SlotName.c_str(), sizeof(SlotBuf) - 1);
+			if (ImGui::InputText("Slot Name", SlotBuf, sizeof(SlotBuf)))
+			{
+				RootNode->SlotName = SlotBuf;
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			ImGui::TextWrapped("Gameplay selects a montage with PlayMontage. The montage's Slot routes it here.");
+			if (ImGui::Button("Edit Montage"))
+				OpenMontageAsset(MontageEditPath);
+			ImGui::SameLine();
+			if (ImGui::Button("Play Preview Montage") && PreviewCharacter)
+			{
+				if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+					Instance->PlayMontage(MontageEditPath);
+			}
+		}
+		else if (RootNode->Type == ERootAnimNodeType::LayeredBlendPerBone)
+		{
+			ImGui::TextUnformatted("Type: Layered Blend per Bone");
+			DrawBoneSelector("Start Bone", RootNode->StartBoneName);
+			if (ImGui::Checkbox("Mesh Space Rotation Blend", &RootNode->bMeshSpaceRotationBlend))
+				bDirty = bPreviewRefreshRequested = true;
+			int AlphaMode = RootNode->AlphaInput == EAnimGraphInput::IsAiming ? 1 : 0;
+			if (ImGui::Combo("Alpha Input", &AlphaMode, "Constant\0IsAiming\0"))
+			{
+				RootNode->AlphaInput = AlphaMode ? EAnimGraphInput::IsAiming : EAnimGraphInput::Constant;
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			if (RootNode->AlphaInput == EAnimGraphInput::Constant &&
+				ImGui::SliderFloat("Alpha", &RootNode->Alpha, 0.0f, 1.0f, "%.2f"))
+			{
+				bDirty = bPreviewRefreshRequested = true;
+			}
+		}
+		else if (RootNode->Type == ERootAnimNodeType::SequencePlayer)
+		{
+			ImGui::TextUnformatted("Type: Sequence Player");
+			if (ImGui::BeginCombo("Animation", RootNode->SequencePath.empty() ? "Select sequence" : RootNode->SequencePath.c_str()))
+			{
+				TArray<UAnimSequence*> Sequences;
+				UAssetManager::GetAllAnimSequences(Sequences);
+				for (UAnimSequence* Sequence : Sequences)
+					if (Sequence && Sequence->Skeleton &&
+						(Graph.SkeletonPath.empty() || Graph.SkeletonPath == Sequence->Skeleton->GetPath()) &&
+						ImGui::Selectable(Sequence->GetPath().c_str(), RootNode->SequencePath == Sequence->GetPath()))
+					{
+						RootNode->SequencePath = Sequence->GetPath();
+						Graph.SkeletonPath = Sequence->Skeleton->GetPath();
+						bDirty = bPreviewRefreshRequested = true;
+					}
+				ImGui::EndCombo();
+			}
+			if (ImGui::DragFloat("Play Rate", &RootNode->PlayRate, 0.01f, 0.01f, 10.0f))
+				bDirty = bPreviewRefreshRequested = true;
+		}
+		else if (RootNode->Type == ERootAnimNodeType::AimOffset)
+		{
+			ImGui::TextUnformatted("Type: Aim Offset 1D");
+			if (ImGui::BeginCombo("AimOffset Asset", RootNode->AimOffsetPath.empty() ? "Select .aimoffset" : RootNode->AimOffsetPath.c_str()))
+			{
+				std::error_code Ec;
+				for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+				{
+					if (It->path().extension() != ".aimoffset") continue;
+					const FString Candidate = FbxPath::ToString(It->path());
+					if (ImGui::Selectable(Candidate.c_str(), RootNode->AimOffsetPath == Candidate))
+					{
+						RootNode->AimOffsetPath = Candidate;
+						bDirty = bPreviewRefreshRequested = true;
+					}
+				}
+				ImGui::EndCombo();
+			}
+			int PitchMode = (RootNode->PitchInput == EAnimGraphInput::AimPitch) ? 0 : 1;
+			if (ImGui::Combo("Pitch Input", &PitchMode, "AimPitch (Camera Pitch)\0Constant Pitch\0"))
+			{
+				RootNode->PitchInput = (PitchMode == 0) ? EAnimGraphInput::AimPitch : EAnimGraphInput::Constant;
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			if (RootNode->PitchInput == EAnimGraphInput::Constant)
+			{
+				if (ImGui::SliderFloat("Constant Pitch", &RootNode->ConstantPitch, -90.0f, 90.0f, "%.1f"))
+					bDirty = bPreviewRefreshRequested = true;
+			}
+			int AlphaMode = RootNode->AlphaInput == EAnimGraphInput::IsAiming ? 1 : 0;
+			if (ImGui::Combo("Alpha Input", &AlphaMode, "Constant\0IsAiming\0"))
+			{
+				RootNode->AlphaInput = AlphaMode ? EAnimGraphInput::IsAiming : EAnimGraphInput::Constant;
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			if (RootNode->AlphaInput == EAnimGraphInput::Constant &&
+				ImGui::SliderFloat("Alpha", &RootNode->Alpha, 0.0f, 1.0f, "%.2f"))
+			{
+				bDirty = bPreviewRefreshRequested = true;
+			}
+			if (ImGui::Button("Edit Aim Offset"))
+			{
+				if (!RootNode->AimOffsetPath.empty()) OpenAimOffsetAsset(RootNode->AimOffsetPath);
+				else bAimOffsetEditorOpen = true;
+			}
+		}
+		else if (RootNode->Type == ERootAnimNodeType::OutputPose)
+		{
+			ImGui::TextUnformatted("Type: Final Output Pose");
+		}
+
+		if (RootNode->Type != ERootAnimNodeType::StateMachine && ImGui::Button("Delete Root Node"))
+		{
+			const int32 DelId = RootNode->Id;
+			std::erase_if(Graph.RootNodes, [DelId](const FRootAnimGraphNode& Item) { return Item.Id == DelId; });
+			for (auto& Item : Graph.RootNodes)
+			{
+				if (Item.SourceNodeId == DelId) Item.SourceNodeId = 0;
+				if (Item.SecondarySourceNodeId == DelId) Item.SecondarySourceNodeId = 0;
+			}
+			Graph.SyncRootLinksFromNodes();
+			SelectedRootNodeId = Graph.RootNodes.empty() ? 0 : Graph.RootNodes.front().Id;
+			bDirty = bPreviewRefreshRequested = true;
+		}
 		return;
 	}
 	FAnimGraphState* State = SelectedState();
@@ -929,6 +1664,44 @@ void FAnimGraphEditorPanel::DrawDetails()
 void FAnimGraphEditorPanel::DrawAssetBrowser()
 {
 	ImGui::TextUnformatted("Animation Assets");
+	if (View == EView::Root)
+	{
+		FRootAnimGraphNode* RootNode = SelectedRootNode();
+		if (ImGui::CollapsingHeader("Montages (.animmontage)", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			std::error_code Ec;
+			for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+			{
+				if (It->path().extension() != ".animmontage") continue;
+				const FString Candidate = FbxPath::ToString(It->path());
+				const bool bSelected = MontageEditPath == Candidate;
+				if (ImGui::Selectable(Candidate.c_str(), bSelected))
+				{
+					OpenMontageAsset(Candidate);
+				}
+			}
+		}
+		if (ImGui::CollapsingHeader("Aim Offsets (.aimoffset)", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			std::error_code Ec;
+			for (fs::recursive_directory_iterator It("Assets", Ec), End; !Ec && It != End; It.increment(Ec))
+			{
+				if (It->path().extension() != ".aimoffset") continue;
+				const FString Candidate = FbxPath::ToString(It->path());
+				const bool bSelected = RootNode && RootNode->Type == ERootAnimNodeType::AimOffset && RootNode->AimOffsetPath == Candidate;
+				if (ImGui::Selectable(Candidate.c_str(), bSelected))
+				{
+					if (RootNode && RootNode->Type == ERootAnimNodeType::AimOffset)
+					{
+						RootNode->AimOffsetPath = Candidate;
+						bDirty = bPreviewRefreshRequested = true;
+					}
+					OpenAimOffsetAsset(Candidate);
+				}
+			}
+		}
+		return;
+	}
 	FAnimGraphState* State = View == EView::Transition ? nullptr : SelectedState();
 	if (!State) { ImGui::TextWrapped("Select a state to assign an asset."); return; }
 	FAnimGraphPlayerNode* Extra = nullptr;
@@ -973,6 +1746,301 @@ void FAnimGraphEditorPanel::DrawAssetBrowser()
 	}
 }
 
+void FAnimGraphEditorPanel::DrawMontageEditorWindow()
+{
+	if (!bMontageEditorOpen) return;
+	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(760), EditorUIScale::Px(560)), ImGuiCond_FirstUseEver);
+	if (!ImGui::Begin("Anim Montage Editor", &bMontageEditorOpen))
+	{
+		ImGui::End();
+		return;
+	}
+	char PathBuf[256]{};
+	strncpy_s(PathBuf, MontageEditPath.c_str(), sizeof(PathBuf) - 1);
+	if (ImGui::InputText("Montage File", PathBuf, sizeof(PathBuf))) MontageEditPath = PathBuf;
+	ImGui::SameLine();
+	if (ImGui::Button("Load")) OpenMontageAsset(MontageEditPath);
+	ImGui::SameLine();
+	if (ImGui::Button("Save Montage"))
+	{
+		if (EditingMontage.Save(MontageEditPath, MontageStatus))
+		{
+			MontageStatus = "Saved " + MontageEditPath;
+			bPreviewRefreshRequested = true;
+		}
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Play in Preview") && PreviewCharacter)
+	{
+		EditingMontage.Save(MontageEditPath, MontageStatus);
+		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			Instance->PlayMontage(MontageEditPath, 1.0f, "");
+	}
+	if (!MontageStatus.empty()) ImGui::TextWrapped("%s", MontageStatus.c_str());
+
+	TArray<UAnimSequence*> Sequences;
+	UAssetManager::GetAllAnimSequences(Sequences);
+	if (ImGui::BeginCombo("Sequence Track", EditingMontage.SequencePath.empty() ? "Select Sequence" : EditingMontage.SequencePath.c_str()))
+	{
+		for (auto* Seq : Sequences)
+		{
+			if (!Seq || !Seq->Skeleton) continue;
+			if (!EditingMontage.SkeletonPath.empty() && EditingMontage.SkeletonPath != Seq->Skeleton->GetPath()) continue;
+			if (ImGui::Selectable(Seq->GetPath().c_str(), EditingMontage.SequencePath == Seq->GetPath()))
+			{
+				EditingMontage.SequencePath = Seq->GetPath();
+				EditingMontage.SkeletonPath = Seq->Skeleton->GetPath();
+			}
+		}
+		ImGui::EndCombo();
+	}
+
+	char SlotBuf[128]{};
+	strncpy_s(SlotBuf, EditingMontage.SlotName.c_str(), sizeof(SlotBuf) - 1);
+	if (ImGui::InputText("Slot", SlotBuf, sizeof(SlotBuf))) EditingMontage.SlotName = SlotBuf;
+	ImGui::DragFloat("Play Rate", &EditingMontage.PlayRate, 0.01f, 0.05f, 10.0f);
+	ImGui::DragFloat("Blend In Time", &EditingMontage.BlendInTime, 0.01f, 0.0f, 5.0f);
+	ImGui::DragFloat("Blend Out Time", &EditingMontage.BlendOutTime, 0.01f, 0.0f, 5.0f);
+	ImGui::Checkbox("Loop Montage", &EditingMontage.bLoop);
+
+	UAnimSequence* Seq = !EditingMontage.SequencePath.empty() ? UAssetManager::LoadAnimSequence(EditingMontage.SequencePath) : nullptr;
+	const float TotalLength = (Seq && Seq->GetDataModel() && Seq->GetDataModel()->PlayLength > 0.0f)
+		? Seq->GetDataModel()->PlayLength : 1.0f;
+
+	ImGui::Separator();
+	ImGui::Text("Timeline (Length: %.3fs)", TotalLength);
+	const ImVec2 TimelineOrigin = ImGui::GetCursorScreenPos();
+	const ImVec2 TimelineSize(std::max(200.0f, ImGui::GetContentRegionAvail().x), EditorUIScale::Px(110));
+	ImGui::InvisibleButton("##MontageTimeline", TimelineSize, ImGuiButtonFlags_MouseButtonLeft);
+	if (ImGui::IsItemActive())
+	{
+		const float RelX = std::clamp((ImGui::GetMousePos().x - TimelineOrigin.x) / TimelineSize.x, 0.0f, 1.0f);
+		MontageScrubTime = RelX * TotalLength;
+	}
+	ImDrawList* Draw = ImGui::GetWindowDrawList();
+	Draw->AddRectFilled(TimelineOrigin, { TimelineOrigin.x + TimelineSize.x, TimelineOrigin.y + TimelineSize.y }, IM_COL32(30, 32, 37, 255), 4.0f);
+	const float RowH = TimelineSize.y / 3.0f;
+
+	// 시퀀스 트랙과 블렌드 영역 표시
+	Draw->AddRectFilled({ TimelineOrigin.x, TimelineOrigin.y + 2 }, { TimelineOrigin.x + TimelineSize.x, TimelineOrigin.y + RowH - 2 }, IM_COL32(52, 74, 62, 255), 3.0f);
+	Draw->AddText({ TimelineOrigin.x + 8, TimelineOrigin.y + 6 }, IM_COL32_WHITE,
+		EditingMontage.SequencePath.empty() ? "No Sequence" : FbxPath::FromString(EditingMontage.SequencePath).stem().string().c_str());
+
+	// 섹션 트랙 표시
+	for (const auto& Sec : EditingMontage.Sections)
+	{
+		const float X0 = TimelineOrigin.x + std::clamp(Sec.StartTime / TotalLength, 0.0f, 1.0f) * TimelineSize.x;
+		const float X1 = TimelineOrigin.x + std::clamp(Sec.EndTime / TotalLength, 0.0f, 1.0f) * TimelineSize.x;
+		Draw->AddRectFilled({ X0, TimelineOrigin.y + RowH + 2 }, { std::max(X0 + 4.0f, X1), TimelineOrigin.y + RowH * 2.0f - 2 }, IM_COL32(65, 78, 108, 255), 3.0f);
+		Draw->AddRect({ X0, TimelineOrigin.y + RowH + 2 }, { std::max(X0 + 4.0f, X1), TimelineOrigin.y + RowH * 2.0f - 2 }, IM_COL32(150, 175, 220, 255), 3.0f);
+		Draw->AddText({ X0 + 6, TimelineOrigin.y + RowH + 6 }, IM_COL32_WHITE, Sec.Name.c_str());
+	}
+
+	// 노티파이 트랙 표시
+	Draw->AddRectFilled({ TimelineOrigin.x, TimelineOrigin.y + RowH * 2.0f + 2 }, { TimelineOrigin.x + TimelineSize.x, TimelineOrigin.y + TimelineSize.y - 2 }, IM_COL32(44, 42, 52, 255), 3.0f);
+	for (const auto& Notify : EditingMontage.Notifies)
+	{
+		const float NX = TimelineOrigin.x + std::clamp(Notify.Time / TotalLength, 0.0f, 1.0f) * TimelineSize.x;
+		const float NY = TimelineOrigin.y + RowH * 2.5f;
+		Draw->AddQuadFilled({ NX, NY - 7 }, { NX + 7, NY }, { NX, NY + 7 }, { NX - 7, NY }, IM_COL32(250, 190, 70, 255));
+		Draw->AddText({ NX + 9, NY - 7 }, IM_COL32(255, 225, 130, 255), Notify.Name.c_str());
+	}
+
+	float PlayheadTime = MontageScrubTime;
+	if (PreviewCharacter)
+	{
+		if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+			if (Instance->IsPlayingMontage(EditingMontage.SlotName))
+				PlayheadTime = Instance->GetMontagePosition(EditingMontage.SlotName);
+	}
+	const float PlayheadX = TimelineOrigin.x + std::clamp(PlayheadTime / TotalLength, 0.0f, 1.0f) * TimelineSize.x;
+	Draw->AddLine({ PlayheadX, TimelineOrigin.y }, { PlayheadX, TimelineOrigin.y + TimelineSize.y }, IM_COL32(255, 85, 85, 255), 2.0f);
+
+	if (ImGui::CollapsingHeader("Sections", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		if (ImGui::Button("Add Section"))
+		{
+			EditingMontage.Sections.push_back({ "Section", 0.0f, TotalLength, "" });
+		}
+		for (size_t Idx = 0; Idx < EditingMontage.Sections.size(); ++Idx)
+		{
+			ImGui::PushID(static_cast<int>(Idx));
+			auto& Sec = EditingMontage.Sections[Idx];
+			char SecName[64]{}; strncpy_s(SecName, Sec.Name.c_str(), sizeof(SecName) - 1);
+			char NextName[64]{}; strncpy_s(NextName, Sec.NextSection.c_str(), sizeof(NextName) - 1);
+			ImGui::SetNextItemWidth(EditorUIScale::Px(110));
+			if (ImGui::InputText("Name", SecName, sizeof(SecName))) Sec.Name = SecName;
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(80));
+			ImGui::DragFloat("Start", &Sec.StartTime, 0.01f, 0.0f, TotalLength);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(80));
+			ImGui::DragFloat("End", &Sec.EndTime, 0.01f, Sec.StartTime, TotalLength);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(100));
+			if (ImGui::InputText("Next", NextName, sizeof(NextName))) Sec.NextSection = NextName;
+			ImGui::SameLine();
+			if (ImGui::SmallButton("X"))
+			{
+				EditingMontage.Sections.erase(EditingMontage.Sections.begin() + static_cast<ptrdiff_t>(Idx));
+				ImGui::PopID();
+				break;
+			}
+			ImGui::PopID();
+		}
+	}
+
+	if (ImGui::CollapsingHeader("Notifies", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		if (ImGui::Button("Add Notify"))
+		{
+			EditingMontage.Notifies.push_back({ "Fire", MontageScrubTime });
+		}
+		for (size_t Idx = 0; Idx < EditingMontage.Notifies.size(); ++Idx)
+		{
+			ImGui::PushID(static_cast<int>(Idx) + 1000);
+			auto& Notify = EditingMontage.Notifies[Idx];
+			char NotifyName[64]{}; strncpy_s(NotifyName, Notify.Name.c_str(), sizeof(NotifyName) - 1);
+			ImGui::SetNextItemWidth(EditorUIScale::Px(140));
+			if (ImGui::InputText("Notify", NotifyName, sizeof(NotifyName))) Notify.Name = NotifyName;
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(110));
+			ImGui::SliderFloat("Time", &Notify.Time, 0.0f, TotalLength, "%.3fs");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Delete"))
+			{
+				EditingMontage.Notifies.erase(EditingMontage.Notifies.begin() + static_cast<ptrdiff_t>(Idx));
+				ImGui::PopID();
+				break;
+			}
+			ImGui::PopID();
+		}
+	}
+	ImGui::End();
+}
+
+void FAnimGraphEditorPanel::DrawAimOffsetEditorWindow()
+{
+	if (!bAimOffsetEditorOpen) return;
+	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(740), EditorUIScale::Px(520)), ImGuiCond_FirstUseEver);
+	if (!ImGui::Begin("Aim Offset 1D Editor", &bAimOffsetEditorOpen))
+	{
+		ImGui::End();
+		return;
+	}
+	char PathBuf[256]{};
+	strncpy_s(PathBuf, AimOffsetEditPath.c_str(), sizeof(PathBuf) - 1);
+	if (ImGui::InputText("AimOffset File", PathBuf, sizeof(PathBuf))) AimOffsetEditPath = PathBuf;
+	ImGui::SameLine();
+	if (ImGui::Button("Load")) OpenAimOffsetAsset(AimOffsetEditPath);
+	ImGui::SameLine();
+	if (ImGui::Button("Save AimOffset"))
+	{
+		if (EditingAimOffset.Save(AimOffsetEditPath, AimOffsetStatus))
+		{
+			AimOffsetStatus = "Saved " + AimOffsetEditPath;
+			bPreviewRefreshRequested = true;
+		}
+	}
+	if (!AimOffsetStatus.empty()) ImGui::TextWrapped("%s", AimOffsetStatus.c_str());
+
+	TArray<UAnimSequence*> Sequences;
+	UAssetManager::GetAllAnimSequences(Sequences);
+	if (ImGui::BeginCombo("Base Reference Pose", EditingAimOffset.BaseSequencePath.empty() ? "Select Base Sequence" : EditingAimOffset.BaseSequencePath.c_str()))
+	{
+		for (auto* Seq : Sequences)
+		{
+			if (!Seq || !Seq->Skeleton) continue;
+			if (!EditingAimOffset.SkeletonPath.empty() && EditingAimOffset.SkeletonPath != Seq->Skeleton->GetPath()) continue;
+			if (ImGui::Selectable(Seq->GetPath().c_str(), EditingAimOffset.BaseSequencePath == Seq->GetPath()))
+			{
+				EditingAimOffset.BaseSequencePath = Seq->GetPath();
+				EditingAimOffset.SkeletonPath = Seq->Skeleton->GetPath();
+			}
+		}
+		ImGui::EndCombo();
+	}
+
+	ImGui::DragFloat("Min Pitch", &EditingAimOffset.MinPitch, 1.0f, -180.0f, 0.0f);
+	ImGui::DragFloat("Max Pitch", &EditingAimOffset.MaxPitch, 1.0f, 0.0f, 180.0f);
+
+	ImGui::Separator();
+	ImGui::Text("Pitch Axis (%.0f deg ~ %.0f deg) - Drag on axis to preview AimPitch", EditingAimOffset.MinPitch, EditingAimOffset.MaxPitch);
+	const ImVec2 AxisOrigin = ImGui::GetCursorScreenPos();
+	const ImVec2 AxisSize(std::max(200.0f, ImGui::GetContentRegionAvail().x), EditorUIScale::Px(70));
+	ImGui::InvisibleButton("##AimOffsetPitchAxis", AxisSize, ImGuiButtonFlags_MouseButtonLeft);
+	const float PitchSpan = std::max(1.0f, EditingAimOffset.MaxPitch - EditingAimOffset.MinPitch);
+	if (ImGui::IsItemActive())
+	{
+		const float RelX = std::clamp((ImGui::GetMousePos().x - AxisOrigin.x) / AxisSize.x, 0.0f, 1.0f);
+		PreviewAimPitch = EditingAimOffset.MinPitch + RelX * PitchSpan;
+		if (PreviewCharacter)
+			if (auto* Instance = Cast<UAnimGraphInstance>(PreviewCharacter->GetSkeletalMeshComponent()->GetAnimInstance()))
+				Instance->SetPreviewAimPitch(PreviewAimPitch);
+	}
+	ImDrawList* Draw = ImGui::GetWindowDrawList();
+	Draw->AddRectFilled(AxisOrigin, { AxisOrigin.x + AxisSize.x, AxisOrigin.y + AxisSize.y }, IM_COL32(30, 34, 40, 255), 4.0f);
+	const float MidY = AxisOrigin.y + AxisSize.y * 0.55f;
+	Draw->AddLine({ AxisOrigin.x + 12, MidY }, { AxisOrigin.x + AxisSize.x - 12, MidY }, IM_COL32(140, 150, 165, 255), 2.0f);
+
+	for (const auto& Sample : EditingAimOffset.Samples)
+	{
+		const float T = std::clamp((Sample.Pitch - EditingAimOffset.MinPitch) / PitchSpan, 0.0f, 1.0f);
+		const float SX = AxisOrigin.x + 12 + T * (AxisSize.x - 24);
+		Draw->AddCircleFilled({ SX, MidY }, 7.0f, IM_COL32(95, 210, 130, 255));
+		char LabelBuf[64]{};
+		std::snprintf(LabelBuf, sizeof(LabelBuf), "%.0f deg", Sample.Pitch);
+		Draw->AddText({ SX - 18, MidY - 24 }, IM_COL32_WHITE, LabelBuf);
+	}
+
+	const float PreviewT = std::clamp((PreviewAimPitch - EditingAimOffset.MinPitch) / PitchSpan, 0.0f, 1.0f);
+	const float PreviewX = AxisOrigin.x + 12 + PreviewT * (AxisSize.x - 24);
+	Draw->AddLine({ PreviewX, AxisOrigin.y + 4 }, { PreviewX, AxisOrigin.y + AxisSize.y - 4 }, IM_COL32(255, 190, 75, 255), 2.5f);
+	ImGui::SliderFloat("Preview AimPitch", &PreviewAimPitch, EditingAimOffset.MinPitch, EditingAimOffset.MaxPitch, "%.1f deg");
+
+	if (ImGui::CollapsingHeader("Aim Samples (Down / Center / Up)", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		if (ImGui::Button("Add Sample"))
+		{
+			EditingAimOffset.Samples.push_back({ 0.0f, EditingAimOffset.BaseSequencePath, 0 });
+		}
+		for (size_t Idx = 0; Idx < EditingAimOffset.Samples.size(); ++Idx)
+		{
+			ImGui::PushID(static_cast<int>(Idx) + 2000);
+			auto& Sample = EditingAimOffset.Samples[Idx];
+			ImGui::SetNextItemWidth(EditorUIScale::Px(90));
+			ImGui::DragFloat("Pitch", &Sample.Pitch, 1.0f, EditingAimOffset.MinPitch, EditingAimOffset.MaxPitch);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(280));
+			if (ImGui::BeginCombo("Sequence", Sample.SequencePath.empty() ? "Select Sequence" : Sample.SequencePath.c_str()))
+			{
+				for (auto* Seq : Sequences)
+				{
+					if (!Seq || !Seq->Skeleton) continue;
+					if (!EditingAimOffset.SkeletonPath.empty() && EditingAimOffset.SkeletonPath != Seq->Skeleton->GetPath()) continue;
+					if (ImGui::Selectable(Seq->GetPath().c_str(), Sample.SequencePath == Seq->GetPath()))
+					{
+						Sample.SequencePath = Seq->GetPath();
+					}
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(EditorUIScale::Px(70));
+			ImGui::DragInt("Frame", &Sample.FrameIndex, 1.0f, 0, 100);
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Delete"))
+			{
+				EditingAimOffset.Samples.erase(EditingAimOffset.Samples.begin() + static_cast<ptrdiff_t>(Idx));
+				ImGui::PopID();
+				break;
+			}
+			ImGui::PopID();
+		}
+	}
+	ImGui::End();
+}
+
 void FAnimGraphEditorPanel::OnRender()
 {
 	if (bRestorePreviewOnOpen)
@@ -993,8 +2061,9 @@ void FAnimGraphEditorPanel::OnRender()
 	if (ImGui::InputText("AnimGraph Name", AssetName, sizeof(AssetName))) bDirty = true;
 	ImGui::SameLine();
 	if (ImGui::Button("Save")) Save(); ImGui::SameLine();
-	if (ImGui::Button("Validate")) Graph.Validate(Status);
-	// SameLine은 바로 다음 아이템에만 적용된다. 더티가 아닐 때 이후의 Graph Tree 차일드가 이 줄에 붙지 않도록 조건부로 호출한다.
+	if (ImGui::Button("Validate")) Graph.Validate(Status); ImGui::SameLine();
+	if (ImGui::Button("Montage Editor")) OpenMontageAsset(MontageEditPath); ImGui::SameLine();
+	if (ImGui::Button("AimOffset Editor")) OpenAimOffsetAsset(AimOffsetEditPath);
 	if (bDirty) { ImGui::SameLine(); ImGui::TextUnformatted("*"); }
 	if (!Status.empty()) ImGui::TextWrapped("%s", Status.c_str());
 	const ImVec2 Available = ImGui::GetContentRegionAvail();

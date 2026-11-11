@@ -29,6 +29,7 @@ struct FRenderPacket
 	uint32 Slot = InvalidObjectSlot;
 	uint8 LODIndex = 0;
 	bool bOccludedByGpu = false;
+	bool bComputeSkinned = false;
 };
 
 struct FViewContext

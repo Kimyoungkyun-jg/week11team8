@@ -35,6 +35,7 @@
 #include "Editor/Animation/AnimSequenceViewerPanel.h"
 #include "Editor/Animation/AnimGraphEditorPanel.h"
 #include "Editor/Animation/BlendSpaceEditorPanel.h"
+#include "Editor/Animation/AnimationAssetEditorPanels.h"
 
 #include "Editor/Rendering/Outline.h"
 #include "Editor/Rendering/OutLineRenderer.h"
@@ -72,7 +73,8 @@ public:
 	// 뷰포트 하나의 씬과 에디터 요소를 렌더링한다.
 	void RenderFrame(FEditorViewportClient* ViewClient, const FSceneView& SceneView, const FSceneRenderOptions& RenderOptions, FSceneRenderer& SceneRenderer, UWorld* TargetWorld, const bool bIsPIE);
 	// FBX Viewer용 뷰포트 화면을 렌더링한다.
-	void RenderPreviewViewport(FEditorViewportClient* PreviewClient, UWorld* PreviewWorld, const FGizmo* PreviewGizmo, class FSkyboxRenderer* SkyboxOverride = nullptr, bool bDrawGrid = false);
+	void RenderPreviewViewport(FEditorViewportClient* PreviewClient, UWorld* PreviewWorld, const FGizmo* PreviewGizmo,
+		class FSkyboxRenderer* SkyboxOverride = nullptr, bool bDrawGrid = false, const class UPrimitiveComponent* BoundsComponent = nullptr);
 	// 게임 뷰포트 화면을 렌더링한다.
 	void RenderGameFrame(FGameViewportClient* GameClient, const FSceneView& SceneView, const FSceneRenderOptions& RenderOptions, FSceneRenderer& SceneRenderer, bool bIsSIEMode = false);
 	// 네 View 결과와 ImGui를 메인 Swapchain 백버퍼에 합성한다. Present는 FEngineLoop가 한다.
@@ -214,6 +216,8 @@ private:
 	FAnimSequenceViewerPanel* AnimSequenceViewerPanel = nullptr;
 	FAnimGraphEditorPanel* AnimGraphEditorPanel = nullptr;
 	FBlendSpaceEditorPanel* BlendSpaceEditorPanel = nullptr;
+	FAnimMontageEditorPanel* AnimMontageEditorPanel = nullptr;
+	FAimOffsetEditorPanel* AimOffsetEditorPanel = nullptr;
 
 	UWorld* EditorWorld = nullptr;
 	UWorld* PlayWorld = nullptr;

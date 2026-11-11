@@ -354,7 +354,12 @@ bool FMeshPassProcessor::Build(const FSceneView& View, const FRenderQueue& Queue
 				Options, bGPUSkinning, Packet.LODIndex, Packet.MaterialParamData, Packet.MaterialParamDataSize);
 			if (bBatchBuilt && Packet.SkeletalVertexBuffer)
 				Batch.VertexBuffer = Packet.SkeletalVertexBuffer;
-			if (bBatchBuilt) Batch.SkinningMatricesBuffer = Packet.SkinningMatricesBuffer;
+			if (bBatchBuilt)
+			{
+				Batch.SkinningMatricesBuffer = Packet.SkinningMatricesBuffer;
+				Batch.bSkeletalMesh = true;
+				Batch.bComputeSkinned = Packet.bComputeSkinned;
+			}
 		}
 		if (!bBatchBuilt) return false;
 
@@ -404,6 +409,8 @@ bool FMeshPassProcessor::Build(const TArray<FPrimitiveSceneProxy*>& ShadowMeshes
 		Batch.IndexBuffer = Proxy->GetIndexBuffer(LOD);
 		if (USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Proxy->GetComponent()))
 		{
+			Batch.bSkeletalMesh = true;
+			Batch.bComputeSkinned = SkelComp->GetAppliedSkinningMode() == ESkinningMode::Compute;
 			Batch.SkinningMatricesBuffer = SkelComp->GetSkinningMatricesBuffer();
 			if (Batch.SkinningMatricesBuffer)
 			{

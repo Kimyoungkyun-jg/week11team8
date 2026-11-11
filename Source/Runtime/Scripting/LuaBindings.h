@@ -11,6 +11,7 @@ namespace FLuaBindings
 {
 	// FVector, FRotator, AActor(안전 핸들), Input, Time
 	void Register(sol::state& Lua);
+	void BindActorEnvironment(sol::environment& Env, AActor* Owner);
 
 	// Lua에서 Destroy를 부른 액터를 실제로 지운다. UWorld::Tick이 UpdateOverlaps() 직후 1회 호출.
 	void FlushPendingDestroy(UWorld* World);

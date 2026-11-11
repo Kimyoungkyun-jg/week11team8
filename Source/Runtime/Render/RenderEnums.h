@@ -18,8 +18,19 @@ enum class ERenderingPath
 enum class ESkinningMode : uint8_t
 {
 	CPU,
-	GPU
+	GPU,
+	Compute
 };
+
+inline const char* GetSkinningModeName(ESkinningMode Mode)
+{
+	switch (Mode)
+	{
+	case ESkinningMode::GPU: return "GPU";
+	case ESkinningMode::Compute: return "CS";
+	default: return "CPU";
+	}
+}
 
 // Reflection determines the lighting equation, independently of interpolation.
 enum class EReflectionModel

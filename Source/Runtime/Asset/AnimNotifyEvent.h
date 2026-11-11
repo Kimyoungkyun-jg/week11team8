@@ -36,4 +36,6 @@ struct FAnimNotifyQueueItem
 	float Weight = 1.0f;
 	// Notify가 든 시퀀스
 	const UAnimSequence* Source = nullptr;
+	// 이 항목을 올린 노드. 같은 노드가 그래프에서 여러 경로로 연결될 때 한 번만 올리는 데 쓴다 (예: 슬롯의 입력과 레이어 블렌드의 기본 포즈가 같은 노드).
+	const void* SourceNode = nullptr;
 };

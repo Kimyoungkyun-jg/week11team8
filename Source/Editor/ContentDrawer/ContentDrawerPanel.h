@@ -67,12 +67,15 @@ private:
 	std::function<void(const FString&)> OnOpenBlendSpace;
 	std::function<void(const FString&)> OnOpenSkeletalMesh;
 	char NewAssetName[64] = "NewWidget";
+	char SearchText[256] = "";
 	bool bOpenCreateWidget = false;
 	bool bOpenCreateAnimGraph = false;
 	FString NewAnimGraphSkeleton;          // 생성 모달에서 선택된 스켈레톤 키 (Assets 기준 상대 경로)
 	TArray<FString> SkeletonKeys;          // 모달을 열 때 Assets에서 수집한 SKEL_*.fbxbin
 	bool bOpenCreateBlendSpace = false;
 	bool bNewBlendSpace2D = true;
+	bool bOpenCreateAnimationAsset = false;
+	bool bNewAnimationAssetMontage = true;
 
 	fs::path AssetRootPath = "Assets";
 	fs::path CurrentPath = "Assets";
