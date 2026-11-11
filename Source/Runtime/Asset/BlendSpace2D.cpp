@@ -235,3 +235,18 @@ bool UBlendSpace2D::ExtractRootMotion(float X, float Y, float PreviousTime, floa
 	if (bHasRootMotion) OutDelta = Result.ToMatrix();
 	return bHasRootMotion;
 }
+
+void UBlendSpace2D::GetNotifies(float X, float Y, float PreviousTime, float CurrentTime, int32 LoopCount,
+	bool bIncludeStart, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	std::array<FWeightedSample, 3> Blend;
+	int32 Count;
+	if (!GetBlendSamples(X, Y, Blend, Count)) return;
+	for (int32 I = 0; I < Count; ++I)
+	{
+		if (Blend[I].Weight <= 0.0f) continue;
+		const UAnimSequence* Sequence = Blend[I].Sample->Sequence;
+		const float Length = Sequence->GetDataModel()->PlayLength;
+		Sequence->GetNotifyQueueItems(PreviousTime * Length, CurrentTime * Length, LoopCount, bIncludeStart, Blend[I].Weight, OutQueue);
+	}
+}

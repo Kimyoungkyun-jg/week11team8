@@ -210,6 +210,22 @@ void FBlendSpaceEditorPanel::EvaluatePreview()
 
 void FBlendSpaceEditorPanel::Tick(float DeltaTime)
 {
+	if (!IsOpen())
+	{
+		bFocused = false;
+		// 창을 완전히 닫으면 프리뷰 월드를 해제한다. 샘플 데이터는 유지하고, 다시 열면 OnRender에서 프리뷰를 복원한다.
+		if (PreviewWorld)
+		{
+			Release();
+			bRestorePreviewOnOpen = true;
+		}
+		return;
+	}
+	// 도킹된 탭이 가려져 있으면 재생하지 않는다. 월드는 그대로 둔다.
+	if (!bVisible)
+	{
+		return;
+	}
 	if (!PreviewWorld || !MeshComponent) return;
 	if (bPlaying) PreviewTime += std::max(0.0f, DeltaTime);
 	EvaluatePreview();
@@ -535,9 +551,20 @@ void FBlendSpaceEditorPanel::DrawAssetBrowser()
 void FBlendSpaceEditorPanel::OnRender()
 {
 	if (!IsOpen()) return;
+	if (bRestorePreviewOnOpen)
+	{
+		bRestorePreviewOnOpen = false;
+		StartPreview();
+	}
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1400), EditorUIScale::Px(850)), ImGuiCond_FirstUseEver);
 	if (bFocusRequested) { ImGui::SetNextWindowFocus(); bFocusRequested = false; }
 	bVisible = BeginPanel();
+	bFocused = bVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+	// Ctrl+S: 이 창에 포커스가 있을 때만 저장한다. Ctrl+Shift+S는 전체 저장이라 여기서 받지 않는다.
+	if (bFocused && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt && ImGui::IsKeyPressed(ImGuiKey_S, false))
+	{
+		Save();
+	}
 	if (!bVisible) { ImGui::End(); return; }
 	ImGui::TextUnformatted(Path.c_str()); ImGui::SameLine();
 	if (ImGui::Button("Save")) Save(); ImGui::SameLine();

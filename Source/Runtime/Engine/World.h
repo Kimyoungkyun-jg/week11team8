@@ -202,8 +202,8 @@ private:
 	float CinematicTimeDilation = 1.0f;
 	float HitStopTimeRemaining = 0.0f;	// 실제 시간 (초)
 	float HitStopDilation = 1.0f;
-	float TimeSeconds = 0.0f;			// 게임 시간 (dilated 누적)
-	float RealTimeSeconds = 0.0f;		// 실제 시간 누적
+	double TimeSeconds = 0.0;			// 게임 시간 (dilated 누적). float으로 누적하면 커질수록 어긋나므로 double
+	double RealTimeSeconds = 0.0;		// 실제 시간 누적
 
 	static constexpr float MinTimeDilation = 0.0001f;
 	static constexpr float MaxTimeDilation = 20.0f;

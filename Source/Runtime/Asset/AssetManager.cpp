@@ -707,6 +707,7 @@ bool UAssetManager::SaveAnimSequence(const UAnimSequence& Sequence)
 	Data.Animation.bUseNormalizedRootMotionScale = Sequence.bUseNormalizedRootMotionScale;
 	Data.Animation.RootMotionRootLock = static_cast<uint8>(Sequence.RootMotionRootLock);
 	Data.Animation.RateScale = Sequence.RateScale;
+	Sequence.ExportNotifies(Data.Animation.Notifies);
 	// 쓰는 도중 실패해도 원본이 남도록 임시 파일에 쓰고 바꾼다.
 	const fs::path Target = FbxPath::FromString(Path);
 	fs::path Staged = Target; Staged += L".saving";

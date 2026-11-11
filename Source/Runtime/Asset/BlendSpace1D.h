@@ -24,6 +24,8 @@ public:
 		TArray<FAnimBoneTransform>& OutPose) const override;
 	bool ExtractRootMotion(float X, float Y, float PreviousTime, float CurrentTime,
 		int32 LoopCount, FMatrix& OutDelta) const override;
+	void GetNotifies(float X, float Y, float PreviousTime, float CurrentTime, int32 LoopCount,
+		bool bIncludeStart, TArray<FAnimNotifyQueueItem>& OutQueue) const override;
 
 private:
 	bool GetBlendSamples(float X, const FSample*& OutA, const FSample*& OutB, float& OutAlpha) const;

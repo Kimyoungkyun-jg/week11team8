@@ -14,51 +14,77 @@
 
 namespace
 {
-	bool BlendRootMotion(FAnimNode_Base* A, FAnimNode_Base* B, float Alpha, FMatrix& OutDelta)
+bool BlendRootMotion(FAnimNode_Base* A, FAnimNode_Base* B, float Alpha, FMatrix& OutDelta)
+{
+	FMatrix DeltaA, DeltaB;
+	const bool HasA = A && A->ConsumeRootMotion(DeltaA);
+	const bool HasB = B && B->ConsumeRootMotion(DeltaB);
+	if (!HasA && !HasB)
 	{
-		FMatrix DeltaA, DeltaB;
-		const bool HasA = A && A->ConsumeRootMotion(DeltaA);
-		const bool HasB = B && B->ConsumeRootMotion(DeltaB);
-		if (!HasA && !HasB) return false;
-		const FBoneTransform TransformA = HasA ? FBoneTransform::FromMatrix(DeltaA) : FBoneTransform::Identity;
-		const FBoneTransform TransformB = HasB ? FBoneTransform::FromMatrix(DeltaB) : FBoneTransform::Identity;
-		OutDelta = FBoneTransform::Blend(TransformA, TransformB, std::clamp(Alpha, 0.0f, 1.0f)).ToMatrix();
-		return true;
+		return false;
 	}
+	const FBoneTransform TransformA = HasA ? FBoneTransform::FromMatrix(DeltaA) : FBoneTransform::Identity;
+	const FBoneTransform TransformB = HasB ? FBoneTransform::FromMatrix(DeltaB) : FBoneTransform::Identity;
+	OutDelta = FBoneTransform::Blend(TransformA, TransformB, std::clamp(Alpha, 0.0f, 1.0f)).ToMatrix();
+	return true;
+}
 
-	bool EvaluateSequenceFrame(UAnimSequence* Sequence, const USkeleton* Skeleton, int32 FrameIndex, TArray<FAnimBoneTransform>& OutPose)
+// 이미 이 노드가 올린 Notify가 큐에 있는가. 같은 노드가 여러 경로로 연결되어도 Notify가 두 번 호출되지 않도록,
+// 처음 도달한 경로의 가중치로 한 번만 올린다. 합성 노드는 기본 포즈(가중치가 큰 쪽)를 먼저 올린다.
+bool HasGatheredFrom(const TArray<FAnimNotifyQueueItem>& Queue, const void* Node)
+{
+	for (const FAnimNotifyQueueItem& Item : Queue)
 	{
-		if (!Sequence || !Skeleton || Sequence->Skeleton != Skeleton) return false;
-		const UAnimDataModel* Model = Sequence->GetDataModel();
-		if (!Model) return false;
-		float EvalTime = 0.0f;
-		const float Fps = Model->FrameRate.AsDecimal();
-		if (FrameIndex > 0 && Fps > 0.0f)
+		if (Item.SourceNode == Node)
 		{
-			EvalTime = std::clamp(static_cast<float>(FrameIndex) / Fps, 0.0f, Model->PlayLength);
-		}
-		return Sequence->EvaluateLocalPoseTransforms(EvalTime, OutPose);
-	}
-
-	void BuildBranchMask(const FReferenceSkeleton& RefSkeleton, int32 StartBoneIndex, TArray<uint8>& OutMask)
-	{
-		const int32 NumBones = RefSkeleton.GetNum();
-		OutMask.Init(0, NumBones);
-		if (StartBoneIndex < 0 || StartBoneIndex >= NumBones) return;
-		for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
-		{
-			if (BoneIdx == StartBoneIndex)
-			{
-				OutMask[BoneIdx] = 1;
-				continue;
-			}
-			const int32 ParentIdx = RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
-			if (ParentIdx >= 0 && ParentIdx < BoneIdx && OutMask[ParentIdx] != 0)
-			{
-				OutMask[BoneIdx] = 1;
-			}
+			return true;
 		}
 	}
+	return false;
+}
+
+bool EvaluateSequenceFrame(UAnimSequence* Sequence, const USkeleton* Skeleton, int32 FrameIndex, TArray<FAnimBoneTransform>& OutPose)
+{
+	if (!Sequence || !Skeleton || Sequence->Skeleton != Skeleton)
+	{
+		return false;
+	}
+	const UAnimDataModel* Model = Sequence->GetDataModel();
+	if (!Model)
+	{
+		return false;
+	}
+	float EvalTime = 0.0f;
+	const float Fps = Model->FrameRate.AsDecimal();
+	if (FrameIndex > 0 && Fps > 0.0f)
+	{
+		EvalTime = std::clamp(static_cast<float>(FrameIndex) / Fps, 0.0f, Model->PlayLength);
+	}
+	return Sequence->EvaluateLocalPoseTransforms(EvalTime, OutPose);
+}
+
+void BuildBranchMask(const FReferenceSkeleton& RefSkeleton, int32 StartBoneIndex, TArray<uint8>& OutMask)
+{
+	const int32 NumBones = RefSkeleton.GetNum();
+	OutMask.Init(0, NumBones);
+	if (StartBoneIndex < 0 || StartBoneIndex >= NumBones)
+	{
+		return;
+	}
+	for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
+	{
+		if (BoneIdx == StartBoneIndex)
+		{
+			OutMask[BoneIdx] = 1;
+			continue;
+		}
+		const int32 ParentIdx = RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
+		if (ParentIdx >= 0 && ParentIdx < BoneIdx && OutMask[ParentIdx] != 0)
+		{
+			OutMask[BoneIdx] = 1;
+		}
+	}
+}
 }
 
 void FAnimNode_SequencePlayer::Reset()
@@ -66,6 +92,8 @@ void FAnimNode_SequencePlayer::Reset()
 	CurrentTime = 0.0f;
 	bPlaying = Sequence != nullptr;
 	bHasPendingRootMotion = false;
+	PendingNotifies.Reset();
+	bNotifyIncludeStart = true;
 }
 
 bool FAnimNode_SequencePlayer::IsFinished() const
@@ -78,26 +106,50 @@ float FAnimNode_SequencePlayer::GetRemainingTime() const
 {
 	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(PlayRate) || PlayRate <= 0.0f ||
 		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f)
+	{
 		return std::numeric_limits<float>::infinity();
+	}
 	return std::max(0.0f, Sequence->GetDataModel()->PlayLength - CurrentTime) / (PlayRate * Sequence->RateScale);
 }
 
 void FAnimNode_SequencePlayer::Update(float DeltaSeconds)
 {
+	// 이전 프레임에 모은 Notify는 소비되었다고 보고 매 Update 시작에 비운다.
+	PendingNotifies.Reset();
+
 	if (!bPlaying || !Sequence || !Sequence->GetDataModel() ||
 		!std::isfinite(PlayRate) || PlayRate < 0.0f ||
 		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f ||
-		!std::isfinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
+		!std::isfinite(DeltaSeconds) || DeltaSeconds <= 0.0f)
+	{
+		return;
+	}
+
 	const float Length = Sequence->GetDataModel()->PlayLength;
-	if (Length <= 0.0f || !std::isfinite(Length)) return;
+	if (Length <= 0.0f || !std::isfinite(Length))
+	{
+		return;
+	}
+
 	const float NextTime = CurrentTime + DeltaSeconds * PlayRate * Sequence->RateScale;
-	if (!std::isfinite(NextTime)) return;
+	if (!std::isfinite(NextTime))
+	{
+		return;
+	}
+
 	const float PreviousTime = CurrentTime;
 	int32 LoopCount = 0;
-	if (NextTime < Length) CurrentTime = NextTime;
+	if (NextTime < Length)
+	{
+		CurrentTime = NextTime;
+	}
 	else if (bLoop)
 	{
-		if (NextTime / Length > 256.0f) return;
+		//delta time이 더해진 NextTime이 총 길이보다 256배 클 때 종료(오랜 기간 멈춰있어서 deltatime이 클 때..?)
+		if (NextTime / Length > 256.0f)
+		{
+			return;
+		}
 		LoopCount = static_cast<int32>(NextTime / Length);
 		CurrentTime = std::fmod(NextTime, Length);
 	}
@@ -107,17 +159,37 @@ void FAnimNode_SequencePlayer::Update(float DeltaSeconds)
 		bPlaying = false;
 	}
 	bHasPendingRootMotion = Sequence->ExtractRootMotion(PreviousTime, CurrentTime, LoopCount, PendingRootMotion);
+	Sequence->GetNotifies(PreviousTime, CurrentTime, LoopCount, bNotifyIncludeStart, PendingNotifies);
+	bNotifyIncludeStart = false;
+}
+
+void FAnimNode_SequencePlayer::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	if (PendingNotifies.IsEmpty() || HasGatheredFrom(OutQueue, this))
+	{
+		return;
+	}
+	for (const FAnimNotifyEvent& Event : PendingNotifies)
+	{
+		OutQueue.Add({ Event, ParentWeight, Sequence, this });
+	}
 }
 
 bool FAnimNode_SequencePlayer::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
 {
-	if (!Sequence || !Skeleton || Sequence->Skeleton != Skeleton) return false;
+	if (!Sequence || !Skeleton || Sequence->Skeleton != Skeleton)
+	{
+		return false;
+	}
 	return Sequence->EvaluateLocalPoseTransforms(CurrentTime, OutPose);
 }
 
 bool FAnimNode_SequencePlayer::ConsumeRootMotion(FMatrix& OutDelta)
 {
-	if (!bHasPendingRootMotion) return false;
+	if (!bHasPendingRootMotion)
+	{
+		return false;
+	}
 	OutDelta = PendingRootMotion;
 	bHasPendingRootMotion = false;
 	return true;
@@ -126,28 +198,43 @@ bool FAnimNode_SequencePlayer::ConsumeRootMotion(FMatrix& OutDelta)
 float FAnimNode_SequencePlayer::GetCycleSeconds() const
 {
 	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(PlayRate) || PlayRate <= 0.0f ||
-		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f) return 0.0f;
+		!std::isfinite(Sequence->RateScale) || Sequence->RateScale <= 0.0f)
+	{
+		return 0.0f;
+	}
 	const float Length = Sequence->GetDataModel()->PlayLength;
 	return Length > 0.0f && std::isfinite(Length) ? Length / (PlayRate * Sequence->RateScale) : 0.0f;
 }
 
 bool FAnimNode_SequencePlayer::GetNormalizedTime(float& OutTime) const
 {
-	if (!Sequence || !Sequence->GetDataModel() || Sequence->GetDataModel()->PlayLength <= 0.0f) return false;
+	if (!Sequence || !Sequence->GetDataModel() || Sequence->GetDataModel()->PlayLength <= 0.0f)
+	{
+		return false;
+	}
 	OutTime = std::clamp(CurrentTime / Sequence->GetDataModel()->PlayLength, 0.0f, 1.0f);
 	return true;
 }
 
 void FAnimNode_SequencePlayer::SetNormalizedTime(float Time)
 {
-	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(Time)) return;
+	if (!Sequence || !Sequence->GetDataModel() || !std::isfinite(Time))
+	{
+		return;
+	}
 	CurrentTime = std::clamp(Time, 0.0f, 1.0f) * Sequence->GetDataModel()->PlayLength;
 }
 
 void FAnimNode_TwoWayBlend::Reset()
 {
-	if (A) A->Reset();
-	if (B) B->Reset();
+	if (A)
+	{
+		A->Reset();
+	}
+	if (B)
+	{
+		B->Reset();
+	}
 }
 
 void FAnimNode_TwoWayBlend::Update(float DeltaSeconds)
@@ -156,10 +243,19 @@ void FAnimNode_TwoWayBlend::Update(float DeltaSeconds)
 	const float WeightB = std::clamp(Alpha, 0.0f, 1.0f);
 	FAnimNode_Base* Leader = WeightB >= 0.5f ? B : A;
 	FAnimNode_Base* Follower = Leader == A ? B : A;
-	if (!Leader) std::swap(Leader, Follower);
-	if (!Leader) return;
+	if (!Leader)
+	{
+		std::swap(Leader, Follower);
+	}
+	if (!Leader)
+	{
+		return;
+	}
 	Leader->Update(DeltaSeconds);
-	if (!Follower) return;
+	if (!Follower)
+	{
+		return;
+	}
 	const float LeaderCycle = Leader->GetCycleSeconds();
 	const float FollowerCycle = Follower->GetCycleSeconds();
 	float LeaderTime = 0.0f;
@@ -172,13 +268,21 @@ void FAnimNode_TwoWayBlend::Update(float DeltaSeconds)
 		Follower->SetNormalizedTime(LeaderTime);
 	}
 	else
+	{
 		Follower->Update(DeltaSeconds);
+	}
 }
 
 bool FAnimNode_TwoWayBlend::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
 {
-	if (Alpha <= 0.0f) return A && A->Evaluate(Skeleton, OutPose);
-	if (Alpha >= 1.0f) return B && B->Evaluate(Skeleton, OutPose);
+	if (Alpha <= 0.0f)
+	{
+		return A && A->Evaluate(Skeleton, OutPose);
+	}
+	if (Alpha >= 1.0f)
+	{
+		return B && B->Evaluate(Skeleton, OutPose);
+	}
 	TArray<FAnimBoneTransform> PoseA, PoseB;
 	return A && B && A->Evaluate(Skeleton, PoseA) && B->Evaluate(Skeleton, PoseB) &&
 		BlendAnimPoses(PoseA, PoseB, Alpha, OutPose);
@@ -189,27 +293,61 @@ bool FAnimNode_TwoWayBlend::ConsumeRootMotion(FMatrix& OutDelta)
 	return BlendRootMotion(A, B, Alpha, OutDelta);
 }
 
+void FAnimNode_TwoWayBlend::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	// Evaluate와 같이 한쪽 가중치가 0이면 그쪽은 올리지 않는다. 가중치 0인 자식도 Update는 되므로 Notify는 모여 있다.
+	const float WeightB = std::clamp(Alpha, 0.0f, 1.0f);
+	if (A && WeightB < 1.0f)
+	{
+		A->GatherNotifies(ParentWeight * (1.0f - WeightB), OutQueue);
+	}
+	if (B && WeightB > 0.0f)
+	{
+		B->GatherNotifies(ParentWeight * WeightB, OutQueue);
+	}
+}
+
 void FAnimNode_BlendSpacePlayer::Reset()
 {
 	NormalizedTime = 0.0f;
 	bPlaying = BlendSpace != nullptr;
 	bHasPendingRootMotion = false;
+	PendingNotifies.Reset();
+	bNotifyIncludeStart = true;
 }
 
 void FAnimNode_BlendSpacePlayer::Update(float DeltaSeconds)
 {
+	// 이전 프레임에 모은 Notify는 소비되었다고 보고 매 Update 시작에 비운다.
+	PendingNotifies.Reset();
+
 	if (!bPlaying || !BlendSpace || !std::isfinite(DeltaSeconds) || DeltaSeconds <= 0.0f ||
-		!std::isfinite(PlayRate) || PlayRate < 0.0f) return;
+		!std::isfinite(PlayRate) || PlayRate < 0.0f)
+	{
+		return;
+	}
 	const float Length = BlendSpace->GetEffectiveLength(InputX, InputY);
-	if (Length <= 0.0f || !std::isfinite(Length)) return;
+	if (Length <= 0.0f || !std::isfinite(Length))
+	{
+		return;
+	}
 	const float NextTime = NormalizedTime + DeltaSeconds * PlayRate / Length;
-	if (!std::isfinite(NextTime)) return;
+	if (!std::isfinite(NextTime))
+	{
+		return;
+	}
 	const float PreviousTime = NormalizedTime;
 	int32 LoopCount = 0;
-	if (NextTime < 1.0f) NormalizedTime = NextTime;
+	if (NextTime < 1.0f)
+	{
+		NormalizedTime = NextTime;
+	}
 	else if (bLoop)
 	{
-		if (NextTime > 256.0f) return;
+		if (NextTime > 256.0f)
+		{
+			return;
+		}
 		LoopCount = static_cast<int32>(NextTime);
 		NormalizedTime = std::fmod(NextTime, 1.0f);
 	}
@@ -220,6 +358,23 @@ void FAnimNode_BlendSpacePlayer::Update(float DeltaSeconds)
 	}
 	bHasPendingRootMotion = BlendSpace->ExtractRootMotion(InputX, InputY, PreviousTime,
 		NormalizedTime, LoopCount, PendingRootMotion);
+	BlendSpace->GetNotifies(InputX, InputY, PreviousTime, NormalizedTime, LoopCount, bNotifyIncludeStart, PendingNotifies);
+	bNotifyIncludeStart = false;
+}
+
+void FAnimNode_BlendSpacePlayer::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	if (PendingNotifies.IsEmpty() || HasGatheredFrom(OutQueue, this))
+	{
+		return;
+	}
+	for (const FAnimNotifyQueueItem& Item : PendingNotifies)
+	{
+		FAnimNotifyQueueItem Gathered = Item;
+		Gathered.Weight *= ParentWeight;
+		Gathered.SourceNode = this;
+		OutQueue.Add(std::move(Gathered));
+	}
 }
 
 bool FAnimNode_BlendSpacePlayer::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
@@ -230,14 +385,20 @@ bool FAnimNode_BlendSpacePlayer::Evaluate(const USkeleton* Skeleton, TArray<FAni
 
 float FAnimNode_BlendSpacePlayer::GetCycleSeconds() const
 {
-	if (!BlendSpace || !std::isfinite(PlayRate) || PlayRate <= 0.0f) return 0.0f;
+	if (!BlendSpace || !std::isfinite(PlayRate) || PlayRate <= 0.0f)
+	{
+		return 0.0f;
+	}
 	const float Length = BlendSpace->GetEffectiveLength(InputX, InputY);
 	return Length > 0.0f && std::isfinite(Length) ? Length / PlayRate : 0.0f;
 }
 
 bool FAnimNode_BlendSpacePlayer::ConsumeRootMotion(FMatrix& OutDelta)
 {
-	if (!bHasPendingRootMotion) return false;
+	if (!bHasPendingRootMotion)
+	{
+		return false;
+	}
 	OutDelta = PendingRootMotion;
 	bHasPendingRootMotion = false;
 	return true;
@@ -245,10 +406,16 @@ bool FAnimNode_BlendSpacePlayer::ConsumeRootMotion(FMatrix& OutDelta)
 
 int32 FAnimNode_StateMachine::AddState(const FString& Name, FAnimNode_Base* PoseNode)
 {
-	if (!PoseNode) return -1;
+	if (!PoseNode)
+	{
+		return -1;
+	}
 	const int32 Index = States.Num();
 	States.Add({ Name, PoseNode });
-	if (CurrentState < 0) CurrentState = Index;
+	if (CurrentState < 0)
+	{
+		CurrentState = Index;
+	}
 	return Index;
 }
 
@@ -281,8 +448,12 @@ bool FAnimNode_StateMachine::AddTransition(int32 FromState, int32 ToState,
 	std::function<bool()> Condition, float BlendTime, std::function<void()> OnCompleted,
 	std::function<void()> OnStarted)
 {
+	// FromState가 -1이면 어느 상태에서든 거는 전환(AnyState)이다.
 	if ((FromState != -1 && !States.IsValidIndex(FromState)) || !States.IsValidIndex(ToState) ||
-		FromState == ToState || !Condition || !std::isfinite(BlendTime) || BlendTime < 0.0f) return false;
+		FromState == ToState || !Condition || !std::isfinite(BlendTime) || BlendTime < 0.0f)
+	{
+		return false;
+	}
 	Transitions.Add({ FromState, ToState, std::move(Condition), BlendTime,
 		std::move(OnCompleted), std::move(OnStarted) });
 	return true;
@@ -296,7 +467,10 @@ void FAnimNode_StateMachine::FinishTransition()
 	SnapshotPose.Reset();
 	std::function<void()> Completed = std::move(TransitionOnCompleted);
 	TransitionOnCompleted = {};
-	if (Completed) Completed();
+	if (Completed)
+	{
+		Completed();
+	}
 }
 
 void FAnimNode_StateMachine::Reset()
@@ -309,94 +483,151 @@ void FAnimNode_StateMachine::Reset()
 	LastPose.Reset();
 	SnapshotPose.Reset();
 	bBlendFromSnapshot = false;
-	for (const FState& State : States) if (State.Pose) State.Pose->Reset();
+	for (const FState& State : States)
+	{
+		if (State.Pose)
+		{
+			State.Pose->Reset();
+		}
+	}
 }
 
 void FAnimNode_StateMachine::Update(float DeltaSeconds)
 {
-	if (!States.IsValidIndex(CurrentState) || !std::isfinite(DeltaSeconds)) return;
+	if (!States.IsValidIndex(CurrentState) || !std::isfinite(DeltaSeconds))
+	{
+		return;
+	}
 	DeltaSeconds = std::max(0.0f, DeltaSeconds);
 	// 스냅샷에서 섞는 중이면 현재 상태 포즈는 쓰이지 않는다. 같은 노드를 다시 트는 경우 두 번 진행하지 않도록 건너뛴다.
 	const bool bCurrentUnused = NextState >= 0 && (bBlendFromSnapshot || NextState == CurrentState);
-	if (!bCurrentUnused && States[CurrentState].Pose) States[CurrentState].Pose->Update(DeltaSeconds);
+	if (!bCurrentUnused && States[CurrentState].Pose)
+	{
+		States[CurrentState].Pose->Update(DeltaSeconds);
+	}
 	const bool bWasTransitioning = NextState >= 0;
 	if (bWasTransitioning)
 	{
-		if (States[NextState].Pose) States[NextState].Pose->Update(DeltaSeconds);
+		if (States[NextState].Pose)
+		{
+			States[NextState].Pose->Update(DeltaSeconds);
+		}
 		TransitionElapsed += DeltaSeconds;
 		if (TransitionElapsed >= TransitionDuration)
+		{
 			FinishTransition();
+		}
 	}
 	for (const FTransition& Transition : Transitions) // anystate 검사
 	{
 		if (Transition.FromState != -1 || Transition.ToState == CurrentState ||
-			Transition.ToState == NextState || !Transition.Condition()) continue;
+			Transition.ToState == NextState || !Transition.Condition())
+		{
+			continue;
+		}
 		bBlendFromSnapshot = NextState >= 0 && Transition.BlendTime > 0.0f && !LastPose.IsEmpty();
 		SnapshotPose = bBlendFromSnapshot ? LastPose : TArray<FAnimBoneTransform>{};
 		NextState = Transition.ToState;
 		TransitionDuration = Transition.BlendTime;
 		TransitionElapsed = DeltaSeconds;
 		TransitionOnCompleted = Transition.OnCompleted;
-		if (Transition.OnStarted) Transition.OnStarted();
+		if (Transition.OnStarted)
+		{
+			Transition.OnStarted();
+		}
 		if (States[NextState].Pose)
 		{
 			States[NextState].Pose->Reset();
 			States[NextState].Pose->Update(DeltaSeconds);
 		}
 		if (TransitionElapsed >= TransitionDuration)
+		{
 			FinishTransition();
+		}
 		return;
 	}
-	if (bWasTransitioning) return;
+	if (bWasTransitioning)
+	{
+		return;
+	}
 	for (const FTransition& Transition : Transitions)
 	{
-		if (Transition.FromState != CurrentState || !Transition.Condition()) continue;
+		if (Transition.FromState != CurrentState || !Transition.Condition())
+		{
+			continue;
+		}
 		NextState = Transition.ToState;
 		TransitionDuration = Transition.BlendTime;
 		TransitionElapsed = DeltaSeconds;
 		TransitionOnCompleted = Transition.OnCompleted;
-		if (Transition.OnStarted) Transition.OnStarted();
+		if (Transition.OnStarted)
+		{
+			Transition.OnStarted();
+		}
 		if (States[NextState].Pose)
 		{
 			States[NextState].Pose->Reset();
 			States[NextState].Pose->Update(DeltaSeconds);
 		}
 		if (TransitionElapsed >= TransitionDuration)
+		{
 			FinishTransition();
+		}
 		break;
 	}
 }
 
 bool FAnimNode_StateMachine::Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose)
 {
-	if (!States.IsValidIndex(CurrentState)) return false;
+	if (!States.IsValidIndex(CurrentState))
+	{
+		return false;
+	}
 	FAnimNode_Base* Current = States[CurrentState].Pose;
 	bool bEvaluated = false;
-	if (NextState < 0) bEvaluated = Current && Current->Evaluate(Skeleton, OutPose);
+	if (NextState < 0)
+	{
+		bEvaluated = Current && Current->Evaluate(Skeleton, OutPose);
+	}
 	else
 	{
 		FAnimNode_Base* Next = States[NextState].Pose;
 		const float Alpha = TransitionElapsed / TransitionDuration;
 		TArray<FAnimBoneTransform> From, To;
 		if (bBlendFromSnapshot)
+		{
 			bEvaluated = Next && Next->Evaluate(Skeleton, To) && BlendAnimPoses(SnapshotPose, To, Alpha, OutPose);
+		}
 		else
+		{
 			bEvaluated = Current && Next && Current->Evaluate(Skeleton, From) && Next->Evaluate(Skeleton, To) &&
 				BlendAnimPoses(From, To, Alpha, OutPose);
+		}
 	}
-	if (bEvaluated) LastPose = OutPose;
+	if (bEvaluated)
+	{
+		LastPose = OutPose;
+	}
 	return bEvaluated;
 }
 
 bool FAnimNode_StateMachine::ConsumeRootMotion(FMatrix& OutDelta)
 {
-	if (!States.IsValidIndex(CurrentState)) return false;
+	if (!States.IsValidIndex(CurrentState))
+	{
+		return false;
+	}
 	FAnimNode_Base* Current = States[CurrentState].Pose;
-	if (NextState < 0) return Current && Current->ConsumeRootMotion(OutDelta);
+	if (NextState < 0)
+	{
+		return Current && Current->ConsumeRootMotion(OutDelta);
+	}
 	const float Alpha = TransitionDuration > 0.0f ? TransitionElapsed / TransitionDuration : 1.0f;
 	// 스냅샷에는 이동량이 없으므로 제자리(Identity)와 섞는다.
 	if (bBlendFromSnapshot || NextState == CurrentState)
+	{
 		return BlendRootMotion(nullptr, States[NextState].Pose, Alpha, OutDelta);
+	}
 	return BlendRootMotion(Current, States[NextState].Pose, Alpha, OutDelta);
 }
 
@@ -645,4 +876,77 @@ bool FAnimNode_AimOffset1D::Evaluate(const USkeleton* Skeleton, TArray<FAnimBone
 bool FAnimNode_AimOffset1D::ConsumeRootMotion(FMatrix& OutDelta)
 {
 	return BasePose && BasePose->ConsumeRootMotion(OutDelta);
+}
+
+void FAnimNode_StateMachine::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	if (!States.IsValidIndex(CurrentState))
+	{
+		return;
+	}
+	const FAnimNode_Base* Current = States[CurrentState].Pose;
+	if (NextState < 0)
+	{
+		if (Current)
+		{
+			Current->GatherNotifies(ParentWeight, OutQueue);
+		}
+		return;
+	}
+	const FAnimNode_Base* Next = States[NextState].Pose;
+	// Update에서 현재 상태를 진행하지 않는 경우(스냅샷에서 섞는 중, 같은 상태를 처음부터 다시 트는 중)에는 현재 상태의 Notify가 갱신되지 않아 이전 프레임 것이 남아 있다.
+	// 이때는 현재 상태를 올리지 않는다. 스냅샷에는 Notify가 없다.
+	if (bBlendFromSnapshot || NextState == CurrentState)
+	{
+		if (Next)
+		{
+			// 스냅샷에서 섞을 때는 Evaluate와 같은 비율, 같은 노드를 다시 틀 때는 포즈가 그 노드 하나뿐이라 전체 가중치를 쓴다.
+			const float Alpha = TransitionDuration > 0.0f ? std::clamp(TransitionElapsed / TransitionDuration, 0.0f, 1.0f) : 1.0f;
+			Next->GatherNotifies(bBlendFromSnapshot ? ParentWeight * Alpha : ParentWeight, OutQueue);
+		}
+		return;
+	}
+	// 전이 중에는 Evaluate와 같은 비율로 양쪽 상태의 Notify를 올린다.
+	// 전이가 이번 Update에서 끝났다면 CurrentState가 이미 새 상태이므로 이전 상태의 마지막 구간 Notify는 올라오지 않는다.
+	const float Alpha = TransitionDuration > 0.0f ? std::clamp(TransitionElapsed / TransitionDuration, 0.0f, 1.0f) : 1.0f;
+	if (Current)
+	{
+		Current->GatherNotifies(ParentWeight * (1.0f - Alpha), OutQueue);
+	}
+	if (Next)
+	{
+		Next->GatherNotifies(ParentWeight * Alpha, OutQueue);
+	}
+}
+
+void FAnimNode_LayeredBoneBlend::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	// 기본 포즈는 전신, 블렌드 포즈는 StartBone 아래 가지에만 Alpha만큼 섞인다. 같은 노드를 두 번 올리지 않는다.
+	if (BasePose)
+	{
+		BasePose->GatherNotifies(ParentWeight, OutQueue);
+	}
+	const float Weight = std::clamp(Alpha, 0.0f, 1.0f);
+	if (BlendPose && BlendPose != BasePose && Weight > 0.0f)
+	{
+		BlendPose->GatherNotifies(ParentWeight * Weight, OutQueue);
+	}
+}
+
+void FAnimNode_Slot::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	// 슬롯에 재생 중인 몽타주의 Notify는 아직 지원하지 않는다. 슬롯에 들어오는 입력 포즈의 Notify만 올린다.
+	if (Source)
+	{
+		Source->GatherNotifies(ParentWeight, OutQueue);
+	}
+}
+
+void FAnimNode_AimOffset1D::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	// 에임 샘플은 프레임 하나를 고정으로 읽는 포즈라 재생 시간이 없다. 입력 포즈의 Notify만 올린다.
+	if (BasePose)
+	{
+		BasePose->GatherNotifies(ParentWeight, OutQueue);
+	}
 }

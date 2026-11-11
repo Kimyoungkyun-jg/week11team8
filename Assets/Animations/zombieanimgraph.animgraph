@@ -25,8 +25,8 @@
       "SlotName": "UpperBody",
       "SourceNodeId": 0,
       "Type": 0,
-      "X": 60.0,
-      "Y": 120.0
+      "X": 126.66665649414063,
+      "Y": 116.00000762939453
     },
     {
       "AimOffsetPath": "",
@@ -75,7 +75,7 @@
       "Y": 220.0
     },
     {
-      "Asset": "Models/Zombie/AS_Zombie Attack_IdleSkeleton.fbxbin",
+      "Asset": "Models/Zombie/AS_Zombie Attack.fbxbin",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
       "DirectionOffsetX": 0.0,
@@ -100,7 +100,7 @@
       "Y": 120.0
     },
     {
-      "Asset": "Models/Zombie/AS_Zombie Reaction Hit_IdleSkeleton.fbxbin",
+      "Asset": "Models/Zombie/AS_Zombie Reaction Hit.fbxbin",
       "ConstantX": 0.0,
       "ConstantY": 0.0,
       "DirectionOffsetX": 0.0,
@@ -152,7 +152,7 @@
   ],
   "Transitions": [
     {
-      "BlendTime": 0.08,
+      "BlendTime": 0.07999999821186066,
       "Compare": 1,
       "From": -1,
       "Id": 5,

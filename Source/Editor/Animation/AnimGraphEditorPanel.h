@@ -29,6 +29,12 @@ public:
 	void NewAsset(const FString& InPath, const FString& InSkeletonKey);
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();
+	// 현재 문서를 저장한다. Ctrl+S와 전체 저장(Ctrl+Shift+S)이 쓴다.
+	void Save();
+	void SaveIfDirty() { if (IsOpen() && bDirty) Save(); }
+	bool IsDirty() const { return bDirty; }
+	// 이 창(또는 안의 자식 창)에 키보드 포커스가 있다. 이때는 레벨 에디터의 Ctrl+S 등이 동작하지 않는다.
+	bool HasFocusedWindow() const { return IsOpen() && bFocused; }
 	~FAnimGraphEditorPanel() override { Release(); }
 
 private:
@@ -52,7 +58,6 @@ private:
 	FString StateName(int32 Id) const;
 	int32 NextStateId() const;
 	int32 NextTransitionId() const;
-	void Save();
 	void StartPreview();
 	void RefreshPreviewGraph();
 	void DrawPreview();
@@ -83,6 +88,7 @@ private:
 	int32 DraggingPoseNode = 0;
 	int32 SelectedPoseNode = 0;
 	bool bDirty = false;
+	bool bFocused = false;
 	bool bPreviewRefreshRequested = false;
 	ImVec2 Pan{ 0.0f, 0.0f };
 	float Zoom = 1.0f;
@@ -97,6 +103,8 @@ private:
 	bool bPreviewFalling = false;
 	bool bPreviewPlaying = true;
 	bool bVisible = false;
+	// 창을 완전히 닫아 프리뷰를 해제했으면 true. 다시 열릴 때 프리뷰를 복원한다.
+	bool bRestorePreviewOnOpen = false;
 	int32 PreviewFireCount = 0;
 	FString LastPreviewNotify;
 

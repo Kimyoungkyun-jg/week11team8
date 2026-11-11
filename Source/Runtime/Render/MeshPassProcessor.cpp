@@ -37,7 +37,11 @@ namespace
 		UTexture2D* Normal = Material.Textures.Num() > 1 ? Material.Textures[1] : nullptr;
 		Params.SurfaceParams = FVector4(Material.bFlipNormalY ? 1.0f : 0.0f, 0.0f,
 			Color && Color->GetResource() && Color->GetResource()->GetSRV() ? 1.0f : 0.0f, GetNormalEncoding(Normal));
-		const FVector2 UV = Material.UVScrollSpeed * EngineTimer::GetTotalTime();
+		// 누적 시간은 double로 곱한 뒤 UV 한 주기로 줄여서 float로 넘긴다. 큰 float 값은 정밀도가 떨어진다.
+		// 이동량은 타일링 뒤에 더해지므로(ResolveMaterialUV), 샘플러가 Wrap이면 한 주기를 뺀 값도 결과가 같다.
+		const double TotalTime = EngineTimer::GetTotalTime();
+		const FVector2 UV(static_cast<float>(std::fmod(Material.UVScrollSpeed.X * TotalTime, 1.0)),
+			static_cast<float>(std::fmod(Material.UVScrollSpeed.Y * TotalTime, 1.0)));
 		Params.UVTransform = FVector4(UV.X, UV.Y, Material.UVTiling.X, Material.UVTiling.Y);
 		Params.WorldUVParams = FVector4(Material.WorldUVTileSize.X, Material.WorldUVTileSize.Y,
 			Material.bWorldUVLocalSpace ? 1.0f : 0.0f, Material.BlendState == EBlendState::Opaque ? 1.0f : 0.0f);

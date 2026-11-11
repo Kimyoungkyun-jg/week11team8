@@ -429,6 +429,10 @@ bool UEditorEngine::Init()
 	Save.CanExecute = [this]()->bool { return !PlayWorld; };
 	Save.Execute = [this]() { SaveCurrentScene(); };
 
+	// 씬은 PIE 중이 아닐 때만 저장하고, 애셋 에디터의 변경은 PIE 중에도 저장한다.
+	SaveAll = { "Save All", "Save the scene and all open animation assets", nullptr, White, { EKeyCode::S, true, false, true } };
+	SaveAll.Execute = [this]() { SaveAllAssets(); };
+
 	// 액터 복사·붙여넣기·복제 (TEAM1). PIE 중에는 복제 월드를 건드리지 않도록 막는다.
 	Copy = { "Copy", "Copy Selected Actors", nullptr, White, { EKeyCode::C, true } };
 	Copy.CanExecute = [this]() { return !PlayWorld && !Selection.IsEmpty(); };
@@ -592,7 +596,18 @@ void UEditorEngine::BeginFrame(const float DeltaTime)
 	{
 		// 우클릭 비행 중의 Ctrl+D 등은 카메라 이동 키와 겹치므로 받지 않는다.
 		if (!FInputSystem::IsMouseDown(EMouseButton::Right))
-			EditorCommandUI::ProcessShortcuts({ &Save, &Play, &Pause, &Resume, &Copy, &Paste, &Duplicate });
+		{
+			// 애니메이션 에디터 창에 포커스가 있으면 Ctrl+S는 그 창이 처리하므로 씬 저장과 복사·붙여넣기 등은 받지 않는다.
+			// 전체 저장(Ctrl+Shift+S)은 어디에 포커스가 있어도 동작한다.
+			const bool bAnimEditorFocused =
+				(AnimSequenceViewerPanel && AnimSequenceViewerPanel->HasFocusedWindow()) ||
+				(AnimGraphEditorPanel && AnimGraphEditorPanel->HasFocusedWindow()) ||
+				(BlendSpaceEditorPanel && BlendSpaceEditorPanel->HasFocusedWindow());
+			if (bAnimEditorFocused)
+				EditorCommandUI::ProcessShortcuts({ &SaveAll });
+			else
+				EditorCommandUI::ProcessShortcuts({ &Save, &SaveAll, &Play, &Pause, &Resume, &Copy, &Paste, &Duplicate });
+		}
 
 		// F: 선택한 액터로 포커스 (UE). 우클릭 비행 중이거나 글자 입력 중이면 받지 않는다.
 		if ((!IsPlaying() || IsSimulatingInEditor()) && !ImGui::GetIO().WantTextInput && !FInputSystem::IsMouseDown(EMouseButton::Right) &&
@@ -2099,6 +2114,27 @@ void UEditorEngine::SaveCurrentScene()
 		return;
 	}
 	FEditorFileUtils::SaveScene(EditorWorld);
+}
+
+// 씬과 열려 있는 애니메이션 에디터의 저장하지 않은 변경을 모두 저장한다.
+void UEditorEngine::SaveAllAssets()
+{
+	if (!IsPlaying())
+	{
+		SaveCurrentScene();
+	}
+	if (AnimSequenceViewerPanel)
+	{
+		AnimSequenceViewerPanel->SaveIfDirty();
+	}
+	if (AnimGraphEditorPanel)
+	{
+		AnimGraphEditorPanel->SaveIfDirty();
+	}
+	if (BlendSpaceEditorPanel)
+	{
+		BlendSpaceEditorPanel->SaveIfDirty();
+	}
 }
 
 // 공통 파일 유틸리티로 새 경로에 씬을 저장한다.

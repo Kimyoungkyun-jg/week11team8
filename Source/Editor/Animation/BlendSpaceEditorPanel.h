@@ -25,6 +25,12 @@ public:
 	void OnRender() override;
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();
+	// 현재 문서를 저장한다. Ctrl+S와 전체 저장(Ctrl+Shift+S)이 쓴다.
+	void Save();
+	void SaveIfDirty() { if (IsOpen() && bDirty) Save(); }
+	bool IsDirty() const { return bDirty; }
+	// 이 창(또는 안의 자식 창)에 키보드 포커스가 있다. 이때는 레벨 에디터의 Ctrl+S 등이 동작하지 않는다.
+	bool HasFocusedWindow() const { return IsOpen() && bFocused; }
 
 private:
 	struct FAxis
@@ -44,7 +50,6 @@ private:
 	void StartPreview();
 	bool RebuildBlendSpace();
 	void EvaluatePreview();
-	void Save();
 	void DrawAssetDetails();
 	void DrawGraph();
 	void DrawSampleDetails();
@@ -69,8 +74,11 @@ private:
 	int SelectedSample = -1;
 	bool b2D = true;
 	bool bDirty = false;
+	bool bFocused = false;
 	bool bPlaying = true;
 	bool bVisible = false;
+	// 창을 완전히 닫아 프리뷰를 해제했으면 true. 다시 열릴 때 프리뷰를 복원한다.
+	bool bRestorePreviewOnOpen = false;
 	bool bFocusRequested = false;
 	float PreviewX = 0.0f;
 	float PreviewY = 0.0f;

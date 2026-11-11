@@ -6,6 +6,7 @@
 #include "Asset/AssetManager.h"
 #include "Animation/Skeleton.h"
 #include "Asset/AnimSequence.h"
+#include "Animation/AnimNotify.h"
 #include "UObject/UObjectIterator.h"
 #include "Render/Material.h"
 #include "Render/Mesh.h"
@@ -132,6 +133,10 @@ bool BuildSequence(const FFbxAssetData& Asset, USkeleton& Skeleton, UAnimSequenc
 	Model->PlayLength = static_cast<float>(std::max(1, Model->NumberOfFrames)) / Source.FrameRate.AsDecimal();
 	Sequence.DataModel = Model;
 	Sequence.Skeleton = &Skeleton;
+
+	// 파일에 저장된 Notify로 객체를 만든다. DataModel을 설정한 뒤여야 시간이 시퀀스 길이로 맞춰진다.
+	Sequence.ImportNotifies(Source.Notifies);
+
 	Sequence.Name = Source.Name;
 	Sequence.SourceFilePath = Asset.SourcePath;
 	Sequence.SourceTakeIndex = Source.SourceTakeIndex;
@@ -155,6 +160,8 @@ void KeepAnimationSettings(const fs::path& Target, FFbxAssetData& Data)
 		A.bEnableRootMotion = E.bEnableRootMotion; A.bForceRootLock = E.bForceRootLock;
 		A.bUseNormalizedRootMotionScale = E.bUseNormalizedRootMotionScale;
 		A.RootMotionRootLock = E.RootMotionRootLock; A.RateScale = E.RateScale;
+		// Notify는 옵션이 켜져 있을 때만 유지한다 (기본값은 유지). 끄면 새 파일에는 Notify가 없다.
+		if (Data.Options.bKeepNotifies) A.Notifies = E.Notifies;
 		return;
 	}
 	// 예전 형식은 FBX 옆의 <이름>.animseq.bin(스택 하나) 또는 <이름>_<번호>.animseq.bin이었다.

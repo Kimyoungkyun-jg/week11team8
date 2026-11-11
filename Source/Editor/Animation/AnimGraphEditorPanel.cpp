@@ -353,6 +353,22 @@ void FAnimGraphEditorPanel::RefreshPreviewGraph()
 
 void FAnimGraphEditorPanel::Tick(float DeltaTime)
 {
+	if (!IsOpen())
+	{
+		bFocused = false;
+		// 창을 완전히 닫으면 프리뷰 월드를 해제한다. 그래프 데이터는 유지하고, 다시 열면 OnRender에서 프리뷰를 복원한다.
+		if (PreviewWorld)
+		{
+			Release();
+			bRestorePreviewOnOpen = true;
+		}
+		return;
+	}
+	// 도킹된 탭이 가려져 있으면 재생하지 않는다. 월드는 그대로 둔다.
+	if (!bVisible)
+	{
+		return;
+	}
 	if (!PreviewWorld || !PreviewCharacter || !bPreviewPlaying) return;
 	if (auto* Movement = PreviewCharacter->GetCharacterMovement())
 	{
@@ -2027,8 +2043,19 @@ void FAnimGraphEditorPanel::DrawAimOffsetEditorWindow()
 
 void FAnimGraphEditorPanel::OnRender()
 {
+	if (bRestorePreviewOnOpen)
+	{
+		bRestorePreviewOnOpen = false;
+		StartPreview();
+	}
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1250), EditorUIScale::Px(750)), ImGuiCond_FirstUseEver);
 	bVisible = BeginPanel();
+	bFocused = bVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+	// Ctrl+S: 이 창에 포커스가 있을 때만 저장한다. Ctrl+Shift+S는 전체 저장이라 여기서 받지 않는다.
+	if (bFocused && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt && ImGui::IsKeyPressed(ImGuiKey_S, false))
+	{
+		Save();
+	}
 	if (!bVisible) { ImGui::End(); return; }
 	ImGui::SetNextItemWidth(EditorUIScale::Px(180));
 	if (ImGui::InputText("AnimGraph Name", AssetName, sizeof(AssetName))) bDirty = true;
