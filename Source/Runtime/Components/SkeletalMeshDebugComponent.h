@@ -19,7 +19,7 @@ public:
 	USkeletalMeshDebugComponent();
 	~USkeletalMeshDebugComponent() override;
 	void SetSkeletalMesh(USkeletalMesh* Mesh) override;
-	bool ShouldDrawDebug() const { return bDrawBones || bDrawBoneAxes; }
+	bool ShouldDrawDebug() const { return bDrawBones || bDrawBoneAxes || bDrawBoneBounds; }
 	void DrawDebug(FLineBatcher* Lines) const;
 	void SetSelectedBone(int32 Bone);
 	int32 GetSelectedBone() const { return SelectedBoneIndex; }
@@ -27,6 +27,7 @@ public:
 	bool ShouldDrawBone(int32 Bone) const;
 	void GetBoneSpheres(TArray<FVector>& Joints, TArray<float>& Radii) const;
 	EBoneDrawMode BoneDrawMode = EBoneDrawMode::AllHierarchy;
+	bool bDrawBoneBounds = false;
 	UPROPERTY(EditAnywhere)
 	bool bDrawBones = false;
 	UPROPERTY(EditAnywhere)

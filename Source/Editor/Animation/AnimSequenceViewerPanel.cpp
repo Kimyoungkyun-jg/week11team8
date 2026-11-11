@@ -390,7 +390,12 @@ void FAnimSequenceViewerPanel::OnRender()
 						if (ImGui::Selectable(Mesh->GetPath().c_str(), Mesh == Current)) SetPreviewMesh(Mesh);
 					ImGui::EndCombo();
 				}
-				if (MeshComponent) ImGui::Checkbox("Show Bones", &MeshComponent->bDrawBones);
+				if (MeshComponent)
+				{
+					ImGui::Checkbox("Show Bones", &MeshComponent->bDrawBones);
+					ImGui::Checkbox("Show Bone AABBs", &MeshComponent->bDrawBoneBounds);
+				}
+				ImGui::Checkbox("Show AABB", &bShowBounds);
 				ImGui::Checkbox("Show Grid", &bShowGrid);
 				ImGui::Checkbox("Show Skybox", &bShowSkybox);
 				if (ImGui::DragFloat("Sky Light", &SkyLightIntensity, 0.01f, 0.0f, 5.0f) && SkyLight)
@@ -414,5 +419,6 @@ void FAnimSequenceViewerPanel::OnRender()
 void FAnimSequenceViewerPanel::RenderPreview(UEditorEngine* Engine)
 {
 	if (Engine && IsOpen() && bVisible && PreviewWorld)
-		Engine->RenderPreviewViewport(&Client, PreviewWorld, nullptr, bShowSkybox ? Skybox.get() : nullptr, bShowGrid);
+		Engine->RenderPreviewViewport(&Client, PreviewWorld, nullptr, bShowSkybox ? Skybox.get() : nullptr,
+			bShowGrid, bShowBounds && MeshComponent && MeshComponent->GetSkeletalMesh() ? MeshComponent : nullptr);
 }

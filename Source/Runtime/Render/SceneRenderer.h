@@ -144,8 +144,7 @@ private:
 	// DBufferLit/DBufferUnlit 두 패스를 등록한다. 장면 깊이가 이미 채워져 있어야 한다.
 	bool AddDBufferPasses(FRenderGraphBuilder& Graph, FRenderer* Renderer, FRenderGraphTextureRef Depth,
 		const FSceneRenderOptions& Options, const FDecalPassSetup& Setup, uint32 Width, uint32 Height);
-	// stat skinning이 켜져 있으면 Base Pass에 GPU 타임스탬프를 단다.
-	void AttachBasePassGpuTiming(FRenderGraphRasterPassDesc& Pass);
+	void DrawBasePassMeshes(FRenderer* Renderer, const TArray<FMeshDrawBatch>& Batches);
 	// 각 배치의 원래 VS로 깊이만 그린다. bWriteReceiverStencil이면 데칼 수신 비트도 기록한다.
 	bool AddDepthPrepass(FRenderGraphBuilder& Graph, FRenderer* Renderer, FRenderGraphTextureRef Depth,
 		const TArray<FMeshDrawBatch>* Batches, bool bWriteReceiverStencil);

@@ -8,6 +8,7 @@
 #include "Math/QuadTree.h"
 #include "Render/RenderResourceManager.h"
 #include "Render/RenderCommand.h"
+#include "Render/SkinningStats.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -364,7 +365,16 @@ void FSceneRenderer::RenderShadowDepthMaps(FRenderer* Renderer, FTexture2DArray*
 		FMatrix ShadowRotation = Shadow.ShadowView;
 		ShadowRotation.M[3][0] = ShadowRotation.M[3][1] = ShadowRotation.M[3][2] = 0.0f;
 		Renderer->UploadViewMatrix(ShadowRotation * Shadow.ShadowProjection);
-		Renderer->DrawMeshes(Batches);
+		if (FSkinningStats::IsCollecting())
+		{
+			auto& Timing = RenderData.ShadowSkeletalDrawGpu;
+			if (!Timing) Timing = std::make_shared<FGpuTimingHistory>();
+			Renderer->DrawMeshes(Batches, Timing, RenderData.SkeletalDrawGpuMode);
+		}
+		else
+		{
+			Renderer->DrawMeshes(Batches);
+		}
 		++RenderData.RenderStats.ShadowDepthDraws;   // 단계 9 stat에 추가할 필드
 	}
 	RenderCommand::BindConstantBuffer(3, nullptr, EShaderBindFlagBits::Vertex);

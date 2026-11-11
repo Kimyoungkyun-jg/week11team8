@@ -276,30 +276,17 @@ void FSceneRenderer::UnbindForwardDecal(FRenderer* Renderer)
 	RenderCommand::UnbindShaderResources(14, 3, EShaderBindFlagBits::Vertex | EShaderBindFlagBits::Pixel);
 }
 
-void FSceneRenderer::AttachBasePassGpuTiming(FRenderGraphRasterPassDesc& Pass)
+void FSceneRenderer::DrawBasePassMeshes(FRenderer* Renderer, const TArray<FMeshDrawBatch>& Batches)
 {
 	if (!FSkinningStats::IsCollecting())
-		return;
-
-	// CPU/GPU 표본이 한 평균에 섞이지 않게 모드가 바뀌면 이력을 새로 만든다.
-	const ESkinningMode Mode = USkeletalMeshComponent::GetSkinningMode();
-	if (!RenderData.BasePassGpu || RenderData.BasePassGpuMode != Mode)
 	{
-		RenderData.BasePassGpu = std::make_shared<FGpuTimingHistory>();
-		RenderData.BasePassGpuMode = Mode;
+		Renderer->DrawMeshes(Batches);
+		return;
 	}
 
-	const std::shared_ptr<FGpuTimingHistory> Destination = RenderData.BasePassGpu;
-	const auto Handle = std::make_shared<int32>(-1);
-	Pass.OnBeforeExecute = [this, Destination, Handle]
-		{
-			if (bCorePassSucceeded)
-				*Handle = FGpuProfiler::Get().BeginScope(Destination);
-		};
-	Pass.OnAfterExecute = [Handle]
-		{
-			FGpuProfiler::Get().EndScope(*Handle);
-		};
+	auto& Timing = RenderData.BaseSkeletalDrawGpu;
+	if (!Timing) Timing = std::make_shared<FGpuTimingHistory>();
+	Renderer->DrawMeshes(Batches, Timing, RenderData.SkeletalDrawGpuMode);
 }
 
 bool FSceneRenderer::PrepareDecalPasses(FRenderGraphBuilder& Graph, FRenderer* Renderer, FSceneViewTargets& Targets,
@@ -654,6 +641,15 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 
 	bCorePassSucceeded = true;
 	bTilesBuilt = false;
+	const ESkinningMode SkinningMode = USkeletalMeshComponent::GetSkinningMode();
+	if (RenderData.SkeletalDrawGpuPath != Options.RenderingPath || RenderData.SkeletalDrawGpuMode != SkinningMode)
+	{
+		// Pending GPU queries still target the old history.
+		RenderData.BaseSkeletalDrawGpu.reset();
+		RenderData.ShadowSkeletalDrawGpu.reset();
+		RenderData.SkeletalDrawGpuPath = Options.RenderingPath;
+		RenderData.SkeletalDrawGpuMode = SkinningMode;
+	}
 	if (Options.bShowWorldNormal)
 		return AddWorldNormalPass(Graph, Renderer, Targets, Options);
 
@@ -745,7 +741,6 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 
 			GBuffer.DepthAttachment = { Depth,
 				bUseDepthPrepass ? ERenderGraphLoadAction::Load : ERenderGraphLoadAction::Clear, 1.0f, 0 };
-			AttachBasePassGpuTiming(GBuffer);
 
 			if (!Graph.AddRasterPass(std::move(GBuffer), [this, Renderer, bUseDepthPrepass]
 				{
@@ -756,7 +751,7 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 							Batch.Pipeline.DepthStencilState = EDepthStencilState::PrepassReadOnly;
 					}
 					Renderer->UploadViewMatrix(View.ViewProjectionMatrix);
-					Renderer->DrawMeshes(GBufferBatches);
+					DrawBasePassMeshes(Renderer, GBufferBatches);
 					if (bUseDepthPrepass)
 						UnbindForwardDecal(Renderer);
 				})) return false;
@@ -950,7 +945,6 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 			{ LightingHDR, ERenderGraphLoadAction::Load }
 		};
 		Forward.DepthAttachment = { Depth, bUseDepthPrepass ? ERenderGraphLoadAction::Load : ERenderGraphLoadAction::Clear, 1.0f, 0 };
-		AttachBasePassGpuTiming(Forward);
 		if (!Graph.AddRasterPass(std::move(Forward), [this, Renderer, &Graph, LightingOptions = Options, bUseDepthPrepass, ForwardShadowMask]
 			{
 				if (!LightingOptions.bDrawPrimitives) return;
@@ -963,7 +957,7 @@ bool FSceneRenderer::AddCorePasses(FRenderGraphBuilder& Graph, FRenderer* Render
 						Batch.Pipeline.DepthStencilState = EDepthStencilState::PrepassReadOnly;
 					}
 				}
-				Renderer->DrawMeshes(ForwardBatches);
+				DrawBasePassMeshes(Renderer, ForwardBatches);
 
 				UnbindForwardDecal(Renderer);
 				UnbindForwardLighting(Renderer);
@@ -1246,6 +1240,12 @@ void FSceneRenderer::GatherRenderPackets(FScene& Scene, FSceneRenderData& Data,
 		{
 			Scene.BVH.QueryCull(0, [](const FBox&, uint32&) { return EBVHCullResult::Inside; }, Visit);
 		}
+	}
+
+	for (FPrimitiveSceneProxy* Proxy : VisibleProxies)
+	{
+		if (USkeletalMeshComponent* Component = Cast<USkeletalMeshComponent>(Proxy->GetComponent()))
+			Component->MarkVisibleForAnimationTick();
 	}
 
 	RenderStats.TotalPrimitives = Scene.PrimitiveSceneProxies.Num();

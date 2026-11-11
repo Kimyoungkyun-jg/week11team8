@@ -76,7 +76,8 @@ private:
 
 	// 통계 정보 출력
 	// 그린 배경 사각형을 OutMin/OutMax로 돌려준다. 보여 줄 통계가 없으면 false다.
-	bool DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, FEditorViewportClient* Client, ImVec2& OutMin, ImVec2& OutMax) const;
+	bool DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, int32 ViewIndex,
+		const FSceneRenderData& RenderData, ImVec2& OutMin, ImVec2& OutMax) const;
 	void DrawCameraSpeedNotice(ImDrawList* DrawList) const;
 	void DrawCameraSettings(FEditorViewportClient& Client);
 	int32 CameraSpeedViewIndex = -1;

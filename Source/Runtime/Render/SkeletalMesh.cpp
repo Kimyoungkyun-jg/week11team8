@@ -7,6 +7,15 @@
 #include <cmath>
 #include <limits>
 
+namespace
+{
+    FBox MakeEmptyBounds()
+    {
+        const float Limit = std::numeric_limits<float>::max();
+        return { FVector(Limit, Limit, Limit), FVector(-Limit, -Limit, -Limit) };
+    }
+}
+
 USkeletalMesh::~USkeletalMesh()
 {
     for (FPrimitiveSceneProxy* Proxy : RenderProxies)
@@ -28,6 +37,8 @@ UMaterial* USkeletalMesh::GetMaterial(uint32 SlotIndex) const
 
 void USkeletalMesh::RebuildRenderData()
 {
+    ComputeSkinningSources.Reset();
+    ++RenderDataRevision;
     RefSkeleton.BuildFromBones(MeshData.Bones);
 	RefBasesInvMatrix.Reset();
 	for (const auto& Bone : MeshData.Bones) RefBasesInvMatrix.Add(Bone.InverseBindPose);
@@ -53,6 +64,7 @@ void USkeletalMesh::RebuildRenderData()
     }
 
     RenderBounds = MeshData.AABB;
+    RebuildSkinningBounds();
     LocalLODSphere.Center = (RenderBounds.Min + RenderBounds.Max) * 0.5f;
 
     double RadiusSquared = 0.0;
@@ -71,6 +83,100 @@ void USkeletalMesh::RebuildRenderData()
     {
         Proxy->OnMeshRenderDataChanged();
     }
+}
+
+FStructuredBuffer* USkeletalMesh::GetOrCreateComputeSkinningSource(uint32 LOD, ID3D11Device* Device)
+{
+    if (LOD >= GetLODCount()) return nullptr;
+    ComputeSkinningSources.SetNum(GetLODCount());
+    auto& Source = ComputeSkinningSources[LOD];
+    if (Source) return Source.get();
+
+    const auto& Vertices = GetMeshData(LOD).SkinnedVertices;
+    if (Vertices.IsEmpty()) return nullptr;
+    static_assert(sizeof(FSkeletalVertex) == 96 && offsetof(FSkeletalVertex, BoneIndices) == 64
+        && offsetof(FSkeletalVertex, BoneWeights) == 80);
+
+    const uint32 Count = static_cast<uint32>(Vertices.Num());
+    D3D11_BUFFER_DESC Desc{};
+    Desc.ByteWidth = Count * sizeof(FSkeletalVertex);
+    Desc.Usage = D3D11_USAGE_IMMUTABLE;
+    Desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    Desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    Desc.StructureByteStride = sizeof(FSkeletalVertex);
+    auto Buffer = std::make_unique<FStructuredBuffer>(Device, Desc, Count, Vertices.GetData());
+    if (!Buffer->GetSRV()) return nullptr;
+    Source = std::move(Buffer);
+    return Source.get();
+}
+
+void USkeletalMesh::RebuildSkinningBounds()
+{
+    const FBox EmptyBounds = MakeEmptyBounds();
+    BoneInfluenceBounds.SetNum(MeshData.Bones.Num());
+    for (FBox& Bounds : BoneInfluenceBounds)
+        Bounds = EmptyBounds;
+    UnweightedVertexBounds = EmptyBounds;
+    MinSkinWeightSum = MaxSkinWeightSum = 1.0f;
+
+    for (uint32 LOD = 0; LOD < GetLODCount(); ++LOD)
+    {
+        for (const FSkeletalVertex& Vertex : GetMeshData(LOD).SkinnedVertices)
+        {
+            const FBox Point{ Vertex.Position, Vertex.Position };
+            float WeightSum = 0.0f;
+            for (int32 Influence = 0; Influence < 4; ++Influence)
+            {
+                const int32 BoneIndex = Vertex.BoneIndices[Influence];
+                const float Weight = Vertex.BoneWeights[Influence];
+                if (BoneIndex < 0 || BoneIndex >= BoneInfluenceBounds.Num() || Weight <= 0.0f)
+                    continue;
+                BoneInfluenceBounds[BoneIndex].Expand(Point);
+                WeightSum += Weight;
+            }
+            if (WeightSum > 0.0f)
+            {
+                MinSkinWeightSum = std::min(MinSkinWeightSum, WeightSum);
+                MaxSkinWeightSum = std::max(MaxSkinWeightSum, WeightSum);
+            }
+            else
+            {
+                UnweightedVertexBounds.Expand(Point);
+            }
+        }
+    }
+}
+
+const FBox* USkeletalMesh::GetBoneInfluenceBounds(int32 BoneIndex) const
+{
+    if (BoneIndex < 0 || BoneIndex >= BoneInfluenceBounds.Num())
+        return nullptr;
+    const FBox& Bounds = BoneInfluenceBounds[BoneIndex];
+    return Bounds.Min.X <= Bounds.Max.X ? &Bounds : nullptr;
+}
+
+FBox USkeletalMesh::CalcSkinnedBounds(const TArray<FMatrix>& SkinningMatrices) const
+{
+    if (BoneInfluenceBounds.Num() != SkinningMatrices.Num())
+        return MeshData.AABB;
+
+    FBox Bounds = MakeEmptyBounds();
+    for (int32 BoneIndex = 0; BoneIndex < BoneInfluenceBounds.Num(); ++BoneIndex)
+    {
+        if (const FBox* BoneBounds = GetBoneInfluenceBounds(BoneIndex))
+            Bounds.Expand(BoneBounds->GetWorldAABB(SkinningMatrices[BoneIndex]));
+    }
+
+    if (Bounds.Min.X <= Bounds.Max.X)
+    {
+        // SkinVertex uses the original weights. Cover sums that differ from one.
+        const FBox NormalizedBounds = Bounds;
+        Bounds.Expand({ NormalizedBounds.Min * MinSkinWeightSum, NormalizedBounds.Max * MinSkinWeightSum });
+        Bounds.Expand({ NormalizedBounds.Min * MaxSkinWeightSum, NormalizedBounds.Max * MaxSkinWeightSum });
+    }
+    if (UnweightedVertexBounds.Min.X <= UnweightedVertexBounds.Max.X)
+        Bounds.Expand(UnweightedVertexBounds);
+    return Bounds.Min.X <= Bounds.Max.X ? Bounds : MeshData.AABB;
 }
 
 void USkeletalMesh::RegisterProxy(FPrimitiveSceneProxy* Proxy)

@@ -18,6 +18,7 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime) override;
+	void MarkVisibleForAnimationTick() { bVisibleSinceLastTick = true; }
 	virtual void Serialize(FStructuredArchive::FRecord Record) override;
 
 	virtual void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh) override;
@@ -70,6 +71,15 @@ private:
 		uint64 Revision = 0;
 	};
 	TArray<FSkinnedLOD> SkinnedLODs;
+	struct FComputeSkinnedLOD
+	{
+		TUniquePtr<FVertexBuffer> Output;
+		ComPtr<ID3D11UnorderedAccessView> OutputUAV;
+		uint64 Revision = 0;
+	};
+	TArray<FComputeSkinnedLOD> ComputeSkinnedLODs;
+	uint64 ComputeMeshRevision = 0;
+	FVertexBuffer* DispatchComputeSkinning(uint32 LOD);
 	uint64 PoseRevision = 1;
 	void UpdateBoneMatrices();
 	// 이 컴포넌트가 실제로 써야 하는 모드. 히트맵은 CPU 경로에만 있으므로 CPU로 고정한다.
@@ -90,6 +100,9 @@ private:
 	TArray<FVector> PickPositions;
 	FBox PickBounds;
 	uint64 PickRevision = 0;
+	UPROPERTY(EditAnywhere)
+	bool bOnlyTickPoseWhenRendered = false;
+	bool bVisibleSinceLastTick = true;
 	UPROPERTY(EditAnywhere, Transient)
 	UClass* AnimClass = nullptr;
 	UPROPERTY(EditAnywhere, Transient)
