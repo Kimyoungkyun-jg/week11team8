@@ -14,6 +14,8 @@ class ADecalActor : public AActor
 public:
 	ADecalActor();
 	~ADecalActor() override = default;
+	void Tick(float DeltaTime) override;
+	void SetTemporaryLifetime(float Seconds);
 
 	UDecalComponent* GetDecalComponent() const
 	{
@@ -26,6 +28,7 @@ public:
 	}
 
 private:
+	float RemainingLifetime = 0.0f;
 	UDecalComponent* DecalComponent = nullptr;
 	UBillboardComponent* BillboardComponent = nullptr;
 };

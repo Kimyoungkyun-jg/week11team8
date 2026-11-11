@@ -12,6 +12,8 @@
 #include "Components/ParticleSubUVComponent.h"
 #include "Core/EngineTimer.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/TestCharacter.h"
+#include "GameFramework/Actor/ZombieActor.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Input/InputSystem.h"
 #include "Scripting/LuaActorRef.h"
@@ -42,6 +44,7 @@
 namespace
 {
 	struct FLuaClickBinding { AActor* Owner; FLuaWidgetRef Button; };
+	struct FLuaZombieRef { FLuaActorRef Actor; };
 	TArray<FLuaClickBinding> ClickBindings;
 
 	TArray<FLuaActorRef> PendingDestroies;
@@ -282,6 +285,22 @@ namespace
 			"UUID", sol::property([](const FLuaActorRef& Ref) { return Ref.UUID; }),
 			"IsValid", [](const FLuaActorRef& Ref) { return Ref.Get() != nullptr; },
 			"Name", sol::property([](const FLuaActorRef& Ref) { return Deref(Ref).GetName(); }),
+			"SetCameraTuning", [](const FLuaActorRef& Ref, float NormalArmLength,
+				float NormalFOV, float AimArmLength, float AimFOV)
+			{
+				ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get());
+				return Character && Character->SetCameraTuning(NormalArmLength, NormalFOV, AimArmLength, AimFOV);
+			},
+			"SetAimBlendAlphaOverride", [](const FLuaActorRef& Ref, float Alpha)
+			{
+				ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get());
+				return Character && Character->SetAimBlendAlphaOverride(Alpha);
+			},
+			"ClearAimBlendAlphaOverride", [](const FLuaActorRef& Ref)
+			{
+				if (ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get()))
+					Character->ClearAimBlendAlphaOverride();
+			},
 			"HasComponent", [](const FLuaActorRef& Ref, const FString& ClassName)
 			{
 				for (UActorComponent* Component : Deref(Ref).GetComponents())
@@ -683,6 +702,22 @@ namespace
 		ActorType.set_function("GetAnimStateMachine", &GetAnimStateMachine);
 	}
 
+	void RegisterZombie(sol::state& Lua)
+	{
+		Lua.new_usertype<FLuaZombieRef>("Zombie", sol::no_constructor,
+			"SetCombatTuning", [](const FLuaZombieRef& Ref, float DetectionRadius,
+				float AttackRadius, float AttackCooldown, float WalkSpeed)
+			{
+				AZombieActor* Zombie = Cast<AZombieActor>(Ref.Actor.Get());
+				return Zombie && Zombie->SetCombatTuning(DetectionRadius, AttackRadius, AttackCooldown, WalkSpeed);
+			},
+			"SetHealth", [](const FLuaZombieRef& Ref, int32 Health)
+			{
+				AZombieActor* Zombie = Cast<AZombieActor>(Ref.Actor.Get());
+				return Zombie && Zombie->SetHealth(Health);
+			});
+	}
+
 	void RegisterComponent(sol::state& Lua)
 	{
 		Lua.new_usertype<FLuaComponentRef>("Component",
@@ -1065,6 +1100,7 @@ namespace FLuaBindings
 		// TODO(B): wait, wait_until, wait_until_move_done, StartCoroutine
 		RegisterMath(Lua);
 		RegisterActor(Lua);
+		RegisterZombie(Lua);
 		RegisterComponent(Lua);
 		RegisterAnimation(Lua);
 		RegisterInput(Lua);
@@ -1073,6 +1109,12 @@ namespace FLuaBindings
 		RegisterGameplay(Lua);
 		RegisterAudio(Lua);
 		RegisterCameraAction(Lua);
+	}
+
+	void BindActorEnvironment(sol::environment& Env, AActor* Owner)
+	{
+		if (Cast<AZombieActor>(Owner))
+			Env["zombie"] = FLuaZombieRef{ FLuaActorRef::Make(Owner) };
 	}
 
 	void FlushPendingDestroy(UWorld* World)

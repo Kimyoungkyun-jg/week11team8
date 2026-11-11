@@ -45,6 +45,7 @@
 #include "Scripting/LuaBindings.h"
 #include "Physics/Collision.h"
 #include "Components/ShapeComponent.h"
+#include "Components/CapsuleComponent.h"
 
 namespace
 {
@@ -200,12 +201,6 @@ void UWorld::Tick(float RealDeltaTime)
 				continue;
 			}
 			Comp->UpdateInEditor();
-		}
-		for (TObjectIterator<USkeletalMeshComponent> Comp; Comp; ++Comp)
-		{
-			if (!Comp || !Comp->IsRegistered() || Comp->GetWorld() != this ||
-				Comp->GetAnimGraphPath().empty()) continue;
-			Comp->TickComponent(DeltaTime);
 		}
 	}
 	bIsTicking = false;
@@ -671,6 +666,11 @@ bool UWorld::SweepSingle(const FRay& WorldRay, float MaxDistance, float Radius, 
 				if (Enter > Exit) { bIntersects = false; break; }
 			}
 			if (!bIntersects) continue;
+			if (auto* Capsule = Cast<UCapsuleComponent>(Component))
+			{
+				if (!FCollision::SweepSphereCapsule(WorldRay, NearestT, Radius,
+					FCollision::ToWorld(Capsule), Enter, Normal)) continue;
+			}
 			NearestT = Enter;
 			OutHit.bBlockingHit = true;
 			OutHit.bStartPentrating = Enter == 0.0f;

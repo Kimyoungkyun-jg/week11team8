@@ -15,13 +15,18 @@ namespace
 		return Path.ends_with(".blendspace");
 	}
 
-	fs::path ResolvePath(const FString& Path)
+	fs::path ResolveAssetPathWithExt(const FString& Path, const char* Ext)
 	{
 		fs::path Relative(Path);
-		if (Relative.extension() != ".animgraph" || Relative.is_absolute()) return {};
+		if (Relative.extension() != Ext || Relative.is_absolute()) return {};
 		if (Relative.begin() != Relative.end() && *Relative.begin() == "Assets") Relative = Relative.lexically_relative("Assets");
 		for (const auto& Part : Relative) if (Part == ".." || Part == ".") return {};
 		return Relative.empty() ? fs::path{} : fs::path(ContentPaths::AssetRoot) / Relative;
+	}
+
+	fs::path ResolvePath(const FString& Path)
+	{
+		return ResolveAssetPathWithExt(Path, ".animgraph");
 	}
 
 	bool ReadInt(const json& Object, const char* Key, int32& Out)
@@ -38,9 +43,87 @@ namespace
 	}
 }
 
+void FAnimGraphAsset::EnsureDefaultRootGraph()
+{
+	if (!RootNodes.empty())
+	{
+		SyncRootLinksFromNodes();
+		return;
+	}
+	FRootAnimGraphNode SmNode;
+	SmNode.Id = 1;
+	SmNode.Type = ERootAnimNodeType::StateMachine;
+	SmNode.Name = "Locomotion";
+	SmNode.X = 60.0f;
+	SmNode.Y = 120.0f;
+
+	FRootAnimGraphNode OutNode;
+	OutNode.Id = 2;
+	OutNode.Type = ERootAnimNodeType::OutputPose;
+	OutNode.Name = "Output Pose";
+	OutNode.X = 440.0f;
+	OutNode.Y = 120.0f;
+	OutNode.SourceNodeId = bRootPoseConnected ? SmNode.Id : 0;
+
+	RootNodes.push_back(std::move(SmNode));
+	RootNodes.push_back(std::move(OutNode));
+	SyncRootLinksFromNodes();
+}
+
+void FAnimGraphAsset::SyncRootLinksFromNodes()
+{
+	RootLinks.clear();
+	for (const auto& Node : RootNodes)
+	{
+		if (Node.SourceNodeId > 0)
+		{
+			FRootAnimGraphLink Link;
+			Link.FromNodeId = Node.SourceNodeId;
+			Link.ToNodeId = Node.Id;
+			Link.ToPinIndex = 0;
+			RootLinks.push_back(Link);
+		}
+		if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone && Node.SecondarySourceNodeId > 0)
+		{
+			FRootAnimGraphLink Link;
+			Link.FromNodeId = Node.SecondarySourceNodeId;
+			Link.ToNodeId = Node.Id;
+			Link.ToPinIndex = 1;
+			RootLinks.push_back(Link);
+		}
+	}
+	for (const auto& Node : RootNodes)
+	{
+		if (Node.Type == ERootAnimNodeType::OutputPose)
+		{
+			bRootPoseConnected = (Node.SourceNodeId > 0);
+			break;
+		}
+	}
+}
+
+void FAnimGraphAsset::ApplyRootLinksToNodes()
+{
+	for (auto& Node : RootNodes)
+	{
+		Node.SourceNodeId = 0;
+		Node.SecondarySourceNodeId = 0;
+	}
+	for (const auto& Link : RootLinks)
+	{
+		auto It = std::find_if(RootNodes.begin(), RootNodes.end(),
+			[&](const FRootAnimGraphNode& Item) { return Item.Id == Link.ToNodeId; });
+		if (It == RootNodes.end()) continue;
+		if (Link.ToPinIndex == 0) It->SourceNodeId = Link.FromNodeId;
+		else if (Link.ToPinIndex == 1) It->SecondarySourceNodeId = Link.FromNodeId;
+	}
+	SyncRootLinksFromNodes();
+}
+
 bool FAnimGraphAsset::Validate(FString& Error) const
 {
 	if (States.empty()) { Error = "Graph needs at least one state."; return false; }
+	if (!std::isfinite(AnyStateX) || !std::isfinite(AnyStateY)) { Error = "Invalid Any State position."; return false; }
 	if (States.size() > 256 || Transitions.size() > 1024) { Error = "Graph is too large."; return false; }
 	std::set<int32> StateIds, TransitionIds;
 	for (const auto& State : States)
@@ -81,16 +164,26 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 		}
 	}
 	if (!StateIds.contains(EntryState)) { Error = "Entry state is missing."; return false; }
+	bool bHasAnyHitTransition = false;
+	bool bHasAnyDeathTransition = false;
 	for (const auto& Transition : Transitions)
 	{
 		if (Transition.Id <= 0 || !TransitionIds.insert(Transition.Id).second ||
-			!StateIds.contains(Transition.From) || !StateIds.contains(Transition.To) || Transition.From == Transition.To ||
-			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > 7 ||
+			(Transition.From != -1 && !StateIds.contains(Transition.From)) || !StateIds.contains(Transition.To) || Transition.From == Transition.To ||
+			static_cast<int>(Transition.Input) < 0 || static_cast<int>(Transition.Input) > static_cast<int>(EAnimGraphInput::DeathRequested) ||
+			(Transition.From == -1 && ((Transition.Input != EAnimGraphInput::HitRequested && Transition.Input != EAnimGraphInput::DeathRequested) ||
+				Transition.Compare != EAnimGraphCompare::Greater || Transition.Threshold != 0.0f ||
+				(Transition.Input == EAnimGraphInput::HitRequested && bHasAnyHitTransition) ||
+				(Transition.Input == EAnimGraphInput::DeathRequested && bHasAnyDeathTransition))) ||
 			(Transition.Compare != EAnimGraphCompare::Always && Transition.Input == EAnimGraphInput::Constant) ||
 			static_cast<int>(Transition.Compare) < 0 || static_cast<int>(Transition.Compare) > 4 ||
 			!std::isfinite(Transition.Threshold) || !std::isfinite(Transition.BlendTime) || Transition.BlendTime < 0)
 		{ Error = "Invalid transition."; return false; }
-		if (Transition.Input == EAnimGraphInput::SequenceEnding)
+		if (Transition.From == -1 && Transition.Input == EAnimGraphInput::HitRequested) bHasAnyHitTransition = true;
+		if (Transition.From == -1 && Transition.Input == EAnimGraphInput::DeathRequested) bHasAnyDeathTransition = true;
+		if (Transition.Input == EAnimGraphInput::SequenceEnding ||
+			Transition.Input == EAnimGraphInput::SequenceEndingGrounded ||
+			Transition.Input == EAnimGraphInput::SequenceEndingAirborne)
 		{
 			const auto From = std::find_if(States.begin(), States.end(),
 				[&](const FAnimGraphState& State) { return State.Id == Transition.From; });
@@ -108,6 +201,28 @@ bool FAnimGraphAsset::Validate(FString& Error) const
 			if (Transition.Threshold < 0.0f || From == States.end() || FromPose != EAnimGraphPose::Sequence)
 			{ Error = "Sequence Ending requires a sequence state."; return false; }
 		}
+	}
+	if (!RootNodes.empty())
+	{
+		std::set<int32> RootIds;
+		int32 SmCount = 0;
+		int32 OutCount = 0;
+		for (const auto& Node : RootNodes)
+		{
+			if (Node.Id <= 0 || !RootIds.insert(Node.Id).second ||
+				static_cast<int>(Node.Type) < 0 || static_cast<int>(Node.Type) > 5 ||
+				!std::isfinite(Node.X) || !std::isfinite(Node.Y) ||
+				!std::isfinite(Node.Alpha) || !std::isfinite(Node.ConstantPitch) ||
+				!std::isfinite(Node.PlayRate) || Node.PlayRate <= 0.0f ||
+				(Node.AlphaInput != EAnimGraphInput::Constant && Node.AlphaInput != EAnimGraphInput::IsAiming) ||
+				(Node.Type == ERootAnimNodeType::SequencePlayer &&
+				(Node.SequencePath.empty() || !HasPoseAssetExtension(EAnimGraphPose::Sequence, Node.SequencePath))))
+			{ Error = "Invalid root graph node."; return false; }
+			if (Node.Type == ERootAnimNodeType::StateMachine) ++SmCount;
+			if (Node.Type == ERootAnimNodeType::OutputPose) ++OutCount;
+		}
+		if (SmCount != 1 || OutCount != 1)
+		{ Error = "Root graph requires State Machine and Output Pose."; return false; }
 	}
 	Error.clear();
 	return true;
@@ -127,6 +242,9 @@ bool FAnimGraphAsset::Load(const FString& Path, FAnimGraphAsset& Out, FString& E
 	{ Error = "Invalid AnimGraph format."; return false; }
 	FAnimGraphAsset Loaded;
 	Loaded.SkeletonPath = Data["Skeleton"].get<FString>();
+	if ((Data.contains("AnyStateX") && !ReadFloat(Data, "AnyStateX", Loaded.AnyStateX)) ||
+		(Data.contains("AnyStateY") && !ReadFloat(Data, "AnyStateY", Loaded.AnyStateY)))
+	{ Error = "Invalid Any State position."; return false; }
 	if (Data.contains("RootPoseConnected"))
 	{
 		if (!Data["RootPoseConnected"].is_boolean()) { Error = "Invalid root pose connection."; return false; }
@@ -206,6 +324,59 @@ bool FAnimGraphAsset::Load(const FString& Path, FAnimGraphAsset& Out, FString& E
 		Transition.Compare = static_cast<EAnimGraphCompare>(Compare);
 		Loaded.Transitions.push_back(Transition);
 	}
+	if (Data.contains("RootNodes") && Data["RootNodes"].is_array())
+	{
+		for (const auto& Item : Data["RootNodes"])
+		{
+			FRootAnimGraphNode Node;
+			int32 TypeInt = 0;
+			if (!Item.is_object() || !ReadInt(Item, "Id", Node.Id) || !ReadInt(Item, "Type", TypeInt) ||
+				!ReadFloat(Item, "X", Node.X) || !ReadFloat(Item, "Y", Node.Y))
+			{ Error = "Invalid root node data."; return false; }
+			Node.Type = static_cast<ERootAnimNodeType>(TypeInt);
+			if (Item.contains("Name") && Item["Name"].is_string()) Node.Name = Item["Name"].get<FString>();
+			if (Item.contains("SourceNodeId")) ReadInt(Item, "SourceNodeId", Node.SourceNodeId);
+			if (Item.contains("SecondarySourceNodeId")) ReadInt(Item, "SecondarySourceNodeId", Node.SecondarySourceNodeId);
+			if (Item.contains("SlotName") && Item["SlotName"].is_string()) Node.SlotName = Item["SlotName"].get<FString>();
+			if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone && Item.contains("StartBoneName") && Item["StartBoneName"].is_string())
+				Node.StartBoneName = Item["StartBoneName"].get<FString>();
+			if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone && Item.contains("MeshSpaceRotationBlend") && Item["MeshSpaceRotationBlend"].is_boolean())
+				Node.bMeshSpaceRotationBlend = Item["MeshSpaceRotationBlend"].get<bool>();
+			if (Item.contains("AimOffsetPath") && Item["AimOffsetPath"].is_string()) Node.AimOffsetPath = Item["AimOffsetPath"].get<FString>();
+			if (Item.contains("SequencePath") && Item["SequencePath"].is_string()) Node.SequencePath = Item["SequencePath"].get<FString>();
+			if (Item.contains("Alpha")) ReadFloat(Item, "Alpha", Node.Alpha);
+			int32 AlphaInputInt = static_cast<int32>(EAnimGraphInput::Constant);
+			if (Item.contains("AlphaInput") && ReadInt(Item, "AlphaInput", AlphaInputInt))
+				Node.AlphaInput = static_cast<EAnimGraphInput>(AlphaInputInt);
+			if (Item.contains("PlayRate")) ReadFloat(Item, "PlayRate", Node.PlayRate);
+			int32 PitchInputInt = static_cast<int32>(EAnimGraphInput::AimPitch);
+			if (Item.contains("PitchInput") && ReadInt(Item, "PitchInput", PitchInputInt))
+				Node.PitchInput = static_cast<EAnimGraphInput>(PitchInputInt);
+			if (Item.contains("ConstantPitch")) ReadFloat(Item, "ConstantPitch", Node.ConstantPitch);
+			Loaded.RootNodes.push_back(std::move(Node));
+		}
+		if (Data.contains("RootLinks") && Data["RootLinks"].is_array())
+		{
+			for (const auto& Item : Data["RootLinks"])
+			{
+				FRootAnimGraphLink Link;
+				if (Item.is_object() && ReadInt(Item, "FromNodeId", Link.FromNodeId) &&
+					ReadInt(Item, "ToNodeId", Link.ToNodeId) && ReadInt(Item, "ToPinIndex", Link.ToPinIndex))
+				{
+					Loaded.RootLinks.push_back(Link);
+				}
+			}
+			Loaded.ApplyRootLinksToNodes();
+		}
+		else
+		{
+			Loaded.SyncRootLinksFromNodes();
+		}
+	}
+	else
+	{
+		Loaded.EnsureDefaultRootGraph();
+	}
 	if (!Loaded.Validate(Error)) return false;
 	Out = std::move(Loaded);
 	return true;
@@ -216,9 +387,35 @@ bool FAnimGraphAsset::Save(const FString& Path, FString& Error) const
 	if (!Validate(Error)) return false;
 	const fs::path File = ResolvePath(Path);
 	if (File.empty()) { Error = "Invalid AnimGraph path."; return false; }
-	json Data = { { "Version", 1 }, { "Skeleton", SkeletonPath }, { "RootPoseConnected", bRootPoseConnected },
+	json Data = { { "Version", 1 }, { "Skeleton", SkeletonPath }, { "AnyStateX", AnyStateX }, { "AnyStateY", AnyStateY }, { "RootPoseConnected", bRootPoseConnected },
 		{ "InvertDirection", bInvertDirection }, { "EntryState", EntryState },
-		{ "States", json::array() }, { "Transitions", json::array() } };
+		{ "States", json::array() }, { "Transitions", json::array() },
+		{ "RootNodes", json::array() }, { "RootLinks", json::array() } };
+	for (const auto& Node : RootNodes)
+	{
+		json NodeData = {
+			{ "Id", Node.Id }, { "Type", static_cast<int>(Node.Type) }, { "Name", Node.Name },
+			{ "X", Node.X }, { "Y", Node.Y },
+			{ "SourceNodeId", Node.SourceNodeId }, { "SecondarySourceNodeId", Node.SecondarySourceNodeId },
+			{ "SlotName", Node.SlotName },
+			{ "AimOffsetPath", Node.AimOffsetPath }, { "SequencePath", Node.SequencePath },
+			{ "Alpha", Node.Alpha }, { "AlphaInput", static_cast<int>(Node.AlphaInput) },
+			{ "PlayRate", Node.PlayRate }, { "PitchInput", static_cast<int>(Node.PitchInput) },
+			{ "ConstantPitch", Node.ConstantPitch }
+		};
+		if (Node.Type == ERootAnimNodeType::LayeredBlendPerBone)
+		{
+			NodeData["StartBoneName"] = Node.StartBoneName;
+			NodeData["MeshSpaceRotationBlend"] = Node.bMeshSpaceRotationBlend;
+		}
+		Data["RootNodes"].push_back(std::move(NodeData));
+	}
+	for (const auto& Link : RootLinks)
+	{
+		Data["RootLinks"].push_back({
+			{ "FromNodeId", Link.FromNodeId }, { "ToNodeId", Link.ToNodeId }, { "ToPinIndex", Link.ToPinIndex }
+		});
+	}
 	for (const auto& State : States)
 	{
 		json Players = json::array();
@@ -254,6 +451,206 @@ bool FAnimGraphAsset::Save(const FString& Path, FString& Error) const
 	if (!Out) { Error = "Cannot finish writing AnimGraph."; fs::remove(Temp, Ec); return false; }
 	if (!MoveFileExW(Temp.c_str(), File.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 	{ Error = "Cannot replace AnimGraph."; fs::remove(Temp, Ec); return false; }
+	Error.clear();
+	return true;
+}
+
+bool FAnimMontageAsset::Validate(FString& Error) const
+{
+	if (SlotName.empty()) { Error = "Montage requires a slot name."; return false; }
+	if (!std::isfinite(PlayRate) || PlayRate <= 0.0f) { Error = "Invalid montage play rate."; return false; }
+	if (!std::isfinite(BlendInTime) || BlendInTime < 0.0f || !std::isfinite(BlendOutTime) || BlendOutTime < 0.0f)
+	{ Error = "Invalid montage blend time."; return false; }
+	for (const auto& Sec : Sections)
+	{
+		if (Sec.Name.empty() || !std::isfinite(Sec.StartTime) || !std::isfinite(Sec.EndTime) ||
+			Sec.StartTime < 0.0f || Sec.EndTime < Sec.StartTime)
+		{ Error = "Invalid montage section."; return false; }
+	}
+	for (const auto& Notify : Notifies)
+	{
+		if (Notify.Name.empty() || !std::isfinite(Notify.Time) || Notify.Time < 0.0f)
+		{ Error = "Invalid montage notify."; return false; }
+	}
+	Error.clear();
+	return true;
+}
+
+bool FAnimMontageAsset::Load(const FString& Path, FAnimMontageAsset& Out, FString& Error)
+{
+	const fs::path File = ResolveAssetPathWithExt(Path, ".animmontage");
+	if (File.empty()) { Error = "Invalid AnimMontage path."; return false; }
+	std::ifstream In(File);
+	if (!In) { Error = "Cannot open AnimMontage."; return false; }
+	json Data = json::parse(In, nullptr, false);
+	if (!Data.is_object() || !Data.contains("Version") || Data["Version"] != 1)
+	{ Error = "Invalid AnimMontage format."; return false; }
+	FAnimMontageAsset Loaded;
+	if (Data.contains("Skeleton") && Data["Skeleton"].is_string()) Loaded.SkeletonPath = Data["Skeleton"].get<FString>();
+	if (Data.contains("Sequence") && Data["Sequence"].is_string()) Loaded.SequencePath = Data["Sequence"].get<FString>();
+	if (Data.contains("Slot") && Data["Slot"].is_string()) Loaded.SlotName = Data["Slot"].get<FString>();
+	if (Data.contains("PlayRate") && !ReadFloat(Data, "PlayRate", Loaded.PlayRate)) { Error = "Invalid PlayRate."; return false; }
+	if (Data.contains("BlendInTime") && !ReadFloat(Data, "BlendInTime", Loaded.BlendInTime)) { Error = "Invalid BlendInTime."; return false; }
+	if (Data.contains("BlendOutTime") && !ReadFloat(Data, "BlendOutTime", Loaded.BlendOutTime)) { Error = "Invalid BlendOutTime."; return false; }
+	if (Data.contains("Loop") && Data["Loop"].is_boolean()) Loaded.bLoop = Data["Loop"].get<bool>();
+	if (Data.contains("Sections") && Data["Sections"].is_array())
+	{
+		for (const auto& Item : Data["Sections"])
+		{
+			FAnimMontageSection Sec;
+			if (!Item.is_object() || !Item.contains("Name") || !Item["Name"].is_string() ||
+				!ReadFloat(Item, "StartTime", Sec.StartTime) || !ReadFloat(Item, "EndTime", Sec.EndTime))
+			{ Error = "Invalid section entry."; return false; }
+			Sec.Name = Item["Name"].get<FString>();
+			if (Item.contains("NextSection") && Item["NextSection"].is_string())
+				Sec.NextSection = Item["NextSection"].get<FString>();
+			Loaded.Sections.push_back(std::move(Sec));
+		}
+	}
+	if (Data.contains("Notifies") && Data["Notifies"].is_array())
+	{
+		for (const auto& Item : Data["Notifies"])
+		{
+			FAnimMontageNotify Notify;
+			if (!Item.is_object() || !Item.contains("Name") || !Item["Name"].is_string() ||
+				!ReadFloat(Item, "Time", Notify.Time))
+			{ Error = "Invalid notify entry."; return false; }
+			Notify.Name = Item["Name"].get<FString>();
+			Loaded.Notifies.push_back(std::move(Notify));
+		}
+	}
+	if (!Loaded.Validate(Error)) return false;
+	Out = std::move(Loaded);
+	return true;
+}
+
+bool FAnimMontageAsset::Save(const FString& Path, FString& Error) const
+{
+	if (!Validate(Error)) return false;
+	const fs::path File = ResolveAssetPathWithExt(Path, ".animmontage");
+	if (File.empty()) { Error = "Invalid AnimMontage path."; return false; }
+	json Data = {
+		{ "Version", 1 },
+		{ "Skeleton", SkeletonPath },
+		{ "Sequence", SequencePath },
+		{ "Slot", SlotName },
+		{ "PlayRate", PlayRate },
+		{ "BlendInTime", BlendInTime },
+		{ "BlendOutTime", BlendOutTime },
+		{ "Loop", bLoop },
+		{ "Sections", json::array() },
+		{ "Notifies", json::array() }
+	};
+	for (const auto& Sec : Sections)
+	{
+		Data["Sections"].push_back({
+			{ "Name", Sec.Name },
+			{ "StartTime", Sec.StartTime },
+			{ "EndTime", Sec.EndTime },
+			{ "NextSection", Sec.NextSection }
+		});
+	}
+	for (const auto& Notify : Notifies)
+	{
+		Data["Notifies"].push_back({
+			{ "Name", Notify.Name },
+			{ "Time", Notify.Time }
+		});
+	}
+	std::error_code Ec;
+	fs::create_directories(File.parent_path(), Ec);
+	if (Ec) { Error = "Cannot create AnimMontage directory."; return false; }
+	const fs::path Temp = File.string() + ".editing";
+	std::ofstream Out(Temp, std::ios::trunc);
+	if (!Out) { Error = "Cannot write AnimMontage."; return false; }
+	Out << Data.dump(2);
+	Out.close();
+	if (!Out) { Error = "Cannot finish writing AnimMontage."; fs::remove(Temp, Ec); return false; }
+	if (!MoveFileExW(Temp.c_str(), File.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	{ Error = "Cannot replace AnimMontage."; fs::remove(Temp, Ec); return false; }
+	Error.clear();
+	return true;
+}
+
+bool FAimOffsetAsset::Validate(FString& Error) const
+{
+	if (!std::isfinite(MinPitch) || !std::isfinite(MaxPitch) || MinPitch >= MaxPitch)
+	{ Error = "Invalid Pitch range."; return false; }
+	for (const auto& Sample : Samples)
+	{
+		if (!std::isfinite(Sample.Pitch) || Sample.FrameIndex < 0)
+		{ Error = "Invalid AimOffset sample."; return false; }
+	}
+	Error.clear();
+	return true;
+}
+
+bool FAimOffsetAsset::Load(const FString& Path, FAimOffsetAsset& Out, FString& Error)
+{
+	const fs::path File = ResolveAssetPathWithExt(Path, ".aimoffset");
+	if (File.empty()) { Error = "Invalid AimOffset path."; return false; }
+	std::ifstream In(File);
+	if (!In) { Error = "Cannot open AimOffset."; return false; }
+	json Data = json::parse(In, nullptr, false);
+	if (!Data.is_object() || !Data.contains("Version") || Data["Version"] != 1)
+	{ Error = "Invalid AimOffset format."; return false; }
+	FAimOffsetAsset Loaded;
+	if (Data.contains("Skeleton") && Data["Skeleton"].is_string()) Loaded.SkeletonPath = Data["Skeleton"].get<FString>();
+	if (Data.contains("BaseSequence") && Data["BaseSequence"].is_string()) Loaded.BaseSequencePath = Data["BaseSequence"].get<FString>();
+	if (Data.contains("BaseFrameIndex")) ReadInt(Data, "BaseFrameIndex", Loaded.BaseFrameIndex);
+	if (Data.contains("MinPitch") && !ReadFloat(Data, "MinPitch", Loaded.MinPitch)) { Error = "Invalid MinPitch."; return false; }
+	if (Data.contains("MaxPitch") && !ReadFloat(Data, "MaxPitch", Loaded.MaxPitch)) { Error = "Invalid MaxPitch."; return false; }
+	if (Data.contains("Samples") && Data["Samples"].is_array())
+	{
+		for (const auto& Item : Data["Samples"])
+		{
+			FAimOffsetSample Sample;
+			if (!Item.is_object() || !ReadFloat(Item, "Pitch", Sample.Pitch) ||
+				!Item.contains("Sequence") || !Item["Sequence"].is_string())
+			{ Error = "Invalid AimOffset sample."; return false; }
+			Sample.SequencePath = Item["Sequence"].get<FString>();
+			if (Item.contains("FrameIndex")) ReadInt(Item, "FrameIndex", Sample.FrameIndex);
+			Loaded.Samples.push_back(std::move(Sample));
+		}
+	}
+	if (!Loaded.Validate(Error)) return false;
+	Out = std::move(Loaded);
+	return true;
+}
+
+bool FAimOffsetAsset::Save(const FString& Path, FString& Error) const
+{
+	if (!Validate(Error)) return false;
+	const fs::path File = ResolveAssetPathWithExt(Path, ".aimoffset");
+	if (File.empty()) { Error = "Invalid AimOffset path."; return false; }
+	json Data = {
+		{ "Version", 1 },
+		{ "Skeleton", SkeletonPath },
+		{ "BaseSequence", BaseSequencePath },
+		{ "BaseFrameIndex", BaseFrameIndex },
+		{ "MinPitch", MinPitch },
+		{ "MaxPitch", MaxPitch },
+		{ "Samples", json::array() }
+	};
+	for (const auto& Sample : Samples)
+	{
+		Data["Samples"].push_back({
+			{ "Pitch", Sample.Pitch },
+			{ "Sequence", Sample.SequencePath },
+			{ "FrameIndex", Sample.FrameIndex }
+		});
+	}
+	std::error_code Ec;
+	fs::create_directories(File.parent_path(), Ec);
+	if (Ec) { Error = "Cannot create AimOffset directory."; return false; }
+	const fs::path Temp = File.string() + ".editing";
+	std::ofstream Out(Temp, std::ios::trunc);
+	if (!Out) { Error = "Cannot write AimOffset."; return false; }
+	Out << Data.dump(2);
+	Out.close();
+	if (!Out) { Error = "Cannot finish writing AimOffset."; fs::remove(Temp, Ec); return false; }
+	if (!MoveFileExW(Temp.c_str(), File.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	{ Error = "Cannot replace AimOffset."; fs::remove(Temp, Ec); return false; }
 	Error.clear();
 	return true;
 }

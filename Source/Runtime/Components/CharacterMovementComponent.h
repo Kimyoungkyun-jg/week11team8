@@ -20,6 +20,8 @@ public:
 	uint32 GetJumpCounter() const { return JumpCounter; }
 	void StopMovementImmediately() override;
 	void AddRootMotion(const FMatrix& Delta);
+	void Launch(const FVector& LaunchVelocity);
+	bool IsLaunchActive() const { return bHasPendingLaunch || bLaunchActive; }
 
 	UPROPERTY(EditAnywhere)
 	float MaxWalkSpeed = 5.0f;
@@ -44,4 +46,7 @@ private:
 	uint32 JumpCounter = 0;
 	FMatrix PendingRootMotion = FMatrix::Identity;
 	bool bHasPendingRootMotion = false;
+	FVector PendingLaunchVelocity = FVector::ZeroVector;
+	bool bHasPendingLaunch = false;
+	bool bLaunchActive = false;
 };

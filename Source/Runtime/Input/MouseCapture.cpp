@@ -41,6 +41,11 @@ bool FMouseCapture::Update(HWND Window, const RECT& Bounds, bool Enabled)
 		Release(Window);
 		return false;
 	}
+	if (::GetForegroundWindow() == Window)
+	{
+		const POINT Position{ (mBounds.left + mBounds.right) / 2, (mBounds.top + mBounds.bottom) / 2 };
+		::SetCursorPos(Position.x, Position.y);
+	}
 	::SetCursor(nullptr);
 	return true;
 }

@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Asset/AnimGraphAsset.h"
 #include "Asset/AnimTransform.h"
 #include "Containers/Array.h"
 #include "Core/EngineString.h"
 
 #include <functional>
 
+class UAnimGraphInstance;
 class UAnimSequence;
 class UBlendSpace;
 class USkeleton;
@@ -124,6 +126,59 @@ struct FAnimNode_StateMachine : FAnimNode_Base
 	// 전환 중이면 들어가는 중인 상태, 아니면 현재 상태
 	int32 GetTargetState() const { return NextState >= 0 ? NextState : CurrentState; }
 	void FinishTransition();
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_LayeredBoneBlend : FAnimNode_Base
+{
+	FAnimNode_Base* BasePose = nullptr;
+	FAnimNode_Base* BlendPose = nullptr;
+	FString StartBoneName = "spine_01";
+	float Alpha = 1.0f;
+	bool bMeshSpaceRotationBlend = false;
+	bool bGraphManaged = false;
+
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_Slot : FAnimNode_Base
+{
+	FAnimNode_Base* Source = nullptr;
+	FString SlotName = "UpperBody";
+	UAnimGraphInstance* GraphInstance = nullptr;
+	bool bGraphManaged = false;
+
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_AimOffset1D : FAnimNode_Base
+{
+	struct FSampleEntry
+	{
+		float Pitch = 0.0f;
+		UAnimSequence* Sequence = nullptr;
+		int32 FrameIndex = 0;
+	};
+
+	FAnimNode_Base* BasePose = nullptr;
+	FAimOffsetAsset Asset;
+	UAnimSequence* BaseSequence = nullptr;
+	TArray<FSampleEntry> Samples;
+	float Pitch = 0.0f;
+	float Alpha = 1.0f;
+	bool bGraphManaged = false;
+
+	bool SamplePoseAtPitch(const USkeleton* Skeleton, float SamplePitch, TArray<FAnimBoneTransform>& OutPose) const;
+	bool EvaluateReferencePose(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) const;
 	void Reset() override;
 	void Update(float DeltaSeconds) override;
 	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;

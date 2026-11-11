@@ -76,6 +76,7 @@ bool FLuaScriptInstance::Load(AActor* InOwner, const FString& InPath)
 
 	sol::environment NewEnv(Lua, sol::create, Lua.globals());
 	NewEnv["obj"] = FLuaActorRef::Make(Owner);
+	FLuaBindings::BindActorEnvironment(NewEnv, Owner);
 	// 액터별 Lua 상태를 핫 리로드에도 유지한다. 인스턴스가 끝나면 함께 해제된다.
 	if (!Impl->PersistentState.valid()) Impl->PersistentState = Lua.create_table();
 	NewEnv["script_state"] = Impl->PersistentState;
