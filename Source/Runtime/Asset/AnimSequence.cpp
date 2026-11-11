@@ -11,15 +11,24 @@
 int32 UAnimSequence::GetFrameIndex(float TimeSeconds) const
 {
 	if (!DataModel || DataModel->NumberOfKeys <= 0 || DataModel->FrameRate.AsDecimal() <= 0.0f ||
-		!std::isfinite(TimeSeconds)) return -1;
+		!std::isfinite(TimeSeconds))
+	{
+		return -1;
+	}
 	const double Sample = static_cast<double>(std::max(0.0f, TimeSeconds)) * DataModel->FrameRate.AsDecimal();
-	if (Sample >= DataModel->NumberOfKeys - 1) return DataModel->NumberOfKeys - 1;
+	if (Sample >= DataModel->NumberOfKeys - 1)
+	{
+		return DataModel->NumberOfKeys - 1;
+	}
 	return static_cast<int32>(Sample);
 }
 
 int32 UAnimSequence::GetRootBoneIndex() const
 {
-	if (!Skeleton || Skeleton->RefSkeleton.GetNum() == 0) return -1;
+	if (!Skeleton || Skeleton->RefSkeleton.GetNum() == 0)
+	{
+		return -1;
+	}
 	return Skeleton->RefSkeleton.RefBoneInfo[0].ParentIndex < 0 ? 0 : -1;
 }
 
@@ -27,18 +36,80 @@ bool UAnimSequence::SampleRawRoot(float TimeSeconds, FAnimBoneTransform& OutRoot
 {
 	TArray<FAnimBoneTransform> Pose;
 	const int32 Root = GetRootBoneIndex();
-	if (Root < 0 || !EvaluateLocalPoseTransforms(TimeSeconds, Pose, false) || !Pose.IsValidIndex(Root)) return false;
+	if (Root < 0 || !EvaluateLocalPoseTransforms(TimeSeconds, Pose, false) || !Pose.IsValidIndex(Root))
+	{
+		return false;
+	}
 	OutRoot = Pose[Root];
 	return true;
+}
+
+void UAnimSequence::GetNotifies(float PreviousTime, float CurrentTime, int32 LoopCount, bool bIncludeStart, TArray<FAnimNotifyEvent>& OutNotifies) const
+{
+	if (!DataModel || Notifies.IsEmpty() || LoopCount < 0 || !std::isfinite(PreviousTime) || !std::isfinite(CurrentTime))
+	{
+		return;
+	}
+	const float Length = DataModel->PlayLength;
+	if (Length <= 0.0f)
+	{
+		return;
+	}
+
+	// 시작 제외, 끝 포함
+	// 0초에서부터 시작할 때는 시작 포함, 끝 포함으로
+	// [Start, End] 또는 (Start, End] 구간의 Notify를 시간순으로 추가한다.
+	const auto CollectSegment = [&](float Start, float End, bool bInclusiveStart)
+	{
+		const int32 FirstAdded = OutNotifies.Num();
+		for (const FAnimNotifyEvent& Event : Notifies)
+		{
+			const bool bAfterStart = bInclusiveStart ? Event.TriggerTime >= Start : Event.TriggerTime > Start;
+			if (bAfterStart && Event.TriggerTime <= End)
+			{
+				OutNotifies.Add(Event);
+			}
+		}
+		std::sort(OutNotifies.begin() + FirstAdded, OutNotifies.end(),
+			[](const FAnimNotifyEvent& A, const FAnimNotifyEvent& B)
+			{
+				return A.TriggerTime < B.TriggerTime;
+			});
+	};
+
+	if (LoopCount == 0)
+	{
+		CollectSegment(PreviousTime, CurrentTime, bIncludeStart);
+		return;
+	}
+	
+	//시작부터 Lenght까지
+	CollectSegment(PreviousTime, Length, bIncludeStart);
+
+	//드물지만 LoopCount가 2 이상이라면 전체 순회를 포함해야 한다.
+	//이 프레임에서 클립이 한바퀴 통째로 재생된거라서 그 안의 모든 노티파이가 한번씩 트리거 되어야 한다.
+	for (int32 Index = 1; Index < LoopCount; ++Index)
+	{
+		CollectSegment(0.0f, Length, true);
+	}
+
+	//0부터 current까지. 0초부터 시작하니 includestart는 true로.
+	CollectSegment(0.0f, CurrentTime, true);
 }
 
 bool UAnimSequence::ExtractRootMotion(float PreviousTime, float CurrentTime, int32 LoopCount, FMatrix& OutDelta) const
 {
 	OutDelta = FMatrix::Identity;
 	if (!bEnableRootMotion || !DataModel || GetRootBoneIndex() < 0 ||
-		!Skeleton->RefSkeleton.RefBonePose.IsValidIndex(0) || LoopCount < 0 || LoopCount > 256) return false;
+		!Skeleton->RefSkeleton.RefBonePose.IsValidIndex(0) || LoopCount < 0 || LoopCount > 256)
+	{
+		return false;
+	}
 	const float Length = DataModel->PlayLength;
-	if (Length <= 0.0f || !std::isfinite(PreviousTime) || !std::isfinite(CurrentTime)) return false;
+	if (Length <= 0.0f || !std::isfinite(PreviousTime) || !std::isfinite(CurrentTime))
+	{
+		return false;
+	}
 	FAnimBoneTransform Lock;
 	switch (RootMotionRootLock)
 	{
@@ -49,15 +120,22 @@ bool UAnimSequence::ExtractRootMotion(float PreviousTime, float CurrentTime, int
 		break;
 	}
 	case ERootMotionRootLock::AnimFirstFrame:
-		if (!SampleRawRoot(0.0f, Lock)) return false;
+		if (!SampleRawRoot(0.0f, Lock))
+		{
+			return false;
+		}
 		break;
-	case ERootMotionRootLock::Zero: break;
+	case ERootMotionRootLock::Zero:
+		break;
 	}
 	const FMatrix LockMatrix = MakeAnimMatrix(Lock.Position, Lock.Rotation, Lock.Scale);
 	const auto Segment = [&](float Start, float End, FMatrix& Delta)
 	{
 		FAnimBoneTransform A, B;
-		if (!SampleRawRoot(Start, A) || !SampleRawRoot(End, B)) return false;
+		if (!SampleRawRoot(Start, A) || !SampleRawRoot(End, B))
+		{
+			return false;
+		}
 		const FMatrix RawA = MakeAnimMatrix(A.Position, A.Rotation, A.Scale);
 		const FMatrix RawB = MakeAnimMatrix(B.Position, B.Rotation, B.Scale);
 		Delta = LockMatrix.Inverse() * RawB * RawA.Inverse() * LockMatrix;
@@ -65,15 +143,24 @@ bool UAnimSequence::ExtractRootMotion(float PreviousTime, float CurrentTime, int
 	};
 	if (LoopCount == 0)
 	{
-		if (!Segment(PreviousTime, CurrentTime, OutDelta)) return false;
+		if (!Segment(PreviousTime, CurrentTime, OutDelta))
+		{
+			return false;
+		}
 	}
 	else
 	{
 		FMatrix First, Cycle, Last;
 		if (!Segment(PreviousTime, Length, First) || !Segment(0.0f, Length, Cycle) ||
-			!Segment(0.0f, CurrentTime, Last)) return false;
+			!Segment(0.0f, CurrentTime, Last))
+		{
+			return false;
+		}
 		OutDelta = First;
-		for (int32 Index = 1; Index < LoopCount; ++Index) OutDelta = Cycle * OutDelta;
+		for (int32 Index = 1; Index < LoopCount; ++Index)
+		{
+			OutDelta = Cycle * OutDelta;
+		}
 		OutDelta = Last * OutDelta;
 	}
 	if (bUseNormalizedRootMotionScale)
@@ -88,7 +175,10 @@ bool UAnimSequence::ExtractRootMotion(float PreviousTime, float CurrentTime, int
 bool UAnimSequence::EvaluateLocalPoseTransforms(float TimeSeconds, TArray<FAnimBoneTransform>& OutPose, bool bApplyRootLock) const
 {
 	if (!Skeleton || !DataModel || DataModel->NumberOfKeys <= 0 || DataModel->FrameRate.AsDecimal() <= 0.0f ||
-		DataModel->BoneAnimationTracks.Num() != Skeleton->RefSkeleton.GetNum() || !std::isfinite(TimeSeconds)) return false;
+		DataModel->BoneAnimationTracks.Num() != Skeleton->RefSkeleton.GetNum() || !std::isfinite(TimeSeconds))
+	{
+		return false;
+	}
 	const float Sample = std::clamp(TimeSeconds * DataModel->FrameRate.AsDecimal(),
 		0.0f, static_cast<float>(DataModel->NumberOfKeys - 1));
 	const int32 First = static_cast<int32>(Sample);
@@ -96,14 +186,24 @@ bool UAnimSequence::EvaluateLocalPoseTransforms(float TimeSeconds, TArray<FAnimB
 	const float Alpha = Sample - First;
 	const int32 NumBones = Skeleton->RefSkeleton.GetNum();
 	OutPose.SetNum(NumBones);
+
+	//모든 본에 대해 보간
 	for (int32 BoneIndex = 0; BoneIndex < NumBones; ++BoneIndex)
 	{
+		//본 Track 가져오기
 		const FBoneAnimationTrack& BoneTrack = DataModel->BoneAnimationTracks[BoneIndex];
-		if (BoneTrack.Name != FName(Skeleton->RefSkeleton.RefBoneInfo[BoneIndex].Name)) return false;
+		if (BoneTrack.Name != FName(Skeleton->RefSkeleton.RefBoneInfo[BoneIndex].Name))
+		{
+			return false;
+		}
 		const FRawAnimSequenceTrack& Track = BoneTrack.InternalTrack;
 		if ((Track.PosKeys.Num() != 1 && Track.PosKeys.Num() != DataModel->NumberOfKeys) ||
 			(Track.RotKeys.Num() != 1 && Track.RotKeys.Num() != DataModel->NumberOfKeys) ||
-			(Track.ScaleKeys.Num() != 1 && Track.ScaleKeys.Num() != DataModel->NumberOfKeys)) return false;
+			(Track.ScaleKeys.Num() != 1 && Track.ScaleKeys.Num() != DataModel->NumberOfKeys))
+		{
+			return false;
+		}
+		//보간
 		const FVector3f Position = FMath::Lerp(Track.PosKeys[Track.PosKeys.Num() == 1 ? 0 : First],
 			Track.PosKeys[Track.PosKeys.Num() == 1 ? 0 : Second], Alpha);
 		const FQuat4f Rotation = FMath::Slerp(Track.RotKeys[Track.RotKeys.Num() == 1 ? 0 : First],
@@ -112,6 +212,7 @@ bool UAnimSequence::EvaluateLocalPoseTransforms(float TimeSeconds, TArray<FAnimB
 			Track.ScaleKeys[Track.ScaleKeys.Num() == 1 ? 0 : Second], Alpha);
 		OutPose[BoneIndex] = { Position, Rotation, Scale };
 	}
+
 	const int32 Root = GetRootBoneIndex();
 	if (bApplyRootLock && Root >= 0 && (bEnableRootMotion || bForceRootLock))
 	{
@@ -120,17 +221,22 @@ bool UAnimSequence::EvaluateLocalPoseTransforms(float TimeSeconds, TArray<FAnimB
 		case ERootMotionRootLock::RefPose:
 			if (Skeleton->RefSkeleton.RefBonePose.IsValidIndex(Root))
 			{
+				//루트를 Ref 포즈로 고정
 				const FBoneTransform& Ref = Skeleton->RefSkeleton.RefBonePose[Root];
 				OutPose[Root] = { Ref.Translation, Ref.Rotation, Ref.Scale };
 			}
 			break;
 		case ERootMotionRootLock::AnimFirstFrame:
 		{
+			//애니메이션 첫 프레임으로 고정
 			const FRawAnimSequenceTrack& Track = DataModel->BoneAnimationTracks[Root].InternalTrack;
 			OutPose[Root] = { Track.PosKeys[0], Track.RotKeys[0], Track.ScaleKeys[0] };
 			break;
 		}
-		case ERootMotionRootLock::Zero: OutPose[Root] = FAnimBoneTransform{}; break;
+		case ERootMotionRootLock::Zero:
+			//0,0,0과 같이 초기화로 고정
+			OutPose[Root] = FAnimBoneTransform{};
+			break;
 		}
 	}
 	return true;
@@ -139,7 +245,10 @@ bool UAnimSequence::EvaluateLocalPoseTransforms(float TimeSeconds, TArray<FAnimB
 bool UAnimSequence::EvaluateLocalPose(float TimeSeconds, TArray<FMatrix>& OutPose) const
 {
 	TArray<FAnimBoneTransform> Transforms;
-	if (!EvaluateLocalPoseTransforms(TimeSeconds, Transforms)) return false;
+	if (!EvaluateLocalPoseTransforms(TimeSeconds, Transforms))
+	{
+		return false;
+	}
 	OutPose.SetNum(Transforms.Num());
 	for (int32 BoneIndex = 0; BoneIndex < Transforms.Num(); ++BoneIndex)
 	{
@@ -151,11 +260,17 @@ bool UAnimSequence::EvaluateLocalPose(float TimeSeconds, TArray<FMatrix>& OutPos
 
 bool UAnimSequence::EvaluateGlobalPose(float TimeSeconds, TArray<FMatrix>& OutPose) const
 {
-	if (!EvaluateLocalPose(TimeSeconds, OutPose)) return false;
+	if (!EvaluateLocalPose(TimeSeconds, OutPose))
+	{
+		return false;
+	}
 	for (int32 BoneIndex = 0; BoneIndex < OutPose.Num(); ++BoneIndex)
 	{
 		const int32 Parent = Skeleton->RefSkeleton.RefBoneInfo[BoneIndex].ParentIndex;
-		if (Parent >= 0) OutPose[BoneIndex] = OutPose[BoneIndex] * OutPose[Parent];
+		if (Parent >= 0)
+		{
+			OutPose[BoneIndex] = OutPose[BoneIndex] * OutPose[Parent];
+		}
 	}
 	return true;
 }

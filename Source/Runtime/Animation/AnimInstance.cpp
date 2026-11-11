@@ -51,7 +51,6 @@ void UAnimInstance::UpdateAnimation(float DeltaSeconds)
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
 	if (Mesh && Mesh->Skeleton && RootNode)
 	{
-		//
 		RootNode->Update(DeltaSeconds);
 	}
 }

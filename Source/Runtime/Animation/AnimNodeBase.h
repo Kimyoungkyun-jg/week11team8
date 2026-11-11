@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Asset/AnimNotifyEvent.h"
 #include "Asset/AnimTransform.h"
 #include "Containers/Array.h"
 #include "Core/EngineString.h"
@@ -35,6 +36,10 @@ struct FAnimNode_SequencePlayer : FAnimNode_Base
 	bool bPlaying = true;
 	FMatrix PendingRootMotion = FMatrix::Identity;
 	bool bHasPendingRootMotion = false;
+	// 가장 최근 Update에서 진행한 구간에 든 Notify. 매 Update 시작에 비운다.
+	TArray<FAnimNotifyEvent> PendingNotifies;
+	// Reset 직후 첫 Update는 구간 시작(0초)을 포함해 0초 Notify를 놓치지 않는다.
+	bool bNotifyIncludeStart = true;
 	bool IsFinished() const;
 	float GetRemainingTime() const;
 

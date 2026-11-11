@@ -132,6 +132,14 @@ bool BuildSequence(const FFbxAssetData& Asset, USkeleton& Skeleton, UAnimSequenc
 	Model->PlayLength = static_cast<float>(std::max(1, Model->NumberOfFrames)) / Source.FrameRate.AsDecimal();
 	Sequence.DataModel = Model;
 	Sequence.Skeleton = &Skeleton;
+
+	// TEMP: Notify 저장 위치가 정해지기 전까지의 테스트용 하드코딩. 저장·로드는 하지 않는다.
+	Sequence.Notifies.Reset();
+	if (Asset.Key.ends_with("AS_AnimCube_binary.fbxbin"))
+	{
+		Sequence.Notifies.Add({ "TestStart", 0.0f });
+		Sequence.Notifies.Add({ "TestMid", Model->PlayLength * 0.5f });
+	}
 	Sequence.Name = Source.Name;
 	Sequence.SourceFilePath = Asset.SourcePath;
 	Sequence.SourceTakeIndex = Source.SourceTakeIndex;
