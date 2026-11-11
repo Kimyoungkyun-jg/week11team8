@@ -176,6 +176,21 @@ void FAnimGraphEditorPanel::RefreshPreviewGraph()
 
 void FAnimGraphEditorPanel::Tick(float DeltaTime)
 {
+	if (!IsOpen())
+	{
+		// 창을 완전히 닫으면 프리뷰 월드를 해제한다. 그래프 데이터는 유지하고, 다시 열면 OnRender에서 프리뷰를 복원한다.
+		if (PreviewWorld)
+		{
+			Release();
+			bRestorePreviewOnOpen = true;
+		}
+		return;
+	}
+	// 도킹된 탭이 가려져 있으면 재생하지 않는다. 월드는 그대로 둔다.
+	if (!bVisible)
+	{
+		return;
+	}
 	if (!PreviewWorld || !PreviewCharacter || !bPreviewPlaying) return;
 	if (auto* Movement = PreviewCharacter->GetCharacterMovement())
 	{
@@ -959,6 +974,11 @@ void FAnimGraphEditorPanel::DrawAssetBrowser()
 
 void FAnimGraphEditorPanel::OnRender()
 {
+	if (bRestorePreviewOnOpen)
+	{
+		bRestorePreviewOnOpen = false;
+		StartPreview();
+	}
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1250), EditorUIScale::Px(750)), ImGuiCond_FirstUseEver);
 	bVisible = BeginPanel();
 	if (!bVisible) { ImGui::End(); return; }

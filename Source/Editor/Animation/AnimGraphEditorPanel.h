@@ -78,4 +78,6 @@ private:
 	bool bPreviewFalling = false;
 	bool bPreviewPlaying = true;
 	bool bVisible = false;
+	// 창을 완전히 닫아 프리뷰를 해제했으면 true. 다시 열릴 때 프리뷰를 복원한다.
+	bool bRestorePreviewOnOpen = false;
 };

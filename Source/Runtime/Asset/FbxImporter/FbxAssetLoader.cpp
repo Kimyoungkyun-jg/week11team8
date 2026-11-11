@@ -137,8 +137,8 @@ bool BuildSequence(const FFbxAssetData& Asset, USkeleton& Skeleton, UAnimSequenc
 	Sequence.Notifies.Reset();
 	if (Asset.Key.ends_with("AS_AnimCube_binary.fbxbin"))
 	{
-		Sequence.Notifies.Add({ "TestStart", 0.0f });
-		Sequence.Notifies.Add({ "TestMid", Model->PlayLength * 0.5f });
+		Sequence.AddNotify("TestStart", "UAnimNotify_Log", 0.0f);
+		Sequence.AddNotify("TestMid", "UAnimNotify_Log", Model->PlayLength * 0.5f);
 	}
 	Sequence.Name = Source.Name;
 	Sequence.SourceFilePath = Asset.SourcePath;

@@ -102,11 +102,13 @@ void FAnimNode_SequencePlayer::Update(float DeltaSeconds)
 	bHasPendingRootMotion = Sequence->ExtractRootMotion(PreviousTime, CurrentTime, LoopCount, PendingRootMotion);
 	Sequence->GetNotifies(PreviousTime, CurrentTime, LoopCount, bNotifyIncludeStart, PendingNotifies);
 	bNotifyIncludeStart = false;
+}
 
-	// TEMP: 4~5단계(전파, 핸들러 호출)를 만들기 전까지 수집이 되는지 로그로만 확인한다.
+void FAnimNode_SequencePlayer::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
 	for (const FAnimNotifyEvent& Event : PendingNotifies)
 	{
-		HTR_LOG(Info, "[Notify] {} @ {:.3f}s ({}, window {:.3f} -> {:.3f}, loops {})", Event.Name, Event.TriggerTime, Sequence->GetPath(), PreviousTime, CurrentTime, LoopCount);
+		OutQueue.Add({ Event, ParentWeight, Sequence });
 	}
 }
 
@@ -226,6 +228,20 @@ bool FAnimNode_TwoWayBlend::Evaluate(const USkeleton* Skeleton, TArray<FAnimBone
 bool FAnimNode_TwoWayBlend::ConsumeRootMotion(FMatrix& OutDelta)
 {
 	return BlendRootMotion(A, B, Alpha, OutDelta);
+}
+
+void FAnimNode_TwoWayBlend::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	// Evaluate와 같이 한쪽 가중치가 0이면 그쪽은 올리지 않는다. 가중치 0인 자식도 Update는 되므로 Notify는 모여 있다.
+	const float WeightB = std::clamp(Alpha, 0.0f, 1.0f);
+	if (A && WeightB < 1.0f)
+	{
+		A->GatherNotifies(ParentWeight * (1.0f - WeightB), OutQueue);
+	}
+	if (B && WeightB > 0.0f)
+	{
+		B->GatherNotifies(ParentWeight * WeightB, OutQueue);
+	}
 }
 
 void FAnimNode_BlendSpacePlayer::Reset()
@@ -441,4 +457,33 @@ bool FAnimNode_StateMachine::ConsumeRootMotion(FMatrix& OutDelta)
 	}
 	return BlendRootMotion(Current, States[NextState].Pose,
 		TransitionDuration > 0.0f ? TransitionElapsed / TransitionDuration : 1.0f, OutDelta);
+}
+
+void FAnimNode_StateMachine::GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const
+{
+	if (!States.IsValidIndex(CurrentState))
+	{
+		return;
+	}
+	const FAnimNode_Base* Current = States[CurrentState].Pose;
+	if (NextState < 0)
+	{
+		if (Current)
+		{
+			Current->GatherNotifies(ParentWeight, OutQueue);
+		}
+		return;
+	}
+	// 전이 중에는 Evaluate와 같은 비율로 양쪽 상태의 Notify를 올린다.
+	// 전이가 이번 Update에서 끝났다면 CurrentState가 이미 새 상태이므로 이전 상태의 마지막 구간 Notify는 올라오지 않는다.
+	const float Alpha = TransitionDuration > 0.0f ? std::clamp(TransitionElapsed / TransitionDuration, 0.0f, 1.0f) : 1.0f;
+	const FAnimNode_Base* Next = States[NextState].Pose;
+	if (Current)
+	{
+		Current->GatherNotifies(ParentWeight * (1.0f - Alpha), OutQueue);
+	}
+	if (Next)
+	{
+		Next->GatherNotifies(ParentWeight * Alpha, OutQueue);
+	}
 }

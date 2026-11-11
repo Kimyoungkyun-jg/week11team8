@@ -1,5 +1,6 @@
 #include "EnginePCH.h"
 #include "Asset/AnimSequence.h"
+#include "Animation/AnimNotify.h"
 #include "Asset/AnimTransform.h"
 #include "Math/EngineMath.h"
 #include "Animation/Skeleton.h"
@@ -42,6 +43,29 @@ bool UAnimSequence::SampleRawRoot(float TimeSeconds, FAnimBoneTransform& OutRoot
 	}
 	OutRoot = Pose[Root];
 	return true;
+}
+
+UAnimNotify* UAnimSequence::AddNotify(const FString& EventName, const FString& NotifyClassName, float TriggerTime)
+{
+	//노티파이 객체 생성해서 추가
+
+	UClass* NotifyClass = FindClass(NotifyClassName);
+	if (!NotifyClass || !NotifyClass->IsChildOf(UAnimNotify::StaticClass()) || !NotifyClass->Constructor)
+	{
+		HTR_LOG(Warning, "[AnimNotify] Cannot add '{}': '{}' is not a concrete UAnimNotify class", EventName, NotifyClassName);
+		return nullptr;
+	}
+	UAnimNotify* Notify = NewObject<UAnimNotify>(this, NotifyClass);
+	if (!Notify)
+	{
+		return nullptr;
+	}
+	FAnimNotifyEvent Event;
+	Event.Name = EventName;
+	Event.TriggerTime = DataModel ? std::clamp(TriggerTime, 0.0f, DataModel->PlayLength) : std::max(0.0f, TriggerTime);
+	Event.Notify = Notify;
+	Notifies.Add(Event);
+	return Notify;
 }
 
 void UAnimSequence::GetNotifies(float PreviousTime, float CurrentTime, int32 LoopCount, bool bIncludeStart, TArray<FAnimNotifyEvent>& OutNotifies) const

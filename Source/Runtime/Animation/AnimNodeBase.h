@@ -18,6 +18,9 @@ struct FAnimNode_Base
 	virtual void Update(float DeltaSeconds) {}
 	virtual bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) = 0;
 	virtual bool ConsumeRootMotion(FMatrix& OutDelta) { return false; }
+	// 이번 Update에서 모은 Notify를 OutQueue 뒤에 추가한다 (비우지 않는다). 읽기만 하며 Update 때마다 새로 모인다.
+	// 합성 노드는 자식의 Notify에 자기 블렌드 가중치를 곱해서 올린다. ParentWeight는 루트에서 이 노드까지 곱해진 가중치다.
+	virtual void GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const {}
 
 	// 블렌드 동기화용. 한 주기를 재생하는 데 걸리는 실제 시간(초), 주기 안의 위치(0~1), 반복 여부다.
 	// 지원하지 않는 노드는 0/false를 돌려주고 동기화에서 빠진다.
@@ -47,6 +50,7 @@ struct FAnimNode_SequencePlayer : FAnimNode_Base
 	void Update(float DeltaSeconds) override;
 	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
 	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+	void GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const override;
 	float GetCycleSeconds() const override;
 	bool GetNormalizedTime(float& OutTime) const override;
 	void SetNormalizedTime(float Time) override;
@@ -66,6 +70,7 @@ struct FAnimNode_TwoWayBlend : FAnimNode_Base
 	void Update(float DeltaSeconds) override;
 	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
 	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+	void GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const override;
 };
 
 struct FAnimNode_BlendSpacePlayer : FAnimNode_Base
@@ -123,4 +128,5 @@ struct FAnimNode_StateMachine : FAnimNode_Base
 	void Update(float DeltaSeconds) override;
 	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
 	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+	void GatherNotifies(float ParentWeight, TArray<FAnimNotifyQueueItem>& OutQueue) const override;
 };

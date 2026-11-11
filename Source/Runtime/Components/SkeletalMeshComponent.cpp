@@ -105,6 +105,12 @@ void USkeletalMeshComponent::TickComponent(float DeltaTime)
 	{
 		UpdateSkinning();
 	}
+
+	// Notify는 본 행렬 갱신까지 끝난 뒤에 호출한다. 호출된 동작이 이번 프레임의 본 위치를 읽을 수 있다.
+	if (AnimScriptInstance && SkeletalMesh)
+	{
+		AnimScriptInstance->TriggerAnimNotifies();
+	}
 }
 
 void USkeletalMeshComponent::Serialize(FStructuredArchive::FRecord Record)

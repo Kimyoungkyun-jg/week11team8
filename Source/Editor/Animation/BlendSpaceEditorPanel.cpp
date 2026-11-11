@@ -210,6 +210,21 @@ void FBlendSpaceEditorPanel::EvaluatePreview()
 
 void FBlendSpaceEditorPanel::Tick(float DeltaTime)
 {
+	if (!IsOpen())
+	{
+		// 창을 완전히 닫으면 프리뷰 월드를 해제한다. 샘플 데이터는 유지하고, 다시 열면 OnRender에서 프리뷰를 복원한다.
+		if (PreviewWorld)
+		{
+			Release();
+			bRestorePreviewOnOpen = true;
+		}
+		return;
+	}
+	// 도킹된 탭이 가려져 있으면 재생하지 않는다. 월드는 그대로 둔다.
+	if (!bVisible)
+	{
+		return;
+	}
 	if (!PreviewWorld || !MeshComponent) return;
 	if (bPlaying) PreviewTime += std::max(0.0f, DeltaTime);
 	EvaluatePreview();
@@ -532,6 +547,11 @@ void FBlendSpaceEditorPanel::DrawAssetBrowser()
 void FBlendSpaceEditorPanel::OnRender()
 {
 	if (!IsOpen()) return;
+	if (bRestorePreviewOnOpen)
+	{
+		bRestorePreviewOnOpen = false;
+		StartPreview();
+	}
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1400), EditorUIScale::Px(850)), ImGuiCond_FirstUseEver);
 	if (bFocusRequested) { ImGui::SetNextWindowFocus(); bFocusRequested = false; }
 	bVisible = BeginPanel();

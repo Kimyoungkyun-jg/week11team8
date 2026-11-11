@@ -145,6 +145,21 @@ void FAnimSequenceViewerPanel::SetPreviewMesh(USkeletalMesh* Mesh)
 
 void FAnimSequenceViewerPanel::Tick(float DeltaTime)
 {
+	if (!IsOpen())
+	{
+		// 창을 완전히 닫으면 프리뷰 월드와 메시를 해제한다. 다시 열면 OnRender에서 복원한다.
+		if (PreviewWorld)
+		{
+			Release();
+			bRestorePreviewOnOpen = true;
+		}
+		return;
+	}
+	// 도킹된 탭이 가려져 있으면 재생하지 않는다. 월드는 그대로 둔다.
+	if (!bVisible)
+	{
+		return;
+	}
 	if (!Sequence || !PreviewWorld) return;
 	if (Sequence->IsRetired())
 	{
@@ -345,6 +360,14 @@ void FAnimSequenceViewerPanel::DrawAssetBrowser()
 void FAnimSequenceViewerPanel::OnRender()
 {
 	if (!IsOpen()) return;
+	if (bRestorePreviewOnOpen)
+	{
+		bRestorePreviewOnOpen = false;
+		if (!Path.empty())
+		{
+			OpenSequence(Path);
+		}
+	}
 	const FString Title = (Sequence ? GetAnimSequenceDisplayName(Path, Sequence->Skeleton->GetPath()) : FString("Animation Sequence")) + "###AnimationSequenceViewer";
 	ImGui::SetNextWindowSize(ImVec2(EditorUIScale::Px(1250.0f), EditorUIScale::Px(750.0f)), ImGuiCond_FirstUseEver);
 	bVisible = BeginPanel(Title.c_str());
