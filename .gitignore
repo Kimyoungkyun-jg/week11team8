@@ -452,8 +452,7 @@ editor.ini
 *.obj.bin
 *.fbx.bin
 *.fbx.anim.bin
-# FBX 임포트 결과는 각자 만든다. 원본 .fbx만 커밋한다.
-*.fbxbin
+# FBX 임포트 결과(.fbxbin)는 Notify 등 에디터 편집 내용을 담으므로 추적한다. 임시 폴더만 제외한다.
 .fbx-import-*/
 /Assets/.fbx-test-fixtures*/
 

@@ -54,5 +54,15 @@ void UAnimNotify_PlaySound::Notify(const FAnimNotifyContext& Context)
 		}
 	}
 
-	UGameplayStatics::PlaySoundAtLocation(Mesh->GetWorld(), Sound, Location, Volume * Context.Weight, Pitch);
+	const UWorld* World = Mesh->GetWorld();
+	if (World && World->IsGameWorld())
+	{
+		UGameplayStatics::PlaySoundAtLocation(World, Sound, Location, Volume * Context.Weight, Pitch);
+	}
+	else
+	{
+		// 에디터 프리뷰 월드에는 오디오 리스너가 없다 (PIE에서만 설정된다). 3D로 재생하면 리스너가 다른 월드라 소리가 0이 되므로,
+		// 위치와 거리 감쇠 없이 2D로 재생한다. 프리뷰가 멈춰도 끝까지 들리도록 UI 사운드로 재생한다.
+		UGameplayStatics::PlaySound2D(World, Sound, Volume * Context.Weight, Pitch, 0.0f, true);
+	}
 }
