@@ -56,7 +56,7 @@ ATestCharacter::ATestCharacter()
 	if (Mesh)
 	{
 		SkeletalMeshComponent->SetSkeletalMesh(Mesh);
-		if (!SkeletalMeshComponent->SetAnimGraphPath("Assets/Animations/rifleanimgraph.animgraph"))
+		if (!SkeletalMeshComponent->SetAnimGraphPath(GetAnimationGraphPath()))
 			HTR_LOG(Error, "Failed to assign rifleanimgraph.animgraph to ATestCharacter");
 	}
 	else HTR_LOG(Error, "Failed to load SK_SKM_Quinn_Simple_root.fbxbin for ATestCharacter");
@@ -79,7 +79,7 @@ void ATestCharacter::BeginPlay()
 	UWorld* World = GetWorld();
 	USkeletalMeshComponent* MeshComponent = GetSkeletalMeshComponent();
 	if (World && World->IsGameWorld() && MeshComponent &&
-		!MeshComponent->SetAnimGraphPath("Assets/Animations/rifleanimgraph.animgraph"))
+		!MeshComponent->SetAnimGraphPath(GetAnimationGraphPath()))
 		HTR_LOG(Error, "Failed to assign rifleanimgraph.animgraph to ATestCharacter in BeginPlay");
 	if (World && World->IsGameWorld())
 	{

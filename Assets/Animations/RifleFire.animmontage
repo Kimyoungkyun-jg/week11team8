@@ -1,25 +1,24 @@
 {
-	"Type": "AnimMontage",
-	"Version": 1,
-	"Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
-	"Sequence": "Models/UnrealModel/AS_MF_Rifle_Fire.fbxbin",
-	"Slot": "UpperBody",
-	"PlayRate": 1.0,
-	"BlendInTime": 0.05,
-	"BlendOutTime": 0.12,
-	"Loop": false,
-	"Sections": [
-		{
-			"Name": "Default",
-			"StartTime": 0.0,
-			"EndTime": 0.46666667,
-			"NextSection": ""
-		}
-	],
-	"Notifies": [
-		{
-			"Name": "Fire",
-			"Time": 0.05
-		}
-	]
+  "BlendInTime": 0.05000000074505806,
+  "BlendOutTime": 0.11999999731779099,
+  "Loop": false,
+  "Notifies": [
+    {
+      "Name": "Fire",
+      "Time": 0.06660237908363342
+    }
+  ],
+  "PlayRate": 1.0,
+  "Sections": [
+    {
+      "EndTime": 0.46666666865348816,
+      "Name": "Default",
+      "NextSection": "",
+      "StartTime": 0.0
+    }
+  ],
+  "Sequence": "Models/UnrealModel/AS_MM_Rifle_Fire.fbxbin",
+  "Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
+  "Slot": "UpperBody",
+  "Version": 1
 }

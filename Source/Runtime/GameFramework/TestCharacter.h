@@ -26,6 +26,8 @@ public:
 	void OnLandingAnimationFinished() { bJumpLocked = false; }
 	void OnAttackAnimationStarted() { bAttackLocked = true; }
 	void OnAttackAnimationFinished() { bAttackLocked = false; }
+protected:
+	virtual const char* GetAnimationGraphPath() const { return "Assets/Animations/rifleanimgraph.animgraph"; }
 private:
 	void FireRifle();
 	ARifleActor* EquippedRifle = nullptr;
