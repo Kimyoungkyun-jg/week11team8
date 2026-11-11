@@ -63,6 +63,11 @@ void UAnimInstance::UpdateAnimation(float DeltaSeconds)
 	}
 }
 
+void UAnimInstance::AddNotifyQueueItems(const TArray<FAnimNotifyQueueItem>& Items)
+{
+	for (const FAnimNotifyQueueItem& Item : Items) NotifyQueue.Add(Item);
+}
+
 void UAnimInstance::TriggerAnimNotifies()
 {
 	USkeletalMeshComponent* Component = GetOwningComponent();

@@ -37,6 +37,7 @@ protected:
 		return Node;
 	}
 	FAnimNode_Base* RootNode = nullptr;
+	void AddNotifyQueueItems(const TArray<FAnimNotifyQueueItem>& Items);
 	virtual void NativeInitializeAnimation() {}
 	virtual void NativeUpdateAnimation(float DeltaSeconds) {}
 private:

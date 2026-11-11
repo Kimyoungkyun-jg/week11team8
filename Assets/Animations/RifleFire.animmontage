@@ -17,7 +17,7 @@
       "StartTime": 0.0
     }
   ],
-  "Sequence": "Models/UnrealModel/AS_MM_Rifle_Fire.fbxbin",
+  "Sequence": "Models/UnrealModel/AS_MF_Rifle_Fire.fbxbin",
   "Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
   "Slot": "UpperBody",
   "Version": 1

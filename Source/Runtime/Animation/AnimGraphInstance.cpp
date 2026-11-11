@@ -171,6 +171,7 @@ float UAnimGraphInstance::PlayMontage(const FString& MontagePath, float InPlayRa
 	Target->StopDuration = Target->Asset.BlendOutTime;
 	Target->StopStartWeight = 1.0f;
 	Target->bPlaying = true;
+	Target->bNotifyIncludeStart = true;
 	const float RateScale = std::isfinite(Sequence->RateScale) && Sequence->RateScale > 0.0f
 		? Sequence->RateScale : 1.0f;
 	return Sequence->GetDataModel()->PlayLength /
@@ -283,12 +284,29 @@ void UAnimGraphInstance::UpdateMontages(float DeltaSeconds)
 		Montage.ElapsedTime += DeltaSeconds;
 
 		const float NotifyCheckEnd = std::min(NextPos, SecEnd);
+		TArray<FAnimNotifyQueueItem> SequenceNotifies;
+		Montage.Sequence->GetNotifyQueueItems(PrevPos, NotifyCheckEnd, 0,
+			Montage.bNotifyIncludeStart, 1.0f, SequenceNotifies);
+		Montage.bNotifyIncludeStart = false;
+		for (FAnimNotifyQueueItem& Item : SequenceNotifies)
+		{
+			Item.SourceNode = Montage.Sequence;
+			LastTriggeredNotify = Item.Event.Name;
+			if (!Item.Event.IsState() && OnMontageNotify) OnMontageNotify(Item.Event.Name);
+		}
+		AddNotifyQueueItems(SequenceNotifies);
 		for (const auto& Notify : Montage.Asset.Notifies)
 		{
+			const bool bAlreadyTriggered = std::any_of(SequenceNotifies.begin(), SequenceNotifies.end(),
+				[&](const FAnimNotifyQueueItem& Item)
+				{
+					return !Item.Event.IsState() && Item.Event.Name == Notify.Name &&
+						std::abs(Item.Event.TriggerTime - Notify.Time) < 0.001f;
+				});
 			const bool bTriggered = bFirstStep
 				? (Notify.Time >= PrevPos && Notify.Time <= NotifyCheckEnd)
 				: (Notify.Time > PrevPos && Notify.Time <= NotifyCheckEnd);
-			if (bTriggered)
+			if (bTriggered && !bAlreadyTriggered)
 			{
 				LastTriggeredNotify = Notify.Name;
 				if (OnMontageNotify) OnMontageNotify(Notify.Name);
@@ -317,11 +335,13 @@ void UAnimGraphInstance::UpdateMontages(float DeltaSeconds)
 			{
 				Montage.CurrentSectionIndex = NextSecIdx;
 				Montage.Position = std::clamp(Montage.Asset.Sections[NextSecIdx].StartTime, 0.0f, SeqLength);
+				Montage.bNotifyIncludeStart = true;
 			}
 			else if (Montage.Asset.bLoop)
 			{
 				const float Span = std::max(0.001f, SecEnd - SecStart);
 				Montage.Position = SecStart + std::fmod(NextPos - SecStart, Span);
+				Montage.bNotifyIncludeStart = true;
 			}
 			else
 			{

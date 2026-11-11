@@ -76,6 +76,7 @@ private:
 		float StopDuration = 0.15f;
 		float StopStartWeight = 1.0f;
 		bool bPlaying = false;
+		bool bNotifyIncludeStart = true;
 	};
 	FAnimGraphAsset Graph;
 	bool bUsePreviewGraph = false;
