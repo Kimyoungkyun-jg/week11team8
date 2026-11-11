@@ -52,6 +52,13 @@ void UScriptComponent::CallScript(const char* Name, AActor* Other)
 		Instance->Call(Name, Other);
 }
 
+void UScriptComponent::CallScript(const char* Name, float Value)
+{
+	AActor* OwnerActor = GetOwner();
+	if (Instance && bScriptStarted && OwnerActor && !OwnerActor->IsActorBeingDestroyed())
+		Instance->Call(Name, Value);
+}
+
 void UScriptComponent::EndPlay()
 {
 	if (Instance && bScriptStarted)

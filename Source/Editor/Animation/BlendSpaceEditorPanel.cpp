@@ -463,12 +463,15 @@ void FBlendSpaceEditorPanel::DrawGraph()
 			bDirty = true; RebuildBlendSpace();
 		}
 	}
-	if (Hovered && ImGui::BeginDragDropTarget())
+	if (ImGui::BeginDragDropTarget())
 	{
 		if (const ImGuiPayload* Payload = ImGui::AcceptDragDropPayload(SequencePayload))
 		{
-			const ImVec2 Value = FromScreen(Mouse);
-			AddSample(static_cast<const char*>(Payload->Data), Value.x, Value.y);
+			if (InRect(Mouse, Min, Max))
+			{
+				const ImVec2 Value = FromScreen(Mouse);
+				AddSample(static_cast<const char*>(Payload->Data), Value.x, Value.y);
+			}
 		}
 		ImGui::EndDragDropTarget();
 	}
@@ -560,8 +563,17 @@ void FBlendSpaceEditorPanel::OnRender()
 		const ImVec2 Size = ImGui::GetContentRegionAvail();
 		Client.Resize(static_cast<uint32>(std::max(1.0f, Size.x)), static_cast<uint32>(std::max(1.0f, Size.y)));
 		ImGui::Image(Client.GetColorTarget()->GetSRV(), Size);
-		Client.TickInput(ImGui::GetIO().DeltaTime, ImGui::IsItemHovered() && ImGui::IsMouseDown(ImGuiMouseButton_Right),
-			ImGui::IsItemHovered(), static_cast<int32>(ImGui::GetIO().MouseWheel * 120), 4, 1);
+		const bool bHovered = ImGui::IsItemHovered();
+		const bool bCaptured = bHovered && ImGui::IsMouseDown(ImGuiMouseButton_Right);
+		float Wheel = ImGui::GetIO().MouseWheel;
+		// 우클릭으로 카메라를 잡은 동안 휠은 이동 속도를 바꾼다.
+		if (bCaptured && Wheel != 0.0f)
+		{
+			CameraSpeed = std::clamp(CameraSpeed + Wheel * 0.5f, 0.1f, 20.0f);
+			Wheel = 0.0f;
+		}
+		Client.TickInputFromImGui(ImGui::GetIO().DeltaTime, bCaptured, bHovered,
+			static_cast<int32>(Wheel * 120), 4.0f * CameraSpeed, 0.2f);
 	}
 	else ImGui::TextWrapped("Select a skeleton with a compatible skeletal mesh.");
 	ImGui::EndChild();

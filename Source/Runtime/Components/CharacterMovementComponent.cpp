@@ -16,8 +16,15 @@ UCharacterMovementComponent::UCharacterMovementComponent()
 
 void UCharacterMovementComponent::AddRootMotion(const FMatrix& Delta)
 {
+	if (IsLaunchActive()) return;
 	PendingRootMotion = Delta * PendingRootMotion;
 	bHasPendingRootMotion = true;
+}
+
+void UCharacterMovementComponent::Launch(const FVector& LaunchVelocity)
+{
+	PendingLaunchVelocity = LaunchVelocity;
+	bHasPendingLaunch = true;
 }
 
 bool UCharacterMovementComponent::FindFloor(float Distance, FHitResult& OutHit) const
@@ -60,7 +67,20 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 	Super::TickComponent(DeltaTime);
 	auto* Pawn = Cast<APawn>(GetOwner());
 	if (!Pawn || !UpdatedComponent || !GetWorld() || !std::isfinite(DeltaTime) || DeltaTime <= 0.0f) return;
+	bool bJustLaunched = bHasPendingLaunch;
+	if (bJustLaunched)
+	{
+		Velocity = PendingLaunchVelocity;
+		PendingLaunchVelocity = FVector::ZeroVector;
+		bHasPendingLaunch = false;
+		bLaunchActive = true;
+		MovementMode = ECharacterMovementMode::Falling;
+		bJumpRequested = false;
+		PendingRootMotion = FMatrix::Identity;
+		bHasPendingRootMotion = false;
+	}
 	FVector Input = Pawn->ConsumeMovementInputVector();
+	if (bLaunchActive) Input = FVector::ZeroVector;
 	const bool bApplyRootMotion = bHasPendingRootMotion;
 	if (bApplyRootMotion)
 	{
@@ -75,7 +95,7 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 		const float Step = std::min(Remaining, 1.0f / 60.0f);
 		Remaining -= Step;
 		FHitResult Floor;
-		if (Velocity.Z <= 0.0f && FindFloor(0.12f, Floor))
+		if (!bJustLaunched && Velocity.Z <= 0.0f && FindFloor(0.12f, Floor))
 		{
 			MovementMode = ECharacterMovementMode::Walking;
 			Velocity.Z = 0.0f;
@@ -110,6 +130,7 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 			if (Inward < 0.0f) Velocity -= Normal * Inward;
 			if (Normal.Z > 0.7f && Delta.Z < 0.0f) MovementMode = ECharacterMovementMode::Walking;
 		}
+		bJustLaunched = false;
 	}
 	if (bApplyRootMotion)
 	{
@@ -125,6 +146,7 @@ void UCharacterMovementComponent::TickComponent(float DeltaTime)
 		PendingRootMotion = FMatrix::Identity;
 		bHasPendingRootMotion = false;
 	}
+	if (bLaunchActive && IsMovingOnGround() && Velocity.SizeSquared() <= 0.01f) bLaunchActive = false;
 	UpdateComponentVelocity();
 }
 
@@ -134,5 +156,8 @@ void UCharacterMovementComponent::StopMovementImmediately()
 	bJumpRequested = false;
 	PendingRootMotion = FMatrix::Identity;
 	bHasPendingRootMotion = false;
+	PendingLaunchVelocity = FVector::ZeroVector;
+	bHasPendingLaunch = false;
+	bLaunchActive = false;
 	if (auto* Pawn = Cast<APawn>(GetOwner())) Pawn->ConsumeMovementInputVector();
 }

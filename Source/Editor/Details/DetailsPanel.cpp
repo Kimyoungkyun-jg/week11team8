@@ -1144,6 +1144,7 @@ namespace
 			if (ImGui::InputText(Label.c_str(), Buffer, sizeof(Buffer)))
 			{
 				*Value = Buffer;
+				bChanged = true;
 			}
 			if (CustomFont) ImGui::PopFont();
 			break;

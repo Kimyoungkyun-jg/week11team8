@@ -37,7 +37,7 @@ private:
 	float FogDensity = 0.02f;
 	UPROPERTY(EditAnywhere)
 	float FogHeightFalloff = 0.02f;
-	UPROPERTY(EditAnywhere, Type=Color)
+	UPROPERTY(EditAnywhere, Type=LinearColor)
 	FVector4 FogColor = FVector4(0.5f, 0.6f, 0.7f, 1.0f);
 	UPROPERTY(EditAnywhere)
 	float StartDistance = 0.0f;

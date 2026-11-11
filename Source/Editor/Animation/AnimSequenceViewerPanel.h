@@ -45,6 +45,7 @@ private:
 	ASkyLightActor* SkyLight = nullptr;
 	ADirectionalLightActor* DirectionalLight = nullptr;
 	FEditorViewportClient Client;
+	float CameraSpeed = 1.0f;
 	TUniquePtr<FSkyboxRenderer> Skybox;
 	TArray<TArray<int32>> BoneChildren;
 	int32 SelectedBone = -1;

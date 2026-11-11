@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <fstream>
 #include <iomanip>
 #include <map>
 #include <regex>
@@ -575,6 +576,8 @@ public:
 	bool CookAnimation(const FRig& Rig, FbxAnimStack* Stack, int StackIndex, int StackCount);
 	FString Material(FbxSurfaceMaterial* SourceMaterial);
 	FString Texture(FbxProperty Property);
+	FString TextureFile(const fs::path& Path, const FString& Label, const FString& Identity);
+	void ApplySidecarMaterial(FbxSurfaceMaterial* SourceMaterial, FFbxAssetData& Asset);
 	FString OpacityTexture(FbxSurfaceMaterial* Material, const FString& DiffuseKey, const FString& OpacityKey, const FString& Identity, ESamplerState Sampler);
 	FSurfaceUV SurfaceUV(FbxSurfaceMaterial* SourceMaterial, FbxMesh* Mesh, const FString& Context);
 	bool CookMesh(const FOutputGroup& Group);
@@ -1446,26 +1449,34 @@ FString FImport::Texture(FbxProperty Property)
 		Warn("Texture file not found: " + FString(T->GetFileName()));
 		return {};
 	}
-	// 입력 텍스처도 원본과 같이 외부에서 읽을 수 있다. 결과에는 픽셀/압축 블록만 남긴다.
-	SourceTexture = FbxPath::ToString(fs::canonical(FbxPath::FromString(SourceTexture)));
-	const FString TextureKey = SourceTexture;
-	if (auto It = Textures.find(Lower(TextureKey)); It != Textures.end())
+	// 임시 내장 경로 대신 소스 FBX 안의 논리 이름으로 출력 이름을 고정한다.
+	int TextureIndex = 0;
+	for (; TextureIndex < Scene->GetTextureCount() && Scene->GetTexture(TextureIndex) != T; ++TextureIndex)
 	{
-		return It->second;
 	}
+	const FString Identity = "Texture:" + FString(T->GetName()) + "[" + std::to_string(TextureIndex) + "]/" + FbxPath::ToString(FbxPath::FromString(T->GetFileName()).filename());
+	return TextureFile(FbxPath::FromString(SourceTexture), T->GetName(), Identity);
+}
+
+FString FImport::TextureFile(const fs::path& Path, const FString& Label, const FString& Identity)
+{
+	// 입력 텍스처도 원본과 같이 외부에서 읽을 수 있다. 결과에는 픽셀/압축 블록만 남긴다.
+	std::error_code Ec;
+	const fs::path Canonical = fs::canonical(Path, Ec);
+	if (Ec || !fs::is_regular_file(Canonical))
+	{
+		Warn("Texture file not found: " + FbxPath::ToString(Path));
+		return {};
+	}
+	const FString SourceTexture = FbxPath::ToString(Canonical);
+	if (auto It = Textures.find(Lower(SourceTexture)); It != Textures.end()) return It->second;
 	FImageData Image = ImageLoader::LoadAuto(SourceTexture);
 	if (!Image.IsValid())
 	{
 		Warn("Texture format is not supported by the existing image loader: " + SourceTexture);
 		return {};
 	}
-	// 임시 내장 경로 대신 소스 FBX 안의 논리 이름으로 출력 이름을 고정한다.
-	int TextureIndex = 0;
-	for (; TextureIndex < Scene->GetTextureCount() && Scene->GetTexture(TextureIndex) != T; ++TextureIndex)
-	{
-	}
-	FString Identity = "Texture:" + FString(T->GetName()) + "[" + std::to_string(TextureIndex) + "]/" + FbxPath::ToString(FbxPath::FromString(T->GetFileName()).filename());
-	const FString Key = MakeKey("T", T->GetName(), Identity);
+	const FString Key = MakeKey("T", Label, Identity);
 	if (Key.empty())
 	{
 		return {};
@@ -1473,8 +1484,93 @@ FString FImport::Texture(FbxProperty Property)
 	auto Asset = Data(EFbxAssetType::Texture2D, Key, Identity);
 	Asset.Texture = std::move(Image);
 	Output.Add(std::move(Asset));
-	Textures[Lower(TextureKey)] = Key;
+	Textures[Lower(SourceTexture)] = Key;
 	return Key;
+}
+
+void FImport::ApplySidecarMaterial(FbxSurfaceMaterial* SourceMaterial, FFbxAssetData& Asset)
+{
+	const FString MaterialName = SourceMaterial->GetName();
+	FString DirectDiffuse, DirectNormal;
+	if (MaterialName.starts_with("MI_"))
+	{
+		const FString TextureStem = "T_" + MaterialName.substr(3);
+		const auto ReadDirect = [&](const FString& Suffix, const FString& Usage) -> FString
+		{
+			for (const char* Extension : { ".png", ".PNG" })
+			{
+				const fs::path Path = Source.parent_path() / FbxPath::FromString(TextureStem + Suffix + Extension);
+				if (fs::is_regular_file(Path))
+					return TextureFile(Path, MaterialName + "_" + Usage,
+						"TextureFile:" + MaterialName + "/" + Usage + "/" + FbxPath::ToString(Path.filename()));
+			}
+			return {};
+		};
+		DirectDiffuse = ReadDirect("_D", "BaseColor");
+		DirectNormal = ReadDirect("_N", "Normal");
+		if (!DirectDiffuse.empty())
+		{
+			Asset.Material.DiffuseTexture = DirectDiffuse;
+			Asset.Material.DiffuseOrFactor.X = Asset.Material.DiffuseOrFactor.Y = Asset.Material.DiffuseOrFactor.Z = 1.0f;
+		}
+		if (!DirectNormal.empty()) Asset.Material.NormalTexture = DirectNormal;
+	}
+	if (!DirectDiffuse.empty() && !DirectNormal.empty()) return;
+	const fs::path GltfPath = Source.parent_path() / FbxPath::FromString(MaterialName + ".gltf");
+	if (!fs::is_regular_file(GltfPath)) return;
+	std::ifstream In(GltfPath);
+	const json Gltf = json::parse(In, nullptr, false);
+	if (!Gltf.is_object() || !Gltf.contains("materials") || !Gltf["materials"].is_array() || Gltf["materials"].empty() ||
+		!Gltf.contains("textures") || !Gltf["textures"].is_array() || !Gltf.contains("images") || !Gltf["images"].is_array())
+	{
+		Warn("Invalid glTF material: " + FbxPath::ToString(GltfPath));
+		return;
+	}
+	const json* Material = nullptr;
+	for (const json& Candidate : Gltf["materials"])
+	{
+		if (!Candidate.is_object() || !Candidate.contains("name") || !Candidate["name"].is_string()) continue;
+		const FString Name = Candidate["name"].get<FString>();
+		if (Name == MaterialName || Name.starts_with(MaterialName + "_")) { Material = &Candidate; break; }
+	}
+	if (!Material)
+	{
+		Warn("glTF material name does not match FBX slot: " + MaterialName);
+		return;
+	}
+	const auto ReadTexture = [&](const json& Reference, const FString& Usage) -> FString
+	{
+		if (!Reference.is_object() || !Reference.contains("index") || !Reference["index"].is_number_integer()) return {};
+		if ((Reference.contains("texCoord") && (!Reference["texCoord"].is_number_integer() || Reference["texCoord"].get<int>() != 0)) ||
+			(Reference.contains("extensions") && Reference["extensions"].is_object() && Reference["extensions"].contains("KHR_texture_transform")))
+		{
+			Warn("glTF texture needs an unsupported UV set or transform; skipped: " + MaterialName + "/" + Usage);
+			return {};
+		}
+		const int TextureIndex = Reference["index"].get<int>();
+		if (TextureIndex < 0 || static_cast<size_t>(TextureIndex) >= Gltf["textures"].size()) return {};
+		const json& Texture = Gltf["textures"][TextureIndex];
+		if (!Texture.is_object() || !Texture.contains("source") || !Texture["source"].is_number_integer()) return {};
+		const int ImageIndex = Texture["source"].get<int>();
+		if (ImageIndex < 0 || static_cast<size_t>(ImageIndex) >= Gltf["images"].size()) return {};
+		const json& Image = Gltf["images"][ImageIndex];
+		if (!Image.is_object() || !Image.contains("uri") || !Image["uri"].is_string()) return {};
+		const fs::path Uri = FbxPath::FromString(Image["uri"].get<FString>());
+		if (Uri.is_absolute() || Uri.has_root_name()) return {};
+		for (const auto& Part : Uri) if (Part == "..") return {};
+		return TextureFile(GltfPath.parent_path() / Uri, MaterialName + "_" + Usage,
+			"GLTFTexture:" + MaterialName + "/" + Usage + "/" + FbxPath::ToString(Uri));
+	};
+	const json Pbr = Material->value("pbrMetallicRoughness", json::object());
+	const FString Diffuse = DirectDiffuse.empty()
+		? ReadTexture(Pbr.is_object() ? Pbr.value("baseColorTexture", json::object()) : json::object(), "BaseColor") : DirectDiffuse;
+	if (!Diffuse.empty())
+	{
+		Asset.Material.DiffuseTexture = Diffuse;
+		Asset.Material.DiffuseOrFactor.X = Asset.Material.DiffuseOrFactor.Y = Asset.Material.DiffuseOrFactor.Z = 1.0f;
+	}
+	const FString Normal = DirectNormal.empty() ? ReadTexture(Material->value("normalTexture", json::object()), "Normal") : DirectNormal;
+	if (!Normal.empty()) Asset.Material.NormalTexture = Normal;
 }
 
 FString FImport::OpacityTexture(FbxSurfaceMaterial* Material, const FString& DiffuseKey, const FString& OpacityKey,
@@ -1703,6 +1799,7 @@ FString FImport::Material(FbxSurfaceMaterial* M)
 		return {};
 	}
 	Asset.Material.BlendState = Asset.Material.DiffuseOrFactor.W < 1.f ? EBlendState::AlphaBlend : EBlendState::Opaque;
+	ApplySidecarMaterial(M, Asset);
 	const FString OpacityKey = Texture(M->FindProperty(FbxSurfaceMaterial::sTransparentColor));
 	if (!Error.empty())
 	{

@@ -8,6 +8,8 @@
 
 ADecalActor::ADecalActor()
 {
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 	DecalComponent = CreateDefaultSubobject<UDecalComponent>(
 		"DecalComponent"
 	);
@@ -72,4 +74,16 @@ ADecalActor::ADecalActor()
 
 	BillboardComponent->SetMaterial(
 		0, IconMaterial);
+}
+
+void ADecalActor::SetTemporaryLifetime(float Seconds)
+{
+	RemainingLifetime = Seconds;
+	PrimaryActorTick.SetTickFunctionEnable(Seconds > 0.0f);
+}
+
+void ADecalActor::Tick(float DeltaTime)
+{
+	RemainingLifetime -= DeltaTime;
+	if (RemainingLifetime <= 0.0f) Destroy();
 }

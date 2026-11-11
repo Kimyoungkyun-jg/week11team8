@@ -6,7 +6,10 @@
 
 UAnimInstance::~UAnimInstance()
 {
-	for (FAnimNode_Base* Node : OwnedNodes) delete Node;
+	for (FAnimNode_Base* Node : OwnedNodes)
+	{
+		delete Node;
+	}
 }
 
 USkeletalMeshComponent* UAnimInstance::GetOwningComponent() const
@@ -28,18 +31,29 @@ APawn* UAnimInstance::TryGetPawnOwner() const
 void UAnimInstance::InitializeAnimation()
 {
 	RootNode = nullptr;
-	for (FAnimNode_Base* Node : OwnedNodes) delete Node;
+	for (FAnimNode_Base* Node : OwnedNodes)
+	{
+		delete Node;
+	}
 	OwnedNodes.Reset();
 	NativeInitializeAnimation();
-	if (RootNode) RootNode->Reset();
+	if (RootNode)
+	{
+		RootNode->Reset();
+	}
 }
 
 void UAnimInstance::UpdateAnimation(float DeltaSeconds)
 {
+	//입력 변수 계산
 	NativeUpdateAnimation(DeltaSeconds);
 	USkeletalMeshComponent* Component = GetOwningComponent();
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
-	if (Mesh && Mesh->Skeleton && RootNode) RootNode->Update(DeltaSeconds);
+	if (Mesh && Mesh->Skeleton && RootNode)
+	{
+		//
+		RootNode->Update(DeltaSeconds);
+	}
 }
 
 bool UAnimInstance::EvaluatePose(TArray<FMatrix>& OutLocalPose)
@@ -47,9 +61,15 @@ bool UAnimInstance::EvaluatePose(TArray<FMatrix>& OutLocalPose)
 	OutLocalPose.Reset();
 	USkeletalMeshComponent* Component = GetOwningComponent();
 	USkeletalMesh* Mesh = Component ? Component->GetSkeletalMesh() : nullptr;
-	if (!Mesh || !Mesh->Skeleton) return false;
+	if (!Mesh || !Mesh->Skeleton)
+	{
+		return false;
+	}
 	TArray<FAnimBoneTransform> Pose;
-	if (!RootNode || !RootNode->Evaluate(Mesh->Skeleton, Pose) || Pose.Num() != Mesh->Skeleton->RefSkeleton.GetNum()) return false;
+	if (!RootNode || !RootNode->Evaluate(Mesh->Skeleton, Pose) || Pose.Num() != Mesh->Skeleton->RefSkeleton.GetNum())
+	{
+		return false;
+	}
 	OutLocalPose.SetNum(Pose.Num());
 	for (int32 Index = 0; Index < Pose.Num(); ++Index)
 	{

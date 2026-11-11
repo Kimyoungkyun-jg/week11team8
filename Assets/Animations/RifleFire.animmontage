@@ -1,0 +1,25 @@
+{
+	"Type": "AnimMontage",
+	"Version": 1,
+	"Skeleton": "Models/UnrealModel/SKEL_SKM_Quinn_Simple_root.fbxbin",
+	"Sequence": "Models/UnrealModel/AS_MF_Rifle_Fire.fbxbin",
+	"Slot": "UpperBody",
+	"PlayRate": 1.0,
+	"BlendInTime": 0.05,
+	"BlendOutTime": 0.12,
+	"Loop": false,
+	"Sections": [
+		{
+			"Name": "Default",
+			"StartTime": 0.0,
+			"EndTime": 0.46666667,
+			"NextSection": ""
+		}
+	],
+	"Notifies": [
+		{
+			"Name": "Fire",
+			"Time": 0.05
+		}
+	]
+}

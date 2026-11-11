@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Asset/AnimGraphAsset.h"
 #include "Asset/AnimTransform.h"
 #include "Containers/Array.h"
 #include "Core/EngineString.h"
 
 #include <functional>
 
+class UAnimGraphInstance;
 class UAnimSequence;
 class UBlendSpace;
 class USkeleton;
@@ -109,11 +111,74 @@ struct FAnimNode_StateMachine : FAnimNode_Base
 	float TransitionElapsed = 0.0f;
 	float TransitionDuration = 0.0f;
 	std::function<void()> TransitionOnCompleted;
+	// 섞는 도중에 새 전환이 들어오면 From으로 쓸 노드가 없다. 그때 마지막으로 내보낸 포즈를 고정해 From으로 쓴다.
+	TArray<FAnimBoneTransform> LastPose;
+	TArray<FAnimBoneTransform> SnapshotPose;
+	bool bBlendFromSnapshot = false;
 
 	int32 AddState(const FString& Name, FAnimNode_Base* PoseNode);
+	int32 FindState(const FString& Name) const;
 	bool AddTransition(int32 FromState, int32 ToState, std::function<bool()> Condition,
 		float BlendTime, std::function<void()> OnCompleted = {}, std::function<void()> OnStarted = {});
+	// 조건 검사 없이 바깥(스크립트)에서 바로 전환을 건다. 이미 그 상태로 가는 중이면 bRestart일 때만 처음부터 다시 튼다.
+	bool RequestTransition(int32 ToState, float BlendTime, bool bRestart = false);
+	bool IsInTransition() const { return NextState >= 0; }
+	// 전환 중이면 들어가는 중인 상태, 아니면 현재 상태
+	int32 GetTargetState() const { return NextState >= 0 ? NextState : CurrentState; }
 	void FinishTransition();
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_LayeredBoneBlend : FAnimNode_Base
+{
+	FAnimNode_Base* BasePose = nullptr;
+	FAnimNode_Base* BlendPose = nullptr;
+	FString StartBoneName = "spine_01";
+	float Alpha = 1.0f;
+	bool bMeshSpaceRotationBlend = false;
+	bool bGraphManaged = false;
+
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_Slot : FAnimNode_Base
+{
+	FAnimNode_Base* Source = nullptr;
+	FString SlotName = "UpperBody";
+	UAnimGraphInstance* GraphInstance = nullptr;
+	bool bGraphManaged = false;
+
+	void Reset() override;
+	void Update(float DeltaSeconds) override;
+	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
+	bool ConsumeRootMotion(FMatrix& OutDelta) override;
+};
+
+struct FAnimNode_AimOffset1D : FAnimNode_Base
+{
+	struct FSampleEntry
+	{
+		float Pitch = 0.0f;
+		UAnimSequence* Sequence = nullptr;
+		int32 FrameIndex = 0;
+	};
+
+	FAnimNode_Base* BasePose = nullptr;
+	FAimOffsetAsset Asset;
+	UAnimSequence* BaseSequence = nullptr;
+	TArray<FSampleEntry> Samples;
+	float Pitch = 0.0f;
+	float Alpha = 1.0f;
+	bool bGraphManaged = false;
+
+	bool SamplePoseAtPitch(const USkeleton* Skeleton, float SamplePitch, TArray<FAnimBoneTransform>& OutPose) const;
+	bool EvaluateReferencePose(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) const;
 	void Reset() override;
 	void Update(float DeltaSeconds) override;
 	bool Evaluate(const USkeleton* Skeleton, TArray<FAnimBoneTransform>& OutPose) override;
