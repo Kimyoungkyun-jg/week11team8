@@ -26,7 +26,7 @@ public:
 	void SetOpenMontageCallback(std::function<void(const FString&)> Callback) { OnOpenMontage = std::move(Callback); }
 	void SetOpenAimOffsetCallback(std::function<void(const FString&)> Callback) { OnOpenAimOffset = std::move(Callback); }
 	void NotifyAnimationAssetSaved() { bPreviewRefreshRequested = true; }
-	void NewAsset(const FString& InPath);
+	void NewAsset(const FString& InPath, const FString& InSkeletonKey);
 	void RenderPreview(UEditorEngine* Engine);
 	void Release();
 	~FAnimGraphEditorPanel() override { Release(); }

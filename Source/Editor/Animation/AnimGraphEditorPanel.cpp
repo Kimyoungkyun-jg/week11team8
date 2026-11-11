@@ -220,7 +220,7 @@ void FAnimGraphEditorPanel::NewAimOffsetAsset(const FString& InPath)
 	OpenAimOffsetAsset(InPath);
 }
 
-void FAnimGraphEditorPanel::NewAsset(const FString& InPath)
+void FAnimGraphEditorPanel::NewAsset(const FString& InPath, const FString& InSkeletonKey)
 {
 	// 스켈레톤은 호출자가 고른다. 로드할 수 없으면 만들지 않는다.
 	USkeleton* Skeleton = UAssetManager::LoadSkeleton(InSkeletonKey);
