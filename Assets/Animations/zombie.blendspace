@@ -1,21 +1,21 @@
 {
-  "Type": "BlendSpace1D",
-  "Skeleton": "Models/Zombie/SKEL_Zombie Idle_mixamorig_Hips.fbxbin",
-  "XAxis": {
-    "Name": "Speed",
-    "Min": 0.0,
-    "Max": 400.0,
-    "Divisions": 4,
-    "Snap": true
-  },
   "Samples": [
     {
-      "X": 0.0,
-      "Sequence": "Models/Zombie/AS_Zombie Idle.fbxbin"
+      "Sequence": "Models/Zombie/AS_Zombie Idle.fbxbin",
+      "X": 0.0
     },
     {
-      "X": 400.0,
-      "Sequence": "Models/Zombie/AS_Zombie Running_IdleSkeleton.fbxbin"
+      "Sequence": "Models/Zombie/AS_Zombie Running.fbxbin",
+      "X": 400.0
     }
-  ]
+  ],
+  "Skeleton": "Models/Zombie/SKEL_Zombie Idle_mixamorig_Hips.fbxbin",
+  "Type": "BlendSpace1D",
+  "XAxis": {
+    "Divisions": 4,
+    "Max": 400.0,
+    "Min": 0.0,
+    "Name": "Speed",
+    "Snap": true
+  }
 }
