@@ -68,12 +68,46 @@ UAnimNotify* UAnimSequence::AddNotify(const FString& EventName, const FString& N
 	return Notify;
 }
 
+void UAnimSequence::ClampNotifyStateRange(float& InOutStart, float& InOutDuration) const
+{
+	const float Length = DataModel ? DataModel->PlayLength : std::max(0.0f, InOutStart + InOutDuration);
+	const float MinDuration = std::min(GetMinNotifyStateDuration(), Length);
+	InOutDuration = std::isfinite(InOutDuration) ? std::max(InOutDuration, MinDuration) : MinDuration;
+	InOutStart = std::isfinite(InOutStart) ? std::clamp(InOutStart, 0.0f, std::max(0.0f, Length - MinDuration)) : 0.0f;
+	InOutDuration = std::min(InOutDuration, std::max(MinDuration, Length - InOutStart));
+}
+
+UAnimNotifyState* UAnimSequence::AddNotifyState(const FString& EventName, const FString& StateClassName, float StartTime, float Duration)
+{
+	UClass* StateClass = FindClass(StateClassName);
+	if (!StateClass || !StateClass->IsChildOf(UAnimNotifyState::StaticClass()) || !StateClass->Constructor)
+	{
+		HTR_LOG(Warning, "[AnimNotify] Cannot add '{}': '{}' is not a concrete UAnimNotifyState class", EventName, StateClassName);
+		return nullptr;
+	}
+	UAnimNotifyState* State = NewObject<UAnimNotifyState>(this, StateClass);
+	if (!State)
+	{
+		return nullptr;
+	}
+	ClampNotifyStateRange(StartTime, Duration);
+	FAnimNotifyEvent Event;
+	Event.Name = EventName;
+	Event.TriggerTime = StartTime;
+	Event.Duration = Duration;
+	Event.NotifyState = State;
+	Notifies.Add(Event);
+	return State;
+}
+
 void UAnimSequence::ExportNotifies(TArray<FAnimNotifyRecord>& OutRecords) const
 {
 	OutRecords.Reset();
 	for (const FAnimNotifyEvent& Event : Notifies)
 	{
-		if (!Event.Notify)
+		// 구간형과 점 Notify 모두 저장한다. 둘 다 없는 항목만 건너뛴다.
+		UObject* Object = Event.IsState() ? static_cast<UObject*>(Event.NotifyState) : static_cast<UObject*>(Event.Notify);
+		if (!Object)
 		{
 			continue;
 		}
@@ -81,10 +115,11 @@ void UAnimSequence::ExportNotifies(TArray<FAnimNotifyRecord>& OutRecords) const
 		Record.Name = Event.Name;
 		Record.TriggerTime = Event.TriggerTime;
 		Record.TriggerWeightThreshold = Event.TriggerWeightThreshold;
-		Record.ClassName = Event.Notify->GetClass()->Name;
+		Record.Duration = Event.IsState() ? Event.Duration : 0.0f;
+		Record.ClassName = Object->GetClass()->Name;
 
 		json Properties = json::object();
-		Event.Notify->Serialize(Properties, false);
+		Object->Serialize(Properties, false);
 		// 속성 문자열에 잘못된 UTF-8이 있어도 저장이 예외로 끝나지 않게 대체 문자로 바꾼다.
 		Record.Properties = Properties.dump(-1, ' ', false, json::error_handler_t::replace);
 		OutRecords.Add(std::move(Record));
@@ -96,7 +131,17 @@ void UAnimSequence::ImportNotifies(const TArray<FAnimNotifyRecord>& Records)
 	Notifies.Reset();
 	for (const FAnimNotifyRecord& Record : Records)
 	{
-		UAnimNotify* Notify = AddNotify(Record.Name, Record.ClassName, Record.TriggerTime);
+		// 클래스가 UAnimNotifyState이면 구간형, 아니면 점 Notify로 만든다.
+		const UClass* RecordClass = FindClass(Record.ClassName);
+		UObject* Notify = nullptr;
+		if (RecordClass && RecordClass->IsChildOf(UAnimNotifyState::StaticClass()))
+		{
+			Notify = AddNotifyState(Record.Name, Record.ClassName, Record.TriggerTime, Record.Duration);
+		}
+		else
+		{
+			Notify = AddNotify(Record.Name, Record.ClassName, Record.TriggerTime);
+		}
 		if (!Notify)
 		{
 			continue;
@@ -155,6 +200,18 @@ void UAnimSequence::GetNotifies(float PreviousTime, float CurrentTime, int32 Loo
 		const int32 FirstAdded = OutNotifies.Num();
 		for (const FAnimNotifyEvent& Event : Notifies)
 		{
+			if (Event.IsState())
+			{
+				// 구간형: 구간 [TriggerTime, TriggerTime + Duration]이 이번 구간과 겹치면 올린다.
+				// 이미 끝난 구간(끝이 Start 이하)은 올리지 않는다. 끝이 이번 구간 안이면 bStateEnds를 켠다.
+				const float StateEnd = Event.TriggerTime + Event.Duration;
+				if (StateEnd > Start && Event.TriggerTime <= End)
+				{
+					OutNotifies.Add(Event);
+					OutNotifies.Last().bStateEnds = StateEnd <= End;
+				}
+				continue;
+			}
 			const bool bAfterStart = bInclusiveStart ? Event.TriggerTime >= Start : Event.TriggerTime > Start;
 			if (bAfterStart && Event.TriggerTime <= End)
 			{

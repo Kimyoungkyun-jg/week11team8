@@ -18,7 +18,8 @@ namespace
 // FbxBakeMinVersion부터 FbxBakeVersion까지는 읽을 수 있다. 읽을 때 Ar.Version으로 새 필드를 건너뛰고, 저장은 항상 최신 버전으로 한다.
 // 이전 버전을 읽을 수 없게 되는 변경(필드 순서·의미 변경)이면 FbxBakeMinVersion도 올리고 에디터에서 재임포트한다.
 // 6: AnimSequence 끝에 Notify 목록 추가
-constexpr uint32 FbxBakeVersion = 6;
+// 7: Notify 항목에 Duration 추가 (구간형 Notify State). 6 이하 파일은 Duration 0으로 읽는다.
+constexpr uint32 FbxBakeVersion = 7;
 constexpr uint32 FbxBakeMinVersion = 5;
 constexpr uint32 MaxNotifies = 4096;
 constexpr uint32 MaxElements = 1000000;
@@ -322,6 +323,11 @@ void Serialize(FBinary& Ar, FFbxAssetData& Data)
 				Ar.String(Notify.Name);
 				Ar.Pod(Notify.TriggerTime);
 				Ar.Pod(Notify.TriggerWeightThreshold);
+				// 버전 7부터 구간형의 길이를 저장한다. 이전 버전 파일은 0으로 읽는다.
+				if (Ar.Version >= 7)
+				{
+					Ar.Pod(Notify.Duration);
+				}
 				Ar.String(Notify.ClassName);
 				Ar.String(Notify.Properties);
 				if (!Ar.bGood)
@@ -514,7 +520,7 @@ bool FFbxAssetData::Validate(FString& Error) const
 		}
 		for (const FAnimNotifyRecord& Notify : A.Notifies)
 		{
-			if (Notify.ClassName.empty() || !std::isfinite(Notify.TriggerTime) || Notify.TriggerTime < 0.f || !std::isfinite(Notify.TriggerWeightThreshold))
+			if (Notify.ClassName.empty() || !std::isfinite(Notify.TriggerTime) || Notify.TriggerTime < 0.f || !std::isfinite(Notify.TriggerWeightThreshold) || !std::isfinite(Notify.Duration) || Notify.Duration < 0.f)
 			{
 				Error = "Invalid animation notify: " + Notify.Name;
 				return false;

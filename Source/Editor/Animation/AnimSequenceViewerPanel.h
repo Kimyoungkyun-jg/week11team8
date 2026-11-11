@@ -62,6 +62,12 @@ private:
 	// Notify 편집 상태. 인덱스는 Sequence->Notifies 기준이다.
 	int32 SelectedNotify = -1;
 	int32 DraggingNotify = -1;
+	// 끌고 있는 항목의 동작. 점 Notify는 Move, 막대(Notify State)는 이동 또는 양끝 크기 조절이다.
+	enum class ENotifyDragMode { None, Move, ResizeStart, ResizeEnd };
+	ENotifyDragMode DragMode = ENotifyDragMode::None;
+	// Move: 잡은 위치와 시작 시각의 차이(초). ResizeStart: 고정해 두는 끝 시각(초).
+	float DragGrabOffset = 0.0f;
+	float DragFixedEnd = 0.0f;
 	// 우클릭한 위치(초)와 대상 Notify. 팝업이 열려 있는 동안 유지한다.
 	float NotifyPopupTime = 0.0f;
 	int32 NotifyPopupTarget = -1;

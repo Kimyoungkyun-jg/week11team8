@@ -28,6 +28,14 @@ public:
 	// 속성은 돌려받은 객체에 설정한다. 저장·로드와 에디터 편집도 이 함수로 Notify를 만든다.
 	UAnimNotify* AddNotify(const FString& EventName, const FString& NotifyClassName, float TriggerTime);
 
+	// 구간형(Notify State)을 추가한다. 클래스가 없거나 추상이거나 UAnimNotifyState가 아니면 nullptr.
+	// 시작은 [0, PlayLength], 길이는 GetMinNotifyStateDuration() 이상이고 끝이 PlayLength를 넘지 않게 맞춘다.
+	UAnimNotifyState* AddNotifyState(const FString& EventName, const FString& StateClassName, float StartTime, float Duration);
+	// 구간형의 최소 길이(초). 구간이 한 프레임보다 짧아져 시작과 끝이 같은 프레임에 들지 않게 하는 하한이다.
+	static float GetMinNotifyStateDuration() { return 1.0f / 120.0f; }
+	// 시작 시각과 길이를 시퀀스 범위로 맞춘다. 에디터에서 끌거나 값을 입력할 때도 이 함수로 맞춘다.
+	void ClampNotifyStateRange(float& InOutStart, float& InOutDuration) const;
+
 	// 저장 형식(클래스 이름 + 속성 JSON)과 Notify 객체 사이를 변환한다.
 	// ImportNotifies는 기존 Notifies를 비우고 레코드로 다시 만든다. 알 수 없는 클래스의 레코드는 경고를 남기고 건너뛴다.
 	// 시간은 DataModel이 있으면 [0, PlayLength]로 맞춘다. DataModel을 먼저 설정한 뒤 호출한다.

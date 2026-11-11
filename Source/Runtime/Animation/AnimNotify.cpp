@@ -66,3 +66,33 @@ void UAnimNotify_PlaySound::Notify(const FAnimNotifyContext& Context)
 		UGameplayStatics::PlaySound2D(World, Sound, Volume * Context.Weight, Pitch, 0.0f, true);
 	}
 }
+
+namespace
+{
+FString DescribeStateEvent(const FAnimNotifyContext& Context)
+{
+	const FString SequencePath = Context.Sequence ? Context.Sequence->GetPath() : FString("None");
+	const FString EventName = Context.Event ? Context.Event->Name : FString("None");
+	const float Start = Context.Event ? Context.Event->TriggerTime : 0.0f;
+	const float Duration = Context.Event ? Context.Event->Duration : 0.0f;
+	return std::format("'{}' {:.3f}s~{:.3f}s weight {:.2f} ({})", EventName, Start, Start + Duration, Context.Weight, SequencePath);
+}
+}
+
+void UAnimNotifyState_Log::NotifyBegin(const FAnimNotifyContext& Context)
+{
+	HTR_LOG(Info, "[AnimNotifyState] Begin {} {}", DescribeStateEvent(Context), Message);
+}
+
+void UAnimNotifyState_Log::NotifyTick(const FAnimNotifyContext& Context)
+{
+	if (bLogTick)
+	{
+		HTR_LOG(Info, "[AnimNotifyState] Tick  {} dt {:.4f}", DescribeStateEvent(Context), Context.DeltaTime);
+	}
+}
+
+void UAnimNotifyState_Log::NotifyEnd(const FAnimNotifyContext& Context)
+{
+	HTR_LOG(Info, "[AnimNotifyState] End   {} {}{}", DescribeStateEvent(Context), Message, Context.bInterrupted ? " (interrupted)" : "");
+}

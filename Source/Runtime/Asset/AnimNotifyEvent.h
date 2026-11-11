@@ -3,6 +3,7 @@
 #include "Core/EngineString.h"
 
 class UAnimNotify;
+class UAnimNotifyState;
 class UAnimSequence;
 
 // 시퀀스의 특정 시각(초, 0~PlayLength)에 발생하는 이벤트
@@ -15,6 +16,15 @@ struct FAnimNotifyEvent
 	float TriggerWeightThreshold = 0.00001f;
 	// 호출할 Notify 객체. UAnimSequence가 Outer이고, 소멸은 엔진 종료 때 UObject와 함께 일괄 처리된다.
 	UAnimNotify* Notify = nullptr;
+	// 구간형(Notify State)이면 이 객체를 쓰고 Notify는 nullptr이다. TriggerTime이 시작, TriggerTime + Duration이 끝이다.
+	// 상태 객체는 시퀀스 에셋에 들어 있어 여러 컴포넌트가 공유하므로 호출 상태(시작했는지 등)를 들고 있지 않는다.
+	UAnimNotifyState* NotifyState = nullptr;
+	// NotifyState의 길이(초). Notify는 0이다.
+	float Duration = 0.0f;
+	// UAnimSequence::GetNotifies가 모은 복사본에만 채워진다. 이번에 모은 구간 안에서 구간형이 끝났는가.
+	bool bStateEnds = false;
+
+	bool IsState() const { return NotifyState != nullptr; }
 };
 
 // .fbxbin에 저장되는 Notify 한 건. UObject 없이 클래스 이름과 속성(JSON 문자열)만 들고 있다.
@@ -24,6 +34,8 @@ struct FAnimNotifyRecord
 	FString Name;
 	float TriggerTime = 0.0f;
 	float TriggerWeightThreshold = 0.00001f;
+	// 구간형(Notify State)의 길이(초). Notify는 0. 파일 버전 7부터 저장된다.
+	float Duration = 0.0f;
 	FString ClassName;
 	FString Properties;
 };
