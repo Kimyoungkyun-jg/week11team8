@@ -414,29 +414,26 @@ bool FAnimNode_LayeredBoneBlend::Evaluate(const USkeleton* Skeleton, TArray<FAni
 	}
 	for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
 	{
-		if (BranchMask[BoneIdx] != 0)
+		if (BranchMask[BoneIdx] == 0)
 		{
-			OutPose[BoneIdx].Position = FMath::Lerp(OutPose[BoneIdx].Position, BlendPoseOut[BoneIdx].Position, Weight);
-			if (!bMeshSpaceRotationBlend)
-				OutPose[BoneIdx].Rotation = FMath::Slerp(OutPose[BoneIdx].Rotation, BlendPoseOut[BoneIdx].Rotation, Weight);
-			OutPose[BoneIdx].Scale = FMath::Lerp(OutPose[BoneIdx].Scale, BlendPoseOut[BoneIdx].Scale, Weight);
-		}
-	}
-	if (bMeshSpaceRotationBlend)
-	{
-		for (int32 BoneIdx = 0; BoneIdx < NumBones; ++BoneIdx)
-		{
-			if (BranchMask[BoneIdx] == 0)
-			{
+			if (bMeshSpaceRotationBlend)
 				ResultCSRot[BoneIdx] = BaseCSRot[BoneIdx];
-				continue;
-			}
-			const int32 ParentIdx = Skeleton->RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
-			const FQuat BlendedCS = FQuat::Slerp(BaseCSRot[BoneIdx], BlendCSRot[BoneIdx], Weight).Normalized();
-			OutPose[BoneIdx].Rotation = ParentIdx >= 0 && ParentIdx < BoneIdx
-				? (ResultCSRot[ParentIdx].UnitInverse() * BlendedCS).Normalized() : BlendedCS;
-			ResultCSRot[BoneIdx] = BlendedCS;
+			continue;
 		}
+
+		OutPose[BoneIdx].Position = FMath::Lerp(OutPose[BoneIdx].Position, BlendPoseOut[BoneIdx].Position, Weight);
+		OutPose[BoneIdx].Scale = FMath::Lerp(OutPose[BoneIdx].Scale, BlendPoseOut[BoneIdx].Scale, Weight);
+		if (!bMeshSpaceRotationBlend)
+		{
+			OutPose[BoneIdx].Rotation = FMath::Slerp(OutPose[BoneIdx].Rotation, BlendPoseOut[BoneIdx].Rotation, Weight);
+			continue;
+		}
+
+		const int32 ParentIdx = Skeleton->RefSkeleton.RefBoneInfo[BoneIdx].ParentIndex;
+		const FQuat BlendedCS = FQuat::Slerp(BaseCSRot[BoneIdx], BlendCSRot[BoneIdx], Weight).Normalized();
+		OutPose[BoneIdx].Rotation = ParentIdx >= 0 && ParentIdx < BoneIdx
+			? (ResultCSRot[ParentIdx].UnitInverse() * BlendedCS).Normalized() : BlendedCS;
+		ResultCSRot[BoneIdx] = BlendedCS;
 	}
 	return true;
 }

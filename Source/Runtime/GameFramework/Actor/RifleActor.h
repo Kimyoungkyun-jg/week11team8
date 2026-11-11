@@ -1,10 +1,10 @@
 #pragma once
 
 #include "GameFramework/Actor.h"
-#include "Components/StaticMeshComponent.h"
 #include "RifleActor.generated.h"
 
 class AProjectileActor;
+class USkeletalMeshComponent;
 
 UCLASS()
 class ARifleActor : public AActor
@@ -15,11 +15,11 @@ public:
 	void EndPlay() override;
 
 	AProjectileActor* Fire(const FVector& CameraOrigin, const FVector& CameraDirection);
-	UStaticMeshComponent* GetStaticMeshComponent() const { return StaticMeshComponent; }
+	USkeletalMeshComponent* GetSkeletalMeshComponent() const { return SkeletalMeshComponent; }
 	const TArray<AProjectileActor*>& GetProjectiles() const { return Projectiles; }
 
 private:
-	UStaticMeshComponent* StaticMeshComponent = nullptr;
+	USkeletalMeshComponent* SkeletalMeshComponent = nullptr;
 	TArray<AProjectileActor*> Projectiles;
 
 	UPROPERTY(EditAnywhere)

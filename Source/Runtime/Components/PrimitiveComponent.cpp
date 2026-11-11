@@ -156,12 +156,16 @@ bool UPrimitiveComponent::TraceMesh(const FRay& WorldRay, const FStaticMeshData&
 
 	FRay LocalRay = ToLocalRay(WorldRay, WorldMatrix);
 	float T = FLT_MAX;
+	FVector LocalNormal;
 
-	if (!RayIntersectsMesh(LocalRay, Mesh, T)) return false;
+	if (!RayIntersectsMesh(LocalRay, Mesh, T, &LocalNormal)) return false;
 
 	OutResult.HitComponent = this;
 	OutResult.Distance = T;
 	OutResult.ImpactPoint = WorldRay.Origin + WorldRay.Direction * T;
+	FVector WorldNormal = WorldMatrix.Inverse().GetTransposed().TransformVector(LocalNormal).GetSafeNormal();
+	if (WorldNormal.Dot(WorldRay.Direction) > 0.0f) WorldNormal = -WorldNormal;
+	OutResult.ImpactNormal = OutResult.Normal = WorldNormal;
 
 	return true;
 }

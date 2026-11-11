@@ -2016,8 +2016,8 @@ void FAnimGraphEditorPanel::OnRender()
 	if (ImGui::Button("Save")) Save(); ImGui::SameLine();
 	if (ImGui::Button("Validate")) Graph.Validate(Status); ImGui::SameLine();
 	if (ImGui::Button("Montage Editor")) OpenMontageAsset(MontageEditPath); ImGui::SameLine();
-	if (ImGui::Button("AimOffset Editor")) OpenAimOffsetAsset(AimOffsetEditPath); ImGui::SameLine();
-	if (bDirty) ImGui::TextUnformatted("*");
+	if (ImGui::Button("AimOffset Editor")) OpenAimOffsetAsset(AimOffsetEditPath);
+	if (bDirty) { ImGui::SameLine(); ImGui::TextUnformatted("*"); }
 	if (!Status.empty()) ImGui::TextWrapped("%s", Status.c_str());
 	const ImVec2 Available = ImGui::GetContentRegionAvail();
 	const float Split = EditorUIScale::Px(6);

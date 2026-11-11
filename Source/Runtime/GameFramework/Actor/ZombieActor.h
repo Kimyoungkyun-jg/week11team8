@@ -15,6 +15,8 @@ public:
 	void BeginPlay() override;
 	void Tick(float DeltaTime) override;
 	void ReactToHit();
+	bool SetCombatTuning(float InDetectionRadius, float InAttackRadius,
+		float InAttackCooldown, float InWalkSpeed);
 	ACharacter* GetTarget() const { return Target; }
 
 private:
@@ -27,7 +29,7 @@ private:
 	UPROPERTY(EditAnywhere)
 	float DetectionRadius = 12.0f;
 	UPROPERTY(EditAnywhere)
-	float AttackRadius = 1.0f;
+	float AttackRadius = 2.0f;
 	UPROPERTY(EditAnywhere)
 	float AttackCooldown = 1.8f;
 };

@@ -19,26 +19,31 @@ public:
 	void Attack() override;
 	void StartAim();
 	void StopAim();
+	bool SetCameraTuning(float InNormalArmLength, float InNormalFOV, float InAimArmLength, float InAimFOV);
+	bool SetAimBlendAlphaOverride(float Alpha);
+	void ClearAimBlendAlphaOverride() { bAimBlendAlphaOverridden = false; }
 	void LockJumpUntilLandingAnimation() { bJumpLocked = true; }
 	void OnLandingAnimationFinished() { bJumpLocked = false; }
 	void OnAttackAnimationStarted() { bAttackLocked = true; }
 	void OnAttackAnimationFinished() { bAttackLocked = false; }
 private:
+	void FireRifle();
 	ARifleActor* EquippedRifle = nullptr;
 	int32 RightHandBoneIndex = -1;
 	int32 LeftHandBoneIndex = -1;
 	UPROPERTY(EditAnywhere)
-	FVector RifleGripOffset = FVector(0.10f, 0.0f, 0.08f);
+	FVector RifleGripOffset = FVector(0.10f, 0.0f, -0.02f);
 	UPROPERTY(EditAnywhere)
-	FRotator RifleGripRotation = FRotator(0.0f, 0.0f, 0.0f);
+	FRotator RifleGripRotation = FRotator(8.0f, 0.0f, 0.0f);
 	bool bJumpLocked = false;
 	bool bAttackLocked = false;
 	bool bIsAiming = false;
+	bool bAimBlendAlphaOverridden = false;
 	float AimBlendAlpha = 0.0f;
 	float NormalArmLength = 2.8f;
-	float NormalFOV = 60.0f;
+	float NormalFOV = 80.0f;
 	UPROPERTY(EditAnywhere)
-	float AimArmLength = 1.5f;
+	float AimArmLength = 1.0f;
 	UPROPERTY(EditAnywhere)
 	float AimFOV = 70.0f;
 	UUserWidget* AimWidget = nullptr;

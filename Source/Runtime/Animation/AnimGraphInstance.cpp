@@ -231,7 +231,7 @@ void UAnimGraphInstance::UpdateMontages(float DeltaSeconds)
 		}
 		const float RateScale = std::isfinite(Montage.Sequence->RateScale) && Montage.Sequence->RateScale > 0.0f
 			? Montage.Sequence->RateScale : 1.0f;
-		const float EffectiveRate = std::max(0.001f, Montage.PlayRate * Montage.Asset.PlayRate * RateScale);
+		const float EffectiveRate = std::max(0.001f, Montage.PlayRate * Montage.Asset.PlayRate * RateScale); // montage 최종 속도 배율
 
 		if (Montage.bStopping)
 		{

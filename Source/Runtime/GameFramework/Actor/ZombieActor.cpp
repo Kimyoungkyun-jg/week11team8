@@ -5,6 +5,7 @@
 #include "Components/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/ScriptComponent.h"
 #include "GameFramework/TestCharacter.h"
 #include "Render/SkeletalMesh.h"
 #include "Engine/Level.h"
@@ -31,6 +32,8 @@ AZombieActor::AZombieActor()
 			HTR_LOG(Error, "Failed to assign zombieanimgraph.animgraph to AZombieActor");
 	}
 	else HTR_LOG(Error, "Failed to load zombie idle mesh for AZombieActor");
+	UScriptComponent* TuningScript = CreateDefaultSubobject<UScriptComponent>("CombatTuningScript");
+	TuningScript->SetScriptPath("Assets/Scripts/ZombieTuning.lua");
 }
 
 void AZombieActor::BeginPlay()
@@ -75,7 +78,7 @@ void AZombieActor::Tick(float DeltaTime)
 	UCharacterMovementComponent* Movement = GetCharacterMovement();
 	if (!Target || (Anim && (Anim->IsStateActiveOrPending("Attack") || Anim->IsStateActiveOrPending("Hit"))))
 	{
-		if (Movement->IsMovingOnGround()) Movement->StopMovementImmediately();
+		if (Movement->IsMovingOnGround() && !Movement->IsLaunchActive()) Movement->StopMovementImmediately();
 		return;
 	}
 	FVector Direction = Target->GetActorLocation() - GetActorLocation();
@@ -85,7 +88,7 @@ void AZombieActor::Tick(float DeltaTime)
 	GetRootComponent()->SetRelativeRotation(FRotator(0.0f, Yaw, 0.0f));
 	if (Direction.SizeSquared() <= AttackRadius * AttackRadius)
 	{
-		if (Movement->IsMovingOnGround()) Movement->StopMovementImmediately();
+		if (Movement->IsMovingOnGround() && !Movement->IsLaunchActive()) Movement->StopMovementImmediately();
 		if (Anim && AttackTimer <= 0.0f)
 		{
 			Anim->RequestAttack();
@@ -108,4 +111,18 @@ void AZombieActor::ReactToHit()
 {
 	if (UAnimGraphInstance* Anim = Cast<UAnimGraphInstance>(GetSkeletalMeshComponent()->GetAnimInstance()))
 		Anim->RequestHit();
+}
+
+bool AZombieActor::SetCombatTuning(float InDetectionRadius, float InAttackRadius,
+	float InAttackCooldown, float InWalkSpeed)
+{
+	if (!std::isfinite(InDetectionRadius) || InDetectionRadius <= 0.0f ||
+		!std::isfinite(InAttackRadius) || InAttackRadius <= 0.0f ||
+		!std::isfinite(InAttackCooldown) || InAttackCooldown < 0.0f ||
+		!std::isfinite(InWalkSpeed) || InWalkSpeed < 0.0f) return false;
+	DetectionRadius = InDetectionRadius;
+	AttackRadius = InAttackRadius;
+	AttackCooldown = InAttackCooldown;
+	GetCharacterMovement()->MaxWalkSpeed = InWalkSpeed;
+	return true;
 }

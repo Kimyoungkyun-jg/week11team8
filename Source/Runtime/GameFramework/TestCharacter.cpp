@@ -3,12 +3,17 @@
 #include "Animation/AnimGraphInstance.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/CharacterMovementComponent.h"
+#include "Components/ScriptComponent.h"
 #include "GameFramework/Actor/RifleActor.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/CameraShakeBase.h"
+#include "Camera/PlayerCameraManager.h"
+#include "GameFramework/PlayerController.h"
 #include "UI/UserWidget.h"
 #include "Asset/AssetManager.h"
 #include "Render/SkeletalMesh.h"
+#include "Render/Material.h"
 #include "Engine/World.h"
 
 namespace
@@ -52,6 +57,29 @@ ATestCharacter::ATestCharacter()
 	if (Mesh)
 	{
 		SkeletalMeshComponent->SetSkeletalMesh(Mesh);
+		for (int32 Slot = 0; Slot < SkeletalMeshComponent->GetNumMaterials(); ++Slot)
+		{
+			const FString SlotName = SkeletalMeshComponent->GetMaterialSlotName(Slot);
+			if (SlotName != "MI_Quinn_01" && SlotName != "MI_Quinn_02") continue;
+			const FString MaterialPath = "Models/UnrealModel/M_SKM_Quinn_Simple_" + SlotName + ".fbxbin";
+			if (UMaterial* Material = UAssetManager::GetAssetByPath<UMaterial>(MaterialPath))
+			{
+				const FString TextureDirectory = "Assets/Models/UnrealModel/";
+				UTexture2D* BaseColor = UAssetManager::Get().LoadTexture(
+					TextureDirectory + SlotName + "_EditorSphere_BaseColor.png");
+				UTexture2D* Normal = UAssetManager::Get().LoadTexture(
+					TextureDirectory + "T_Quinn_" + (SlotName == "MI_Quinn_01" ? "01" : "02") + "_N.png");
+				if (BaseColor)
+				{
+					UMaterial* Instance = UMaterial::CreateInstance(Material);
+					Instance->Textures[0] = BaseColor;
+					if (Normal) Instance->Textures[1] = Normal;
+					SkeletalMeshComponent->SetMaterial(Slot, Instance);
+				}
+				else HTR_LOG(Warning, "Failed to load Quinn base color texture: {}", SlotName);
+			}
+			else HTR_LOG(Warning, "Failed to load Quinn material: {}", MaterialPath);
+		}
 		if (!SkeletalMeshComponent->SetAnimGraphPath("Assets/Animations/rifleanimgraph.animgraph"))
 			HTR_LOG(Error, "Failed to assign rifleanimgraph.animgraph to ATestCharacter");
 	}
@@ -64,6 +92,9 @@ ATestCharacter::ATestCharacter()
 	SpringArm->bEnableCameraLag = true;
 	SpringArm->CameraLagSpeed = 12.0f;
 	SpringArm->bDrawDebug = false;
+	GetCameraComponent()->SetFieldOfView(NormalFOV);
+	UScriptComponent* TuningScript = CreateDefaultSubobject<UScriptComponent>("CameraTuningScript");
+	TuningScript->SetScriptPath("Assets/Scripts/TestCharacterTuning.lua");
 }
 
 void ATestCharacter::BeginPlay()
@@ -77,15 +108,13 @@ void ATestCharacter::BeginPlay()
 	if (World && World->IsGameWorld())
 	{
 		USpringArmComponent* SpringArm = GetSpringArmComponent();
-		SpringArm->TargetArmLength = 2.8f;
+		SpringArm->TargetArmLength = NormalArmLength;
 		SpringArm->TargetOffset = FVector(0.0f, 0.0f, 0.10f);
 		SpringArm->SocketOffset = FVector(0.0f, 0.55f, 0.10f);
 		SpringArm->bEnableCameraLag = true;
 		SpringArm->CameraLagSpeed = 12.0f;
 		SpringArm->bDrawDebug = false;
 		SpringArm->ResetCameraLag();
-		NormalArmLength = SpringArm->TargetArmLength;
-		NormalFOV = GetCameraComponent()->GetFieldOfView();
 	}
 	USkeletalMesh* Mesh = MeshComponent ? MeshComponent->GetSkeletalMesh() : nullptr;
 	if (!World || !World->IsGameWorld() || !Mesh) return;
@@ -104,13 +133,7 @@ void ATestCharacter::BeginPlay()
 	{
 		AnimGraph->SetOnMontageNotify([this](const FString& NotifyName)
 		{
-			if (NotifyName == "Fire" && IsValid(EquippedRifle) && !EquippedRifle->IsActorBeingDestroyed())
-			{
-				SyncRifleToHandBones(GetSkeletalMeshComponent(), EquippedRifle,
-					RightHandBoneIndex, LeftHandBoneIndex, RifleGripOffset, RifleGripRotation);
-				UCameraComponent* Camera = GetCameraComponent();
-				if (Camera) EquippedRifle->Fire(Camera->GetWorldLocation(), Camera->GetWorldRotationQuat().GetForwardVector());
-			}
+			if (NotifyName == "Fire") FireRifle();
 		});
 	}
 }
@@ -118,14 +141,41 @@ void ATestCharacter::BeginPlay()
 void ATestCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	if (std::isfinite(DeltaTime) && DeltaTime > 0.0f)
+	if (!bAimBlendAlphaOverridden && std::isfinite(DeltaTime) && DeltaTime > 0.0f)
 		AimBlendAlpha = std::clamp(AimBlendAlpha + (bIsAiming ? 1.0f : -1.0f) * DeltaTime / 0.18f, 0.0f, 1.0f);
 	GetSpringArmComponent()->TargetArmLength = FMath::Lerp(NormalArmLength, AimArmLength, AimBlendAlpha);
 	GetCameraComponent()->SetFieldOfView(FMath::Lerp(NormalFOV, AimFOV, AimBlendAlpha));
 	if (UAnimGraphInstance* AnimGraph = Cast<UAnimGraphInstance>(GetSkeletalMeshComponent()->GetAnimInstance()))
+	{
 		AnimGraph->SetIsAiming(bIsAiming);
+		if (AnimGraph->IsStateActiveOrPending("Hit"))
+			GetCharacterMovement()->StopMovementImmediately();
+	}
 	SyncRifleToHandBones(GetSkeletalMeshComponent(), EquippedRifle,
 		RightHandBoneIndex, LeftHandBoneIndex, RifleGripOffset, RifleGripRotation);
+}
+
+bool ATestCharacter::SetCameraTuning(float InNormalArmLength, float InNormalFOV,
+	float InAimArmLength, float InAimFOV)
+{
+	if (!std::isfinite(InNormalArmLength) || InNormalArmLength < 0.0f ||
+		!std::isfinite(InAimArmLength) || InAimArmLength < 0.0f ||
+		!std::isfinite(InNormalFOV) || InNormalFOV <= 1.0f || InNormalFOV >= 179.0f ||
+		!std::isfinite(InAimFOV) || InAimFOV <= 1.0f || InAimFOV >= 179.0f)
+		return false;
+	NormalArmLength = InNormalArmLength;
+	NormalFOV = InNormalFOV;
+	AimArmLength = InAimArmLength;
+	AimFOV = InAimFOV;
+	return true;
+}
+
+bool ATestCharacter::SetAimBlendAlphaOverride(float Alpha)
+{
+	if (!std::isfinite(Alpha) || Alpha < 0.0f || Alpha > 1.0f) return false;
+	AimBlendAlpha = Alpha;
+	bAimBlendAlphaOverridden = true;
+	return true;
 }
 
 void ATestCharacter::EndPlay()
@@ -170,15 +220,36 @@ void ATestCharacter::Attack()
 		// 발사 노티파이에서 총알을 발사하도록 콜백을 연결하고 발사 몽타주를 재생한다
 		AnimGraph->SetOnMontageNotify([this](const FString& NotifyName)
 		{
-			if (NotifyName == "Fire" && IsValid(EquippedRifle) && !EquippedRifle->IsActorBeingDestroyed())
-			{
-				SyncRifleToHandBones(GetSkeletalMeshComponent(), EquippedRifle,
-					RightHandBoneIndex, LeftHandBoneIndex, RifleGripOffset, RifleGripRotation);
-				UCameraComponent* Camera = GetCameraComponent();
-				if (Camera) EquippedRifle->Fire(Camera->GetWorldLocation(), Camera->GetWorldRotationQuat().GetForwardVector());
-			}
+			if (NotifyName == "Fire") FireRifle();
 		});
 		PlayAnimMontage("Assets/Animations/RifleFire.animmontage");
+	}
+}
+
+void ATestCharacter::FireRifle()
+{
+	if (!IsValid(EquippedRifle) || EquippedRifle->IsActorBeingDestroyed()) return;
+	UCameraComponent* Camera = GetCameraComponent();
+	if (!Camera) return;
+	SyncRifleToHandBones(GetSkeletalMeshComponent(), EquippedRifle,
+		RightHandBoneIndex, LeftHandBoneIndex, RifleGripOffset, RifleGripRotation);
+	if (!EquippedRifle->Fire(Camera->GetWorldLocation(), Camera->GetWorldRotationQuat().GetForwardVector())) return;
+	APlayerController* Controller = GetController();
+	APlayerCameraManager* CameraManager = Controller ? Controller->GetCameraManager() : nullptr;
+	if (CameraManager)
+	{
+		if (UCameraShakeBase* Shake = CameraManager->StartCameraShake(UCameraShakeBase::StaticClass()))
+		{
+			Shake->Duration = 0.16f;
+			Shake->BlendInTime = 0.0f;
+			Shake->BlendOutTime = 0.13f;
+			Shake->RotationPitch.Amplitude = 0.65f;
+			Shake->RotationPitch.Frequency = 12.0f;
+			Shake->RotationPitch.InitialOffsetType = EInitialWaveOscillatorOffsetType::Zero;
+			Shake->RotationYaw.Amplitude = 0.25f;
+			Shake->RotationYaw.Frequency = 16.0f;
+			Shake->StartShake();
+		}
 	}
 }
 

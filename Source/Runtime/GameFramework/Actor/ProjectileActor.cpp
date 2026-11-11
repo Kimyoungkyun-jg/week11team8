@@ -1,10 +1,15 @@
 #include "EnginePCH.h"
 #include "GameFramework/Actor/ProjectileActor.h"
 #include "GameFramework/Actor/ZombieActor.h"
+#include "GameFramework/Actor/StaticMeshActor.h"
+#include "GameFramework/Actor/DecalActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/ProjectileMovementComponent.h"
 #include "Asset/AssetManager.h"
+#include "Collision/HitResult.h"
+#include "Collision/Ray.h"
+#include "Render/Material.h"
 #include "Engine/World.h"
 
 AProjectileActor::AProjectileActor()
@@ -133,12 +138,61 @@ void AProjectileActor::Tick(float DeltaTime)
     if (RemainingLife <= 0.0f || !ProjectileMovementComponent->bSimulationEnabled) ReturnToPool();
 }
 
-void AProjectileActor::HandleProjectileImpact(AActor* OtherActor)
+void AProjectileActor::HandleProjectileImpact(AActor* OtherActor, const FHitResult& Hit)
 {
     if (!bInFlight) return;
     if (AZombieActor* Zombie = Cast<AZombieActor>(OtherActor))
     {
         Zombie->ReactToHit();
+        Zombie->LaunchCharacter(-Hit.ImpactNormal, 10.0f);
+        ReturnToPool();
+    }
+    else if (AStaticMeshActor* StaticMesh = Cast<AStaticMeshActor>(OtherActor))
+    {
+        static UMaterial* BulletMaterial = nullptr;
+        if (!BulletMaterial)
+        {
+            UMaterial* BaseMaterial = UAssetManager::GetAssetByPath<UMaterial>("DefaultMaterial");
+            UTexture2D* BulletTexture = UAssetManager::Get().LoadTexture("Assets/Textures/bulletdecal.png");
+            if (BaseMaterial && BulletTexture)
+            {
+                BulletMaterial = UMaterial::CreateInstance(BaseMaterial);
+                if (BulletMaterial)
+                {
+                    BulletMaterial->Textures.Empty();
+                    BulletMaterial->Textures.Add(BulletTexture);
+                    BulletMaterial->BaseColor = FVector4(1.0f, 1.0f, 1.0f, 1.0f);
+                }
+            }
+        }
+        if (BulletMaterial)
+        {
+            const FVector Direction = ProjectileMovementComponent->Velocity.GetSafeNormal();
+            FVector ImpactPoint = Hit.ImpactPoint;
+            FVector SurfaceNormal = Hit.ImpactNormal;
+            FHitResult SurfaceHit;
+            if (Direction.SizeSquared() > SMALL_NUMBER && StaticMesh->GetStaticMeshComponent() &&
+                StaticMesh->GetStaticMeshComponent()->LineTraceComponent(
+                    FRay(Hit.ImpactPoint - Direction * 0.1f, Direction), SurfaceHit) &&
+                SurfaceHit.Distance <= 2.0f && SurfaceHit.ImpactNormal.SizeSquared() > SMALL_NUMBER)
+            {
+                ImpactPoint = SurfaceHit.ImpactPoint;
+                SurfaceNormal = SurfaceHit.ImpactNormal;
+            }
+
+            if (ADecalActor* Decal = Cast<ADecalActor>(GetWorld()->SpawnActor(ADecalActor::StaticClass())))
+            {
+                UDecalComponent* Component = Decal->GetDecalComponent();
+                FRotator Rotation;
+                Rotation.LookDirection(-SurfaceNormal);
+                Component->SetWorldLocationAndRotation(
+                    ImpactPoint - SurfaceNormal * 0.02f, Rotation, false);
+                Component->SetWorldScale3D(FVector(0.4f, 0.45f, 0.3f));
+                Component->SetDecalMaterial(BulletMaterial);
+                Decal->AttachToActor(StaticMesh, EAttachmentRule::KeepWorld);
+                Decal->SetTemporaryLifetime(20.0f);
+            }
+        }
         ReturnToPool();
     }
 }

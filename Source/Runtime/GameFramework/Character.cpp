@@ -65,6 +65,15 @@ void ACharacter::AddControllerPitchInput(float Value)
 void ACharacter::Jump() { if (CharacterMovement) CharacterMovement->RequestJump(); }
 void ACharacter::StopJumping() { if (CharacterMovement) CharacterMovement->StopJumping(); }
 
+void ACharacter::LaunchCharacter(const FVector& Direction, float Strength)
+{
+	if (!CharacterMovement || !std::isfinite(Strength) || Strength <= 0.0f ||
+		!std::isfinite(Direction.X) || !std::isfinite(Direction.Y) || !std::isfinite(Direction.Z)) return;
+	const FVector Normal = Direction.GetSafeNormal();
+	if (Normal.SizeSquared() <= SMALL_NUMBER) return;
+	CharacterMovement->Launch(Normal * Strength);
+}
+
 float ACharacter::PlayAnimMontage(const FString& MontagePath, float InPlayRate, const FString& StartSection)
 {
 	UAnimGraphInstance* AnimGraph = Cast<UAnimGraphInstance>(SkeletalMeshComponent ? SkeletalMeshComponent->GetAnimInstance() : nullptr);

@@ -12,6 +12,8 @@
 #include "Components/ParticleSubUVComponent.h"
 #include "Core/EngineTimer.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/TestCharacter.h"
+#include "GameFramework/Actor/ZombieActor.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Input/InputSystem.h"
 #include "Scripting/LuaActorRef.h"
@@ -280,6 +282,28 @@ namespace
 			"UUID", sol::property([](const FLuaActorRef& Ref) { return Ref.UUID; }),
 			"IsValid", [](const FLuaActorRef& Ref) { return Ref.Get() != nullptr; },
 			"Name", sol::property([](const FLuaActorRef& Ref) { return Deref(Ref).GetName(); }),
+			"SetCameraTuning", [](const FLuaActorRef& Ref, float NormalArmLength,
+				float NormalFOV, float AimArmLength, float AimFOV)
+			{
+				ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get());
+				return Character && Character->SetCameraTuning(NormalArmLength, NormalFOV, AimArmLength, AimFOV);
+			},
+			"SetAimBlendAlphaOverride", [](const FLuaActorRef& Ref, float Alpha)
+			{
+				ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get());
+				return Character && Character->SetAimBlendAlphaOverride(Alpha);
+			},
+			"ClearAimBlendAlphaOverride", [](const FLuaActorRef& Ref)
+			{
+				if (ATestCharacter* Character = Cast<ATestCharacter>(Ref.Get()))
+					Character->ClearAimBlendAlphaOverride();
+			},
+			"SetZombieCombatTuning", [](const FLuaActorRef& Ref, float DetectionRadius,
+				float AttackRadius, float AttackCooldown, float WalkSpeed)
+			{
+				AZombieActor* Zombie = Cast<AZombieActor>(Ref.Get());
+				return Zombie && Zombie->SetCombatTuning(DetectionRadius, AttackRadius, AttackCooldown, WalkSpeed);
+			},
 			"HasComponent", [](const FLuaActorRef& Ref, const FString& ClassName)
 			{
 				for (UActorComponent* Component : Deref(Ref).GetComponents())

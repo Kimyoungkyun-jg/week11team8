@@ -223,7 +223,7 @@ void UProjectileMovementComponent::HandleImpact(const FHitResult& Hit, float Tim
 	{
 		AActor* Owner = UpdatedComponent->GetOwner();
 		AActor* Other = Hit.HitComponent->GetOwner();
-		if (Owner && Other && Owner != Other) OnProjectileImpact.Broadcast(Other);
+		if (Owner && Other && Owner != Other) OnProjectileImpact.Broadcast(Other, Hit);
 	}
 	if (bShouldBounce)
 	{

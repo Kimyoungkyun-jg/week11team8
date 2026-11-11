@@ -1,22 +1,42 @@
 #include "EnginePCH.h"
 #include "GameFramework/Actor/RifleActor.h"
 #include "GameFramework/Actor/ProjectileActor.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Components/ProjectileMovementComponent.h"
 #include "Collision/HitResult.h"
 #include "Collision/Ray.h"
 #include "Asset/AssetManager.h"
+#include "Render/Material.h"
 #include "Engine/World.h"
 
 ARifleActor::ARifleActor()
 {
 	SetActorEnableCollision(false);
-	StaticMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>("RifleMeshComponent");
-	SetRootComponent(StaticMeshComponent);
-	UStaticMesh* RifleMesh = UAssetManager::GetAssetByPath<UStaticMesh>(
-		"Assets/Models/UnrealModel/SM_SM_Rifle_SM_Rifle.fbxbin");
-	if (!RifleMesh) RifleMesh = UAssetManager::GetAssetByPath<UStaticMesh>(
-		"Assets/Models/UnrealModel/SM_SM_Rifle.fbxbin");
-	StaticMeshComponent->SetStaticMesh(RifleMesh);
+	SkeletalMeshComponent = CreateDefaultSubobject<USkeletalMeshComponent>("RifleMeshComponent");
+	SetRootComponent(SkeletalMeshComponent);
+	USkeletalMesh* RifleMesh = UAssetManager::LoadFbxSkeletalMesh(
+		"Assets/Models/UnrealModel/SK_Rifle.FBX");
+	if (RifleMesh)
+	{
+		SkeletalMeshComponent->SetSkeletalMesh(RifleMesh);
+		if (UMaterial* BaseMaterial = SkeletalMeshComponent->GetMaterial(0))
+		{
+			UTexture2D* BaseColor = UAssetManager::Get().LoadTexture(
+				"Assets/Models/UnrealModel/MI_Weapon_Rifle_BaseColor.png");
+			UTexture2D* Normal = UAssetManager::Get().LoadTexture(
+				"Assets/Models/UnrealModel/T_Rifle_Combined_N.png");
+			if (BaseColor)
+			{
+				UMaterial* RifleMaterial = UMaterial::CreateInstance(BaseMaterial);
+				RifleMaterial->Textures[0] = BaseColor;
+				if (Normal) RifleMaterial->Textures[1] = Normal;
+				SkeletalMeshComponent->SetMaterial(0, RifleMaterial);
+			}
+			else HTR_LOG(Error, "Failed to load rifle base color texture");
+		}
+	}
+	else HTR_LOG(Error, "Failed to load SK_Rifle.FBX for ARifleActor");
 }
 
 AProjectileActor* ARifleActor::Fire(const FVector& CameraOrigin, const FVector& CameraDirection)

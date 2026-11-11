@@ -527,8 +527,8 @@ void FAnimationAssetEditorPanel::OnRender()
 	bVisible = BeginPanel();
 	if (!bVisible) { ImGui::End(); return; }
 	ImGui::TextUnformatted(Path.c_str()); ImGui::SameLine();
-	if (ImGui::Button("Save")) Save(); ImGui::SameLine();
-	if (bDirty) ImGui::TextUnformatted("*");
+	if (ImGui::Button("Save")) Save();
+	if (bDirty) { ImGui::SameLine(); ImGui::TextUnformatted("*"); }
 	if (!Status.empty()) ImGui::TextWrapped("%s", Status.c_str());
 	const ImVec2 Available = ImGui::GetContentRegionAvail();
 	const float Split = EditorUIScale::Px(6.0f);

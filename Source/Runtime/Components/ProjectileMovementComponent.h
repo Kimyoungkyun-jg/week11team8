@@ -4,7 +4,8 @@
 #include "ProjectileMovementComponent.generated.h"
 
 class AActor;
-DECLARE_DELEGATE(FProjectileImpactSignature, AActor*);
+struct FHitResult;
+DECLARE_DELEGATE(FProjectileImpactSignature, AActor*, const FHitResult&);
 
 UCLASS()
 class UProjectileMovementComponent : public UMovementComponent
