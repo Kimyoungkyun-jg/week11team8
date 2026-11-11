@@ -141,6 +141,23 @@ void USkeletalMeshDebugComponent::DrawDebug(FLineBatcher* LineBatcher) const
 	if (!LineBatcher || !SkeletalMesh || !ShouldDrawDebug()) return;
 
 	const TArray<FBoneInfo>& Bones = SkeletalMesh->MeshData.Bones;
+	const TArray<FMatrix>& BoneTransforms = GetGlobalBoneTransforms();
+	const FMatrix ComponentToWorld = GetWorldMatrix();
+	if (bDrawBoneBounds && BoneTransforms.Num() == Bones.Num())
+	{
+		const FVector4 BoundsColor(0.2f, 0.8f, 1.0f, 1.0f);
+		for (int32 Index = 0; Index < Bones.Num(); ++Index)
+		{
+			if (const FBox* BindBounds = SkeletalMesh->GetBoneInfluenceBounds(Index))
+			{
+				const FMatrix SkinningMatrix = Bones[Index].InverseBindPose * BoneTransforms[Index];
+				const FBox PoseBounds = BindBounds->GetWorldAABB(SkinningMatrix);
+				LineBatcher->AddBox(PoseBounds.GetWorldAABB(ComponentToWorld),
+					Index == SelectedBoneIndex ? SelectedBoneColor : BoundsColor);
+			}
+		}
+	}
+	if (!bDrawBones && !bDrawBoneAxes) return;
 
 	TArray<FVector> Joints;
 	TArray<float> Radii;
@@ -148,8 +165,6 @@ void USkeletalMeshDebugComponent::DrawDebug(FLineBatcher* LineBatcher) const
 	if (Joints.Num() != Bones.Num()) return;
 
 	// 뼈는 메시 안쪽에 있으므로 깊이 테스트 없이 항상 위에 그린다 (AddForegroundLine)
-	const FMatrix ComponentToWorld = GetWorldMatrix();
-
 	for (int32 i = 0; i < Bones.Num(); i++)
 	{
 		if (!ShouldDrawBone(i)) continue;

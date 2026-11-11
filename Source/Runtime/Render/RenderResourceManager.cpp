@@ -259,8 +259,24 @@ void FRenderResourceManager::ScanShaders(const fs::path& ShaderRoot)
 	}
 }
 
+FComputeShader* FRenderResourceManager::GetComputeSkinningShader()
+{
+	auto& Resources = Get();
+	if (!Resources.bComputeSkinningShaderAttempted)
+	{
+		Resources.bComputeSkinningShaderAttempted = true;
+		Resources.ComputeSkinningShader = RenderCommand::CreateComputeShader(
+			RenderUtil::CompileShader("Resources/Shader/ComputeSkinningCS.hlsli", "mainCS", EShaderType::Compute));
+		if (Resources.ComputeSkinningShader && !Resources.ComputeSkinningShader->IsValid())
+			Resources.ComputeSkinningShader.reset();
+	}
+	return Resources.ComputeSkinningShader.get();
+}
+
 void FRenderResourceManager::Shutdown()
 {
+	Get().ComputeSkinningShader.reset();
+	Get().bComputeSkinningShaderAttempted = false;
 	Get().VertexShaderMap.Empty();
 	Get().PixelShaderMap.Empty();
 	Get().ShaderProgramMap.Empty();

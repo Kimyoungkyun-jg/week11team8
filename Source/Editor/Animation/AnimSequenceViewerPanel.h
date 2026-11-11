@@ -53,6 +53,7 @@ private:
 	bool bPlaying = true;
 	bool bLoop = true;
 	bool bShowGrid = true;
+	bool bShowBounds = false;
 	bool bShowSkybox = true;
 	float SkyLightIntensity = 0.3f;
 	float DirectionalLightIntensity = 1.0f;

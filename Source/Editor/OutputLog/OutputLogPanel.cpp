@@ -383,7 +383,7 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 		FLog::Log(ELogVerbosity::Info, "Commands:");
 		FLog::Log(ELogVerbosity::Info, "- HELP | HISTORY | CLEAR");
 		FLog::Log(ELogVerbosity::Info, "- STAT <fps|memory|profile|light|decal|skinning|all|none> [on|off]");
-		FLog::Log(ELogVerbosity::Info, "- r.SkinningMode [cpu|gpu|toggle]   (= r.GPUSkinning [0|1], GPU needs Forward rendering path)");
+		FLog::Log(ELogVerbosity::Info, "- r.SkinningMode [cpu|gpu|cs|toggle]   (GPU selects VS skinning and needs Forward)");
 		FLog::Log(ELogVerbosity::Info, "- r.Skinning.ForceUpdate [0|1]   (re-skin every frame for CPU/GPU comparison)");
 		FLog::Log(ELogVerbosity::Info, "- CSM Count <1-4>   (= r.Shadow.CSM.MaxCascades)");
 		FLog::Log(ELogVerbosity::Info, "- r.shadow.CacheWholeSceneShadows [0|1]   (not implemented yet)");
@@ -445,7 +445,7 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 			FLog::Log(ELogVerbosity::Info, "Settings not available");
 			return;
 		}
-		constexpr const char* Usage = "Usage: r.SkinningMode [cpu|gpu|toggle]  or  r.GPUSkinning [0|1]";
+		constexpr const char* Usage = "Usage: r.SkinningMode [cpu|gpu|cs|toggle]  or  r.GPUSkinning [0|1]";
 		if (Tokens.Num() > 2)
 		{
 			FLog::Log(ELogVerbosity::Info, "{}", Usage);
@@ -458,6 +458,8 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 				EditorSettings->SkinningMode = ESkinningMode::GPU;
 			else if (EqualsIgnoreCase(Value, "cpu") || Value == "0")
 				EditorSettings->SkinningMode = ESkinningMode::CPU;
+			else if (EqualsIgnoreCase(Command, "r.SkinningMode") && EqualsIgnoreCase(Value, "cs"))
+				EditorSettings->SkinningMode = ESkinningMode::Compute;
 			else if (EqualsIgnoreCase(Value, "toggle"))
 				EditorSettings->SkinningMode = EditorSettings->SkinningMode == ESkinningMode::GPU ? ESkinningMode::CPU : ESkinningMode::GPU;
 			else
@@ -468,8 +470,7 @@ void FOutputLogPanel::ExecCommand(const FString& CommandLine)
 		}
 
 		const bool bGPU = EditorSettings->SkinningMode == ESkinningMode::GPU;
-		FLog::Log(ELogVerbosity::Info, "r.SkinningMode = {}", bGPU ? "GPU" : "CPU");
-		// TickWorldAndEditor가 Deferred에서는 CPU로 고정한다 (GBuffer 셰이더에 GPU 스키닝 변형이 없다).
+		FLog::Log(ELogVerbosity::Info, "r.SkinningMode = {}", GetSkinningModeName(EditorSettings->SkinningMode));
 		if (bGPU && EditorSettings->RenderingPath != ERenderingPath::Forward)
 			FLog::Log(ELogVerbosity::Warning, "GPU skinning needs the Forward rendering path. CPU skinning stays active until Rendering Path is Forward.");
 		return;

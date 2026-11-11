@@ -6,6 +6,7 @@
 #include <array>
 #include <algorithm>
 #include <memory>
+#include <vector>
 #include <wrl/client.h>
 
 // GPU 시간은 CPU 사이클이 아니므로 ms로 직접 저장한다.
@@ -20,6 +21,7 @@ struct FGpuTimingHistory
     double LastMs = 0.0;
     double SumMs = 0.0;
     uint64 LastFrameId = 0;
+    uint64 LastVSInvocations = 0;
 
     void Push(double Ms, uint64 FrameId)
     {
@@ -32,6 +34,20 @@ struct FGpuTimingHistory
 
         LastMs = Ms;
         LastFrameId = FrameId;
+        LastVSInvocations = 0;
+    }
+
+    void AccumulateDraws(double Ms, uint64 VSInvocations, uint64 FrameId)
+    {
+        if (Count == 0 || LastFrameId != FrameId)
+            Push(Ms, FrameId);
+        else
+        {
+            Samples[(Next + Capacity - 1) % Capacity] += Ms;
+            SumMs += Ms;
+            LastMs += Ms;
+        }
+        LastVSInvocations += VSInvocations;
     }
 
     double GetAverageMs() const
@@ -53,11 +69,24 @@ struct FGpuTimingHistory
 class FGpuProfiler
 {
 public:
+    enum class EScopeKind { Pass, SkeletalDraw, GpuSkinnedDraw, SkinningDispatch };
+
     static FGpuProfiler& Get()
     {
         static FGpuProfiler Instance;
         return Instance;
     }
+
+    int32 BeginSkinningDispatch()
+    {
+        if (ActiveSlot < 0)
+            return -1;
+        if (!SkinningDispatchTiming)
+            SkinningDispatchTiming = std::make_shared<FGpuTimingHistory>();
+        return BeginScope(SkinningDispatchTiming, EScopeKind::SkinningDispatch);
+    }
+
+    const FGpuTimingHistory* GetSkinningDispatchTiming() const { return SkinningDispatchTiming.get(); }
 
     // 렌더링할 엔진 프레임마다 한 번 호출한다.
     void BeginFrame(bool bEnabled)
@@ -105,6 +134,7 @@ public:
 
             Slot.FrameId = FrameId;
             Slot.ScopeCount = 0;
+            Slot.IncompleteDrawTimings.clear();
             Slot.bDiscard = false;
 
             ActiveSlot = static_cast<int32>(Index);
@@ -118,9 +148,10 @@ public:
         ++SkippedFrames;
     }
 
-    // 한 패스의 시작. 반환값은 그 패스의 핸들이다.
+    // 패스 또는 연속된 스켈레탈 드로우의 시작. 반환값은 측정 구간의 핸들이다.
     int32 BeginScope(
-        const std::shared_ptr<FGpuTimingHistory>& Destination)
+        const std::shared_ptr<FGpuTimingHistory>& Destination,
+        EScopeKind Kind = EScopeKind::Pass)
     {
         if (ActiveSlot < 0 || !Destination)
             return -1;
@@ -131,8 +162,16 @@ public:
 
         FFrameSlot& Slot = Slots[ActiveSlot];
 
-        if (Slot.ScopeCount >= MaxScopesPerFrame)
+        const bool bSkeletalDraw = Kind != EScopeKind::Pass;
+        if (bSkeletalDraw && Slot.IsDrawTimingIncomplete(Destination))
+            return -1;
+
+        // Keep capacity for existing pass timers even when draw profiling fills its budget.
+        const uint32 ScopeLimit = bSkeletalDraw ? MaxScopesPerFrame - ReservedPassScopes : MaxScopesPerFrame;
+        if (Slot.ScopeCount >= ScopeLimit)
         {
+            if (bSkeletalDraw)
+                Slot.IncompleteDrawTimings.push_back(Destination);
             ++SkippedScopes;
             return -1;
         }
@@ -148,6 +187,8 @@ public:
                 &Desc,
                 Scope.Start.ReleaseAndGetAddressOf())))
             {
+                if (bSkeletalDraw)
+                    Slot.IncompleteDrawTimings.push_back(Destination);
                 ++ErrorCount;
                 return -1;
             }
@@ -159,19 +200,37 @@ public:
                 &Desc,
                 Scope.End.ReleaseAndGetAddressOf())))
             {
+                if (bSkeletalDraw)
+                    Slot.IncompleteDrawTimings.push_back(Destination);
+                ++ErrorCount;
+                return -1;
+            }
+        }
+
+        const bool bCountVSInvocations = Kind == EScopeKind::GpuSkinnedDraw;
+        if (bCountVSInvocations && !Scope.PipelineStatistics)
+        {
+            Desc.Query = D3D11_QUERY_PIPELINE_STATISTICS;
+            if (FAILED(Device->GetDevice()->CreateQuery(&Desc, Scope.PipelineStatistics.ReleaseAndGetAddressOf())))
+            {
+                Slot.IncompleteDrawTimings.push_back(Destination);
                 ++ErrorCount;
                 return -1;
             }
         }
 
         Scope.Destination = Destination;
+        Scope.Kind = Kind;
         Scope.bEnded = false;
 
         const int32 Handle =
             static_cast<int32>(Slot.ScopeCount++);
 
+        ID3D11DeviceContext* Context = Device->GetContext();
+        if (bCountVSInvocations)
+            Context->Begin(Scope.PipelineStatistics.Get());
         // Timestamp 쿼리는 Begin이 아니라 End로 찍는다.
-        Device->GetContext()->End(Scope.Start.Get());
+        Context->End(Scope.Start.Get());
         return Handle;
     }
 
@@ -189,7 +248,10 @@ public:
         if (Scope.bEnded)
             return;
 
-        FRenderDevice::Get()->GetContext()->End(Scope.End.Get());
+        ID3D11DeviceContext* Context = FRenderDevice::Get()->GetContext();
+        Context->End(Scope.End.Get());
+        if (Scope.Kind == EScopeKind::GpuSkinnedDraw)
+            Context->End(Scope.PipelineStatistics.Get());
         Scope.bEnded = true;
     }
 
@@ -210,8 +272,7 @@ public:
 
             if (!Scope.bEnded)
             {
-                Context->End(Scope.End.Get());
-                Scope.bEnded = true;
+                EndScope(static_cast<int32>(Index));
                 Slot.bDiscard = true;
             }
         }
@@ -231,6 +292,7 @@ public:
 
         ActiveSlot = -1;
         NextSlot = 0;
+        SkinningDispatchTiming.reset();
     }
 
     uint64 GetFrameId() const { return FrameId; }
@@ -241,9 +303,8 @@ public:
 private:
     static constexpr uint32 FrameSlotCount = 4;
 
-    // 현재 4뷰 × Lit/Unlit = 8구간.
-    // PIE 등 추가 뷰를 고려해 여유를 둔다.
-    static constexpr uint32 MaxScopesPerFrame = 32;
+    static constexpr uint32 ReservedPassScopes = 32;
+    static constexpr uint32 MaxScopesPerFrame = ReservedPassScopes + 256;
 
     using FQueryPtr =
         Microsoft::WRL::ComPtr<ID3D11Query>;
@@ -252,9 +313,11 @@ private:
     {
         FQueryPtr Start;
         FQueryPtr End;
+        FQueryPtr PipelineStatistics;
 
         // 뷰가 사라지거나 Reset되면 결과를 기록하지 않는다.
         std::weak_ptr<FGpuTimingHistory> Destination;
+        EScopeKind Kind = EScopeKind::Pass;
         bool bEnded = false;
     };
 
@@ -262,12 +325,19 @@ private:
     {
         FQueryPtr Disjoint;
         std::array<FScope, MaxScopesPerFrame> Scopes{};
+        std::vector<std::shared_ptr<FGpuTimingHistory>> IncompleteDrawTimings;
 
         uint64 FrameId = 0;
         uint32 ScopeCount = 0;
 
         bool bPending = false;
         bool bDiscard = false;
+
+        bool IsDrawTimingIncomplete(const std::shared_ptr<FGpuTimingHistory>& Destination) const
+        {
+            return std::find(IncompleteDrawTimings.begin(), IncompleteDrawTimings.end(), Destination)
+                != IncompleteDrawTimings.end();
+        }
     };
 
     void Poll(ID3D11DeviceContext* Context)
@@ -325,6 +395,7 @@ private:
 
         std::array<UINT64, MaxScopesPerFrame> Starts{};
         std::array<UINT64, MaxScopesPerFrame> Ends{};
+        std::array<UINT64, MaxScopesPerFrame> VSInvocations{};
 
         // 전체 결과가 준비되기 전에는 아무 것도 Push하지 않는다.
         // 일부만 Push하면 다음 Poll에서 중복 기록될 수 있다.
@@ -353,12 +424,35 @@ private:
 
             if (StartResult == S_FALSE || EndResult == S_FALSE)
                 return false;
+            if (Scope.Kind == EScopeKind::GpuSkinnedDraw)
+            {
+                D3D11_QUERY_DATA_PIPELINE_STATISTICS Statistics{};
+                const HRESULT Result = Context->GetData(
+                    Scope.PipelineStatistics.Get(), &Statistics, sizeof(Statistics), Flags);
+                if (Result == S_FALSE)
+                    return false;
+                if (FAILED(Result))
+                {
+                    ++ErrorCount;
+                    Slot.bPending = false;
+                    return true;
+                }
+                VSInvocations[Index] = Statistics.VSInvocations;
+            }
         }
 
         if (!Slot.bDiscard &&
             !Disjoint.Disjoint &&
             Disjoint.Frequency != 0)
         {
+            for (uint32 Index = 0; Index < Slot.ScopeCount; ++Index)
+            {
+                if (Ends[Index] < Starts[Index] && Slot.Scopes[Index].Kind != EScopeKind::Pass)
+                {
+                    if (auto Destination = Slot.Scopes[Index].Destination.lock())
+                        Slot.IncompleteDrawTimings.push_back(Destination);
+                }
+            }
             for (uint32 Index = 0; Index < Slot.ScopeCount; ++Index)
             {
                 if (Ends[Index] < Starts[Index])
@@ -373,7 +467,10 @@ private:
                         1000.0 /
                         static_cast<double>(Disjoint.Frequency);
 
-                    Destination->Push(Ms, Slot.FrameId);
+                    if (Slot.Scopes[Index].Kind == EScopeKind::Pass)
+                        Destination->Push(Ms, Slot.FrameId);
+                    else if (!Slot.IsDrawTimingIncomplete(Destination))
+                        Destination->AccumulateDraws(Ms, VSInvocations[Index], Slot.FrameId);
                 }
             }
         }
@@ -383,6 +480,7 @@ private:
     }
 
     std::array<FFrameSlot, FrameSlotCount> Slots{};
+    std::shared_ptr<FGpuTimingHistory> SkinningDispatchTiming;
 
     int32 ActiveSlot = -1;
     uint32 NextSlot = 0;

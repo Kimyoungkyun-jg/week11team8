@@ -72,9 +72,10 @@ struct FSceneRenderData
 	FRenderQueue RenderQueue;
 	FRenderStats RenderStats;
 	FDecalStats DecalStats;
-	// stat skinning: 이 뷰의 Base Pass(ForwardOpaque 또는 GBuffer) GPU 시간. GPU 스키닝의 VS 비용이 여기에 들어간다.
-	std::shared_ptr<FGpuTimingHistory> BasePassGpu = std::make_shared<FGpuTimingHistory>();
-	ESkinningMode BasePassGpuMode = ESkinningMode::CPU;   // 모드가 바뀌면 이력을 새로 시작한다
+	std::shared_ptr<FGpuTimingHistory> BaseSkeletalDrawGpu;
+	std::shared_ptr<FGpuTimingHistory> ShadowSkeletalDrawGpu;
+	ESkinningMode SkeletalDrawGpuMode = ESkinningMode::CPU;
+	ERenderingPath SkeletalDrawGpuPath = ERenderingPath::Forward;
 	TArray<FPrimitiveSceneProxy*> VisibleProxies;
 	TArray<FLODSelectionInput> LODInputs;
 	TArray<uint8> SelectedLODs;
@@ -147,7 +148,8 @@ struct FSceneRenderData
 		DecalStats.Frame = {};
 		DecalStats.bCollecting = false;
 		DecalStats.ResetHistory();
-		BasePassGpu = std::make_shared<FGpuTimingHistory>();
+		BaseSkeletalDrawGpu = {};
+		ShadowSkeletalDrawGpu = {};
 
 		for (FGatherChunk& Chunk : GatherChunks)
 		{
@@ -273,8 +275,8 @@ struct FSceneRenderData
 	}
 
 	inline bool HasDirectionalLight() { return LightParameterCounts[DirectionalLightSlotIndex]; }
-	inline uint32 GetDirectionalLightOffset() { return LightParameterOffsets[DirectionalLightSlotIndex]; }
-	inline uint32 GetDirectionalLightCount() { return LightParameterCounts[DirectionalLightSlotIndex]; }
+	inline uint32 GetDirectionalLightOffset() const { return LightParameterOffsets[DirectionalLightSlotIndex]; }
+	inline uint32 GetDirectionalLightCount() const { return LightParameterCounts[DirectionalLightSlotIndex]; }
 
 	inline bool HasPointLights() { return LightParameterCounts[PointLightSlotIndex]; }
 	inline uint32 GetPointLightOffset() { return LightParameterOffsets[PointLightSlotIndex]; }

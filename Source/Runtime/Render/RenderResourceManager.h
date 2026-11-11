@@ -61,7 +61,10 @@ public:
 	static FShaderProgram* GetTranslucentShaderProgram(bool bGPUSkinning);
 	static FShaderProgram* GetShadowDepthShaderProgram();
 	static FShaderProgram* GetGPUSkinningShadowDepthShaderProgram();
+	static FComputeShader* GetComputeSkinningShader();
 private:
+	TUniquePtr<FComputeShader> ComputeSkinningShader;
+	bool bComputeSkinningShaderAttempted = false;
 	
 	void LoadOrCompileShader(const FString& Path);
 	void InitPipelineStates();

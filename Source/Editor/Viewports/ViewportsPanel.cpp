@@ -592,8 +592,13 @@ void FViewportsPanel::OnRender() {
 		FEditorViewportClient* Client = ViewportClients[ViewIndex].get();
 		if (!Client || !Client->IsActive() || Client->IsLightCulling())
 			continue;
+		// Use the same viewport as the displayed render target during embedded PIE.
+		FSceneRenderData& RenderData = GameViewportClient && ViewIndex == GameViewportIndex
+			? GameViewportClient->GetRenderData()
+			: Client->GetRenderData();
 		ImVec2 OverlayMin, OverlayMax;
-		if (!DrawStatOverlay(DrawList, { ContentOrigin.x + Client->GetRect().X, ContentOrigin.y + Client->GetRect().Y }, Client, OverlayMin, OverlayMax))
+		if (!DrawStatOverlay(DrawList, { ContentOrigin.x + Client->GetRect().X, ContentOrigin.y + Client->GetRect().Y },
+			ViewIndex, RenderData, OverlayMin, OverlayMax))
 			continue;
 		// 누적 통계가 있을 때만 오버레이 오른쪽 위에 초기화 버튼을 붙인다.
 		if (FStatOverlay::IsEnabled(EStatFlags::Profile) ||
@@ -609,9 +614,10 @@ void FViewportsPanel::OnRender() {
 			if (ImGui::Button("Reset Stats"))
 			{
 				FStatRegistry::Reset();
-				Client->GetRenderData().DecalStats.ResetHistory();
+				RenderData.DecalStats.ResetHistory();
 				FSkinningStats::ResetHistory();
-				Client->GetRenderData().BasePassGpu = std::make_shared<FGpuTimingHistory>();
+				RenderData.BaseSkeletalDrawGpu = {};
+				RenderData.ShadowSkeletalDrawGpu = {};
 			}
 			ImGui::PopStyleVar(3);
 			ImGui::SetItemTooltip("Reset accumulated stats.");
@@ -817,7 +823,8 @@ void FViewportsPanel::DrawCameraSpeedNotice(ImDrawList* DrawList) const
 }
 
 // 항목별 줄을 모아 한 번에 배경과 텍스트를 그린다.
-bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, FEditorViewportClient* Client, ImVec2& OutMin, ImVec2& OutMax) const
+bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMin, int32 ViewIndex,
+	const FSceneRenderData& RenderData, ImVec2& OutMin, ImVec2& OutMax) const
 {
 	if (!DrawList || !FStatOverlay::IsAnyEnabled())
 		return false;
@@ -885,7 +892,6 @@ bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 		ProfileLines.Add(Line);
 	}
 
-	FSceneRenderData& RenderData = Client->GetRenderData();
 	const FRenderStats& Stats = RenderData.RenderStats;
 	if (FStatOverlay::IsEnabled(EStatFlags::Light)) {
 		Lines.Add({ "Light", TitleColor });
@@ -1248,8 +1254,7 @@ bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 		const ESkinningMode Effective = USkeletalMeshComponent::GetSkinningMode();
 
 		Lines.Add({ "Skinning", TitleColor });
-		Lines.Add({ std::format("  Mode: {}{}", Effective == ESkinningMode::GPU ? "GPU" : "CPU",
-			RenderingPath == ERenderingPath::Deferred ? "  (Deferred: GPU skinning falls back to CPU)" : ""), ValueColor });
+		Lines.Add({ std::format("  Mode: {}", GetSkinningModeName(Effective)), ValueColor });
 		Lines.Add({ std::format("  Components: {} (CPU {} / GPU {})",
 			Skin.TotalComponents, Skin.CpuModeComponents, Skin.GpuModeComponents), ValueColor });
 		Lines.Add({ std::format("  Mesh Vertices / Bones: {} / {}", Skin.TotalVertices, Skin.TotalBones), ValueColor });
@@ -1279,23 +1284,31 @@ bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 		AddSkinCpuLine("Buffer Upload", FSkinningStats::UploadHistory());
 		AddSkinCpuLine("Total", FSkinningStats::TotalHistory());
 
-		// GPU 스키닝의 정점 변환은 Base Pass VS에서 일어나므로 Base Pass 전체 시간을 비교한다.
-		ProfileLines.Add({ "Skinning GPU (ms)", TitleColor, { "Last", "Avg120", "Max120" } });
-		FProfileStatLine GpuLine{ "  Base Pass", ValueColor };
-		const std::shared_ptr<FGpuTimingHistory>& BasePass = RenderData.BasePassGpu;
-		if (!BasePass || BasePass->Count == 0)
+		ProfileLines.Add({ "Skinning GPU", TitleColor, { "Last", "Avg120", "Max120" } });
+		auto AddGpuTimeLine = [&](const char* Name, const FGpuTimingHistory* Timing)
 		{
-			GpuLine.Values[0] = "Pending";
-			GpuLine.Values[1] = "-";
-			GpuLine.Values[2] = "-";
-		}
-		else
-		{
-			GpuLine.Values[0] = std::format("{:.3f}", BasePass->LastMs);
-			GpuLine.Values[1] = std::format("{:.3f}", BasePass->GetAverageMs());
-			GpuLine.Values[2] = std::format("{:.3f}", BasePass->GetMaxMs());
-		}
-		ProfileLines.Add(GpuLine);
+			FProfileStatLine Line{ Name, ValueColor, { "-", "-", "-" } };
+			if (Timing && Timing->Count > 0)
+			{
+				Line.Values[0] = std::format("{:.3f} ms", Timing->LastMs);
+				Line.Values[1] = std::format("{:.3f} ms", Timing->GetAverageMs());
+				Line.Values[2] = std::format("{:.3f} ms", Timing->GetMaxMs());
+			}
+			ProfileLines.Add(Line);
+		};
+
+		const FGpuTimingHistory* Timing = RenderData.SkeletalDrawGpuMode == Effective
+			? RenderData.BaseSkeletalDrawGpu.get() : nullptr;
+		AddGpuTimeLine("  Skinning", Timing);
+		AddGpuTimeLine("  Shadow Draw", RenderData.SkeletalDrawGpuMode == Effective
+			? RenderData.ShadowSkeletalDrawGpu.get() : nullptr);
+		AddGpuTimeLine("  CS Dispatch", Effective == ESkinningMode::Compute
+			? FGpuProfiler::Get().GetSkinningDispatchTiming() : nullptr);
+
+		FProfileStatLine VSLine{ "  VS Last", ValueColor, { "-", "", "" } };
+		if (Effective != ESkinningMode::CPU && Timing && Timing->Count > 0)
+			VSLine.Values[0] = std::format("{}", Timing->LastVSInvocations);
+		ProfileLines.Add(VSLine);
 	}
 
 	if (Lines.Num() == 0 && ProfileLines.Num() == 0)
@@ -1304,7 +1317,7 @@ bool FViewportsPanel::DrawStatOverlay(ImDrawList* DrawList, const ImVec2& ViewMi
 	// Start below this viewport toolbar so the stats never overlap its controls.
 	const float LineHeight = ImGui::GetTextLineHeight();
 	const ImVec2 Origin{ ViewMin.x + EditorUIScale::Px(StatOverlayMargin),
-			std::max(ToolbarMax[Client->GetViewIndex()].y, ToolbarRightMax[Client->GetViewIndex()].y) + EditorUIScale::Px(StatOverlayMargin) };
+			std::max(ToolbarMax[ViewIndex].y, ToolbarRightMax[ViewIndex].y) + EditorUIScale::Px(StatOverlayMargin) };
 
 	// 최대 너비 계산
 	float MaxWidth = 0.0f;

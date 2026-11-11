@@ -864,8 +864,9 @@ void UEditorEngine::UpdateViewportState(const float DeltaTime)
 void UEditorEngine::TickWorldAndEditor(const float DeltaTime)
 {
 	const FEditorSettings& RenderSettings = SettingsPanel->GetSettings();
-	USkeletalMeshComponent::SetSkinningMode(RenderSettings.RenderingPath == ERenderingPath::Forward
-		? RenderSettings.SkinningMode : ESkinningMode::CPU);
+	const bool bVSSkinningUnavailable = RenderSettings.SkinningMode == ESkinningMode::GPU
+		&& RenderSettings.RenderingPath != ERenderingPath::Forward;
+	USkeletalMeshComponent::SetSkinningMode(bVSSkinningUnavailable ? ESkinningMode::CPU : RenderSettings.SkinningMode);
 
 	// 게임 입력 처리
 	if (PlayWorld)
@@ -1722,7 +1723,8 @@ void UEditorEngine::RenderFrame(FEditorViewportClient* ViewClient,
 	if (!bRendered) return;
 }
 
-void UEditorEngine::RenderPreviewViewport(FEditorViewportClient* PreviewClient, UWorld* PreviewWorld, const FGizmo* PreviewGizmo, FSkyboxRenderer* SkyboxOverride, bool bDrawGrid)
+void UEditorEngine::RenderPreviewViewport(FEditorViewportClient* PreviewClient, UWorld* PreviewWorld, const FGizmo* PreviewGizmo,
+	FSkyboxRenderer* SkyboxOverride, bool bDrawGrid, const UPrimitiveComponent* BoundsComponent)
 {
 	if (!PreviewClient || !PreviewWorld || PreviewClient->GetWidth() == 0 || PreviewClient->GetHeight() == 0)
 		return;
@@ -1738,13 +1740,17 @@ void UEditorEngine::RenderPreviewViewport(FEditorViewportClient* PreviewClient, 
 	SceneRenderer.InitViews(Renderer, Options);
 
 	FSceneViewTargets& Targets = PreviewClient->GetViewTargets();
-	RenderScene(Targets, SceneView, SceneRenderer, PreviewWorld, Options, [this, &SceneView, &Targets, PreviewGizmo, bDrawGrid, PreviewWorld](FSceneOverlayCallbacks& Overlays)
+	RenderScene(Targets, SceneView, SceneRenderer, PreviewWorld, Options, [this, &SceneView, &Targets, PreviewGizmo, bDrawGrid, PreviewWorld, BoundsComponent](FSceneOverlayCallbacks& Overlays)
 		{
-			Overlays.EditorLines = [this, &SceneView, PreviewWorld]
+			Overlays.EditorLines = [this, &SceneView, PreviewWorld, BoundsComponent]
 			{
 				LineBatcher->BeginFrame();
 				for (TObjectIterator<USkeletalMeshDebugComponent> It; It; ++It)
 					if (It->GetWorld() == PreviewWorld && It->ShouldDrawDebug()) It->DrawDebug(LineBatcher.get());
+				if (BoundsComponent)
+				{
+					LineBatcher->AddBox(BoundsComponent->CalcBounds(), FVector4(1.0f, 0.85f, 0.15f, 1.0f));
+				}
 				LineBatcher->OnRender(SceneView.ViewProjectionMatrix);
 			};
 			if (bDrawGrid)

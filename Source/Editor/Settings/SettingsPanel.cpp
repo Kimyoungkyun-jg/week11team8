@@ -81,7 +81,7 @@ void FSettingsPanel::OnRender()
 		if (ViewportsPanel) ViewportsPanel->SetRenderingPath(Settings.RenderingPath);
 	}
 	ImGui::SetItemTooltip("Deferred uses per-pixel Phong shading. Switching to Deferred changes Gouraud views to Phong while keeping their reflection models.");
-	const char* SkinningModes[] = { "CPU", "GPU" };
+	const char* SkinningModes[] = { "CPU", "GPU (VS)", "CS" };
 	int SkinningModeIndex = static_cast<int>(Settings.SkinningMode);
 	ImGui::SetNextItemWidth(EditorUIScale::Px(200.0f));
 	if (ImGui::Combo("Skinning Mode", &SkinningModeIndex, SkinningModes, IM_ARRAYSIZE(SkinningModes)))
@@ -234,7 +234,7 @@ bool FSettingsPanel::SaveSettings() const
 
 	File << "LightCullingMode=" << (Settings.LightCullingMode == ELightCullingMode::Off ? "Off" : Settings.LightCullingMode == ELightCullingMode::Tiled ? "Tiled" : "Clustered") << "\n";
 	File << "RenderingPath=" << (Settings.RenderingPath == ERenderingPath::Forward ? "Forward" : "Deferred") << "\n";
-	File << "SkinningMode=" << (Settings.SkinningMode == ESkinningMode::GPU ? "GPU" : "CPU") << "\n";
+	File << "SkinningMode=" << GetSkinningModeName(Settings.SkinningMode) << "\n";
 	File << "ReflectionModel=" << (Settings.ReflectionModel == EReflectionModel::Phong ? "Phong" :
 		Settings.ReflectionModel == EReflectionModel::Lambert ? "Lambert" : "BlinnPhong") << "\n";
 	File << "ShadingModel=" << (Settings.ShadingModel == EShadingModel::Gouraud ? "Gouraud" : "Phong") << "\n";
@@ -436,6 +436,7 @@ bool FSettingsPanel::LoadSettings()
 				else if (Key == "SkinningMode")
 				{
 					if (ValueStr == "GPU") Settings.SkinningMode = ESkinningMode::GPU;
+					else if (ValueStr == "CS") Settings.SkinningMode = ESkinningMode::Compute;
 					else if (ValueStr == "CPU") Settings.SkinningMode = ESkinningMode::CPU;
 				}
 				else if (Key == "ViewportLightingDefaultsVersion")
