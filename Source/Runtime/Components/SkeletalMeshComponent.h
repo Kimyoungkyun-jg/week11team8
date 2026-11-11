@@ -5,6 +5,7 @@
 #include "Asset/AnimSequence.h"
 #include "Render/RenderEnums.h"
 #include "Serialization/StructuredArchive.h"
+#include "Serialization/StructuredArchiveSlots.h"
 #include "SkeletalMeshComponent.generated.h"
 
 UCLASS()
@@ -18,6 +19,7 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime) override;
+	using Super::Serialize;
 	virtual void Serialize(FStructuredArchive::FRecord Record) override;
 
 	virtual void SetSkeletalMesh(USkeletalMesh* InSkeletalMesh) override;
@@ -59,7 +61,6 @@ public:
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	FVertexBuffer* GetSkinnedVertexBuffer() const { return SkinnedVertexBuffer.get(); }
 	FVertexBuffer* GetSkinnedVertexBuffer(uint32 LOD);
-	FStructuredBuffer* GetSkinningMatricesBuffer() const { return AppliedMode == ESkinningMode::GPU ? SkinningMatricesBuffer.get() : nullptr; }
 	const TArray<FVertex>& GetSkinnedVertices() const { return SkinnedVertices; }
 
 	virtual bool LineTraceComponent(const FRay& WorldRay, FHitResult& OutHit) override;
