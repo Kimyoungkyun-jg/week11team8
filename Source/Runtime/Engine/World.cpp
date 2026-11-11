@@ -202,12 +202,6 @@ void UWorld::Tick(float RealDeltaTime)
 			}
 			Comp->UpdateInEditor();
 		}
-		for (TObjectIterator<USkeletalMeshComponent> Comp; Comp; ++Comp)
-		{
-			if (!Comp || !Comp->IsRegistered() || Comp->GetWorld() != this ||
-				Comp->GetAnimGraphPath().empty()) continue;
-			Comp->TickComponent(DeltaTime);
-		}
 	}
 	bIsTicking = false;
 }
