@@ -99,12 +99,12 @@ void FRenderResourceManager::InitPipelineStates()
 	FShaderProgram* DepthProgram = GetShaderProgram("Resources/Shader/DepthPrepass.hlsl");
 	if (DepthProgram && DepthProgram->VertexShader)
 		ShaderProgramMap["ShadowDepth"] = MakeUnique<FShaderProgram>(DepthProgram->VertexShader, nullptr);
-	if (auto* ShadowProgram = ShaderProgramMap.Find("Resources/Shader/ShadowDepth.hlsl"))
+	const FString ShadowPath = "Resources/Shader/ShadowDepth.hlsl";
+	if (auto* Base = ShaderProgramMap.Find(ShadowPath))
 	{
 		const D3D_SHADER_MACRO Defines[] = { { "GPU_SKINNING", "1" }, { nullptr, nullptr } };
 		FString VSPath;
-		FShaderByteCode Code = RenderUtil::GetOrCompile("Resources/Shader/ShadowDepth.hlsl",
-			"mainVS", EShaderType::Vertex, VSPath, Defines);
+		FShaderByteCode Code = RenderUtil::GetOrCompile(ShadowPath, "mainVS", EShaderType::Vertex, VSPath, Defines);
 		if (Code.IsValid())
 		{
 			auto VS = RenderCommand::CreateVertexShader(Code);
@@ -112,7 +112,7 @@ void FRenderResourceManager::InitPipelineStates()
 			{
 				FVertexShader* VSRaw = VS.get();
 				VertexShaderMap[VSPath] = std::move(VS);
-				ShaderProgramMap["ShadowDepth#GPU"] = MakeUnique<FShaderProgram>(VSRaw, (*ShadowProgram)->PixelShader);
+				ShaderProgramMap[ShadowPath + "#GPU"] = MakeUnique<FShaderProgram>(VSRaw, (*Base)->PixelShader);
 			}
 		}
 	}
@@ -195,7 +195,7 @@ FShaderProgram* FRenderResourceManager::GetShadowDepthShaderProgram()
 
 FShaderProgram* FRenderResourceManager::GetGPUSkinningShadowDepthShaderProgram()
 {
-	if (auto* Found = Get().ShaderProgramMap.Find("ShadowDepth#GPU")) return Found->get();
+	if (auto* Found = Get().ShaderProgramMap.Find("Resources/Shader/ShadowDepth.hlsl#GPU")) return Found->get();
 	return nullptr;
 }
 

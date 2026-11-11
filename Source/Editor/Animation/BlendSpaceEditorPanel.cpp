@@ -234,6 +234,13 @@ float FBlendSpaceEditorPanel::Snap(float Value, const FAxis& Axis) const
 	return std::clamp(Value, Axis.Min, Axis.Max);
 }
 
+bool FBlendSpaceEditorPanel::IsSamplePositionTaken(int Ignore, float X, float Y) const
+{
+	for (int I = 0; I < static_cast<int>(Samples.size()); ++I)
+		if (I != Ignore && Samples[I].X == X && (!b2D || Samples[I].Y == Y)) return true;
+	return false;
+}
+
 bool FBlendSpaceEditorPanel::Validate(FString& Error) const
 {
 	if (Path.empty() || FbxPath::FromString(Path).extension() != ".blendspace" || SkeletonPath.empty())
@@ -305,9 +312,7 @@ void FBlendSpaceEditorPanel::AddSample(const FString& SequencePath, float X, flo
 	if (!Sequence || !Sequence->Skeleton || Sequence->Skeleton->GetPath() != SkeletonPath)
 	{ Status = "Animation does not match the selected skeleton."; return; }
 	X = Snap(X, XAxis); Y = b2D ? Snap(Y, YAxis) : 0.0f;
-	for (const FSample& Sample : Samples)
-		if (Sample.X == X && (!b2D || Sample.Y == Y))
-		{ Status = "A sample already occupies this position."; return; }
+	if (IsSamplePositionTaken(-1, X, Y)) { Status = "A sample already occupies this position."; return; }
 	Samples.push_back({ X, Y, SequencePath });
 	SelectedSample = static_cast<int>(Samples.size()) - 1;
 	bDirty = true; RebuildBlendSpace();
@@ -447,9 +452,16 @@ void FBlendSpaceEditorPanel::DrawGraph()
 		SelectedSample >= 0 && SelectedSample < static_cast<int>(Samples.size()))
 	{
 		const ImVec2 Value = FromScreen(Mouse);
-		Samples[SelectedSample].X = Snap(Value.x, XAxis);
-		Samples[SelectedSample].Y = b2D ? Snap(Value.y, YAxis) : 0.0f;
-		bDirty = true; RebuildBlendSpace();
+		const float X = Snap(Value.x, XAxis);
+		const float Y = b2D ? Snap(Value.y, YAxis) : 0.0f;
+		// 다른 샘플이 있는 격자점에는 놓지 않는다. 겹치면 점이 가려지고 AddSample이 거부해 프리뷰가 사라진다.
+		// 위치가 바뀐 프레임에만 다시 만든다.
+		FSample& Sample = Samples[SelectedSample];
+		if ((Sample.X != X || Sample.Y != Y) && !IsSamplePositionTaken(SelectedSample, X, Y))
+		{
+			Sample.X = X; Sample.Y = Y;
+			bDirty = true; RebuildBlendSpace();
+		}
 	}
 	if (ImGui::BeginDragDropTarget())
 	{
@@ -477,9 +489,14 @@ void FBlendSpaceEditorPanel::DrawSampleDetails()
 	{ ImGui::TextWrapped("Select a sample in the graph."); return; }
 	FSample& Sample = Samples[SelectedSample];
 	ImGui::TextWrapped("%s", Sample.SequencePath.c_str());
-	bool Changed = ImGui::DragFloat("X", &Sample.X, 0.5f, XAxis.Min, XAxis.Max);
-	if (b2D) Changed |= ImGui::DragFloat("Y", &Sample.Y, 0.5f, YAxis.Min, YAxis.Max);
-	if (Changed) { bDirty = true; RebuildBlendSpace(); }
+	float X = Sample.X, Y = Sample.Y;
+	bool Changed = ImGui::DragFloat("X", &X, 0.5f, XAxis.Min, XAxis.Max);
+	if (b2D) Changed |= ImGui::DragFloat("Y", &Y, 0.5f, YAxis.Min, YAxis.Max);
+	if (Changed && !IsSamplePositionTaken(SelectedSample, X, b2D ? Y : 0.0f))
+	{
+		Sample.X = X; Sample.Y = b2D ? Y : 0.0f;
+		bDirty = true; RebuildBlendSpace();
+	}
 	if (ImGui::Button("Delete Sample"))
 	{
 		Samples.erase(Samples.begin() + SelectedSample);
